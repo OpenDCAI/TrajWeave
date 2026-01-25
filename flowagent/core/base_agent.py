@@ -554,10 +554,16 @@ class BaseAgent(ABC):
         # 确定实际使用的模型和 URL
         actual_model = self.model_name or state.request.model
         actual_url = self.chat_api_url or state.request.chat_api_url
+
+        api_key = state.request.api_key
+        if isinstance(api_key, str) and api_key:
+            redacted_key = api_key[:6] + "***" + api_key[-4:] if len(api_key) > 12 else "***"
+        else:
+            redacted_key = "(empty)"
         
         log.info(f"[create_llm:]创建LLM实例，温度: {self.temperature}, "
                  f"最大token: {self.max_tokens}, 模型: {actual_model}, "
-                 f"接口URL: {actual_url}, API Key: {state.request.api_key}")
+                 f"接口URL: {actual_url}, API Key: {redacted_key}")
         
         # 创建 LLM 实例
         llm = ChatOpenAI(

@@ -6,6 +6,7 @@ The agent uses simple execution mode with system and task prompts.
 """
 
 import asyncio
+import os
 from flowagent import BaseAgent, register, SimpleConfig
 from flowagent.state import MainState, MainRequest
 
@@ -29,20 +30,40 @@ class GreeterAgent(BaseAgent):
 
 async def main():
     """Main async function to run the example"""
+    # Resolve API settings (OpenAI-compatible)
+    # - DF_API_URL should be a base URL like: https://api.openai.com/v1
+    # - DF_API_KEY is your API key
+    api_url = os.getenv("DF_API_URL")
+    api_key = os.getenv("DF_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+    if not api_url or api_url == "test":
+        raise RuntimeError(
+            "Missing DF_API_URL. Set it to an OpenAI-compatible base URL, e.g. "
+            "https://api.openai.com/v1 (or your proxy/local gateway base)."
+        )
+
+    if not api_key or api_key == "test":
+        raise RuntimeError(
+            "Missing DF_API_KEY (or OPENAI_API_KEY). Please export your API key in the environment."
+        )
+
     # Create agent configuration
     config = SimpleConfig(
-        model="gpt-4o-mini",
+        model_name="gpt-4o-mini",
+        chat_api_url=api_url,
         temperature=0.7
     )
 
     # Initialize agent
-    agent = GreeterAgent(config=config)
+    agent = GreeterAgent(execution_config=config)
 
     # Create state with request
     state = MainState(
         request=MainRequest(
             target="Say hello to Alice in a friendly way",
-            model="gpt-4o-mini"
+            model="gpt-4o-mini",
+            chat_api_url=api_url,
+            api_key=api_key,
         )
     )
 
