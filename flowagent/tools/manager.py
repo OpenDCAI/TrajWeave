@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Callable, Set
+from typing import Any, Dict, List, Optional, Callable, Set, TYPE_CHECKING
 from langchain_core.tools import Tool
 from flowagent.logger import get_logger
 
-# from flowagent.agentroles.base_agent import BaseAgent
-# from flowagent.state import DFState
+if TYPE_CHECKING:
+    from flowagent.tools.mcp.client import MCPClient
 
 log = get_logger(__name__)
 
@@ -109,6 +109,57 @@ class ToolManager:
             tools.append(tool)
         log.info(f"批量注册了 {len(tools)} 个 agent 作为工具")
         return tools
+
+    # ==================== MCP 支持 ====================
+
+    async def register_mcp_server(
+        self,
+        server_url: str,
+        role: Optional[str] = None,
+        timeout: int = 30
+    ) -> List[Tool]:
+        """
+        注册MCP服务器的所有工具
+
+        Args:
+            server_url: MCP服务器URL
+            role: 目标角色，None表示全局
+            timeout: 连接超时时间
+
+        Returns:
+            注册的工具列表
+        """
+        from flowagent.tools.mcp.client import MCPClient
+        from flowagent.tools.mcp.adapters import MCPToolAdapter
+
+        client = MCPClient(timeout=timeout)
+        await client.connect(server_url)
+
+        mcp_tools = await client.list_tools()
+        adapter = MCPToolAdapter(client)
+        langchain_tools = adapter.to_langchain_tools(mcp_tools)
+
+        for tool in langchain_tools:
+            self.register_post_tool(tool, role)
+
+        log.info(f"从MCP服务器 {server_url} 注册了 {len(langchain_tools)} 个工具")
+        return langchain_tools
+
+    # ==================== Skills 支持 ====================
+
+    def register_skill(self, skill, role: Optional[str] = None) -> None:
+        """
+        注册Skill的所有工具
+
+        Args:
+            skill: Skill实例
+            role: 目标角色，None表示全局
+        """
+        tools = skill.get_tools()
+        for tool in tools:
+            self.register_post_tool(tool, role)
+
+        log.info(f"注册Skill '{skill.name}' 的 {len(tools)} 个工具")
 
 _tool_manager_instance = None
 

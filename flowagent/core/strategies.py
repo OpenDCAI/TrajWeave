@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, TYPE_CHECKING, List
 from flowagent.logger import get_logger
 import asyncio  # 添加导入
+import warnings  # 添加废弃警告支持
 
 if TYPE_CHECKING:
     from flowagent.core.base_agent import BaseAgent
@@ -33,11 +34,11 @@ class SimpleStrategy(ExecutionStrategy):
         return result
 
 
-class ReactStrategy(ExecutionStrategy):
-    """ReAct模式策略"""
-    
+class ValidationRetryStrategy(ExecutionStrategy):
+    """验证重试模式策略（原ReactStrategy）- 带验证的循环调用，验证失败则重试"""
+
     async def execute(self, state: "MainState", **kwargs) -> Dict[str, Any]:
-        log.info(f"[ReactStrategy] 执行 {self.agent.role_name}，最大重试: {self.config.max_retries}")
+        log.info(f"[ValidationRetryStrategy] 执行 {self.agent.role_name}，最大重试: {self.config.max_retries}")
         
         # 注入自定义验证器
         if self.config.validators:
@@ -58,11 +59,11 @@ class ReactStrategy(ExecutionStrategy):
         return result
 
 
-class GraphStrategy(ExecutionStrategy):
-    """图模式策略"""
-    
+class ReactStrategy(ExecutionStrategy):
+    """ReAct模式策略（原GraphStrategy）- 使用LangGraph的工具调用循环，真正的推理+行动"""
+
     async def execute(self, state: "MainState", **kwargs) -> Dict[str, Any]:
-        log.info(f"[GraphStrategy] 执行 {self.agent.role_name} 子图模式")
+        log.info(f"[ReactStrategy] 执行 {self.agent.role_name} ReAct模式")
         pre_tool_results = await self.agent.execute_pre_tools(state)
         
         post_tools = self.agent.get_post_tools()
@@ -307,35 +308,35 @@ class PlanSolveStrategy(ExecutionStrategy):
             except Exception as e2:
                 log.error(f"[PlanSolveStrategy] 回退解析也失败: {e2}")
             return []
-    
+
     async def _execute_step(self, state: "MainState", step: str, step_index: int) -> str:
         """
-        执行单个计划步骤
+        执行单个计划步骤（支持工具调用）
         """
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
         from langchain_openai import ChatOpenAI
-        
+
         # 获取上下文
         context = ""
         if hasattr(state, 'past_steps') and state.past_steps:
             context = "\n已完成的步骤:\n"
             for prev_step, prev_result in state.past_steps:
                 context += f"- {prev_step}: {prev_result[:100]}...\n"
-        
-        # 构建 Executor 的提示词
-        system_prompt = """你是一个任务执行专家。你需要执行给定的步骤，并返回执行结果。
+
+        # 构建系统提示词
+        system_prompt = """你是一个任务执行专家。你需要执行给定的步骤。
 
 规则:
-1. 专注于当前步骤
-2. 提供清晰的执行结果
-3. 如果遇到问题，说明问题所在"""
+1. 如果有可用工具，优先使用工具完成任务
+2. 专注于当前步骤，不要做额外的事情
+3. 执行完成后，总结执行结果"""
 
         task_prompt = f"""请执行以下步骤:
 
 步骤 {step_index + 1}: {step}
 {context}
 
-请执行这个步骤并返回结果。"""
+请执行这个步骤。"""
 
         # 创建 LLM
         executor_model = self.config.executor_model or self.config.model_name or state.request.model
@@ -345,17 +346,77 @@ class PlanSolveStrategy(ExecutionStrategy):
             model_name=executor_model,
             temperature=self.config.executor_temperature,
         )
-        
-        # 如果配置了工具，绑定工具
+
+        # 如果有工具，绑定工具并进入工具调用循环
         if self.config.executor_tools:
-            llm = llm.bind_tools(self.config.executor_tools)
-        
+            return await self._execute_with_tools(
+                llm, self.config.executor_tools,
+                system_prompt, task_prompt
+            )
+
+        # 无工具，直接调用LLM
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=task_prompt)
         ])
-        
         return response.content
+
+    async def _execute_with_tools(
+        self,
+        llm,
+        tools: List,
+        system_prompt: str,
+        task_prompt: str,
+        max_iterations: int = 5
+    ) -> str:
+        """带工具调用的执行循环"""
+        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+
+        # 绑定工具
+        llm_with_tools = llm.bind_tools(tools)
+
+        # 构建工具名称到工具的映射
+        tool_map = {t.name: t for t in tools}
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=task_prompt)
+        ]
+
+        for _ in range(max_iterations):
+            response = await llm_with_tools.ainvoke(messages)
+            messages.append(response)
+
+            # 检查是否有工具调用
+            if not response.tool_calls:
+                return response.content
+
+            # 执行工具调用
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+
+                if tool_name in tool_map:
+                    try:
+                        tool = tool_map[tool_name]
+                        # 异步或同步调用
+                        if hasattr(tool, 'ainvoke'):
+                            result = await tool.ainvoke(tool_args)
+                        else:
+                            result = tool.invoke(tool_args)
+                        tool_result = str(result)
+                    except Exception as e:
+                        tool_result = f"工具执行错误: {e}"
+                else:
+                    tool_result = f"未知工具: {tool_name}"
+
+                messages.append(ToolMessage(
+                    content=tool_result,
+                    tool_call_id=tool_call["id"]
+                ))
+
+        # 达到最大迭代，返回最后的内容
+        return messages[-1].content if messages else "执行超时"
 
 
 class PlanExecuteStrategy(ExecutionStrategy):
@@ -643,25 +704,26 @@ class PlanExecuteStrategy(ExecutionStrategy):
     
     async def _execute_step(self, state: "MainState", step: str, step_index: int) -> str:
         """
-        执行单个计划步骤 (与 PlanSolveStrategy 类似)
+        执行单个计划步骤（支持工具调用）
         """
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
         from langchain_openai import ChatOpenAI
-        
+
         context = ""
         if hasattr(state, 'past_steps') and state.past_steps:
             context = "\n已完成的步骤:\n"
             for prev_step, prev_result in state.past_steps:
                 context += f"- {prev_step}: {prev_result[:100]}...\n"
-        
-        system_prompt = """你是一个任务执行专家。你需要执行给定的步骤，并返回执行结果。"""
+
+        system_prompt = """你是一个任务执行专家。你需要执行给定的步骤。
+如果有可用工具，优先使用工具完成任务。"""
 
         task_prompt = f"""请执行以下步骤:
 
 步骤 {step_index + 1}: {step}
 {context}
 
-请执行这个步骤并返回结果。"""
+请执行这个步骤。"""
 
         executor_model = self.config.executor_model or self.config.model_name or state.request.model
         llm = ChatOpenAI(
@@ -670,16 +732,65 @@ class PlanExecuteStrategy(ExecutionStrategy):
             model_name=executor_model,
             temperature=self.config.executor_temperature,
         )
-        
+
+        # 如果有工具，进入工具调用循环
         if self.config.executor_tools:
-            llm = llm.bind_tools(self.config.executor_tools)
-        
+            return await self._execute_with_tools(
+                llm, self.config.executor_tools,
+                system_prompt, task_prompt
+            )
+
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=task_prompt)
         ])
-        
         return response.content
+
+    async def _execute_with_tools(
+        self, llm, tools: List,
+        system_prompt: str, task_prompt: str,
+        max_iterations: int = 5
+    ) -> str:
+        """带工具调用的执行循环"""
+        from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+
+        llm_with_tools = llm.bind_tools(tools)
+        tool_map = {t.name: t for t in tools}
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=task_prompt)
+        ]
+
+        for _ in range(max_iterations):
+            response = await llm_with_tools.ainvoke(messages)
+            messages.append(response)
+
+            if not response.tool_calls:
+                return response.content
+
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+
+                if tool_name in tool_map:
+                    try:
+                        tool = tool_map[tool_name]
+                        if hasattr(tool, 'ainvoke'):
+                            result = await tool.ainvoke(tool_args)
+                        else:
+                            result = tool.invoke(tool_args)
+                        tool_result = str(result)
+                    except Exception as e:
+                        tool_result = f"工具执行错误: {e}"
+                else:
+                    tool_result = f"未知工具: {tool_name}"
+
+                messages.append(ToolMessage(
+                    content=tool_result,
+                    tool_call_id=tool_call["id"]
+                ))
+
+        return messages[-1].content if messages else "执行超时"
     
     async def _replan_decision(
         self, 
@@ -770,19 +881,28 @@ class PlanExecuteStrategy(ExecutionStrategy):
 
 class StrategyFactory:
     """策略工厂"""
-    
+
     _strategies = {
         "simple": SimpleStrategy,
-        "react": ReactStrategy,
-        "graph": GraphStrategy,
+        "validation_retry": ValidationRetryStrategy,  # 原react，验证重试模式
+        "react": ReactStrategy,                       # 原graph，真正的ReAct模式
         "vlm": VLMStrategy,
         "parallel": ParallelStrategy,
         "plan_solve": PlanSolveStrategy,
         "plan_execute": PlanExecuteStrategy,
     }
-    
+
     @classmethod
     def create(cls, mode: str, agent: "BaseAgent", config: Any) -> ExecutionStrategy:
+        # 处理废弃的模式名称
+        if mode.lower() == "graph":
+            warnings.warn(
+                "mode='graph' 已废弃，请使用 mode='react'。将在未来版本中移除。",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            mode = "react"
+
         strategy_cls = cls._strategies.get(mode.lower())
         if not strategy_cls:
             raise ValueError(f"不支持的执行模式: {mode}，可选: {list(cls._strategies.keys())}")
