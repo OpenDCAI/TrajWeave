@@ -335,3 +335,126 @@ def create_simple_agent(
 
     log.info(f"创建Simple Agent: {role_name}")
     return agent
+
+
+def create_vlm_agent(
+    role_name: str = "vlm_agent",
+    system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
+    vlm_mode: str = "understanding",
+    image_detail: str = "auto",
+    max_image_size: int = 2048,
+    task_prompt_template: Optional[str] = None,
+    **kwargs
+) -> "BaseAgent":
+    """
+    创建VLM Agent（视觉语言模型）
+
+    支持图像理解、生成和编辑等多种视觉任务。
+
+    Args:
+        role_name: Agent角色名称
+        system_prompt: 系统提示词（直接传递字符串）
+        model_name: 模型名称
+        vlm_mode: VLM模式 ("understanding", "generation", "edit")
+        image_detail: 图像细节级别 ("auto", "low", "high")
+        max_image_size: 最大图像尺寸
+        task_prompt_template: 任务提示词模板名称（可选）
+        **kwargs: 其他参数，包括additional_params等
+
+    Returns:
+        配置好的BaseAgent实例
+
+    Example:
+        >>> agent = create_vlm_agent(
+        ...     role_name="image_analyzer",
+        ...     system_prompt="你是一个图像分析专家",
+        ...     vlm_mode="understanding",
+        ...     image_detail="high"
+        ... )
+        >>> result = await agent.execute(state)
+    """
+    from flowagent.core.execution_config import ExecutionConfig, ExecutionMode
+
+    execution_config = ExecutionConfig(
+        mode=ExecutionMode.VLM,
+        model_name=model_name,
+        vlm_mode=vlm_mode,
+        image_detail=image_detail,
+        max_image_size=max_image_size,
+        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+    )
+
+    # 动态创建Agent类
+    DynamicAgentClass = _create_dynamic_agent_class(
+        role_name=role_name,
+        system_prompt=system_prompt or "你是一个视觉语言模型助手，可以理解和处理图像。",
+        task_prompt_template=task_prompt_template,
+    )
+
+    agent = DynamicAgentClass(
+        model_name=model_name,
+        execution_config=execution_config,
+        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+    )
+
+    log.info(f"创建VLM Agent: {role_name}，模式: {vlm_mode}")
+    return agent
+
+
+def create_parallel_agent(
+    role_name: str = "parallel_agent",
+    system_prompt: Optional[str] = None,
+    model_name: Optional[str] = None,
+    concurrency_limit: int = 5,
+    task_prompt_template: Optional[str] = None,
+    **kwargs
+) -> "BaseAgent":
+    """
+    创建并行Agent（批量并行处理）
+
+    支持同时处理多个任务，适用于批量数据处理场景。
+
+    Args:
+        role_name: Agent角色名称
+        system_prompt: 系统提示词（直接传递字符串）
+        model_name: 模型名称
+        concurrency_limit: 并发限制数量，默认5
+        task_prompt_template: 任务提示词模板名称（可选）
+        **kwargs: 其他参数
+
+    Returns:
+        配置好的BaseAgent实例
+
+    Example:
+        >>> agent = create_parallel_agent(
+        ...     role_name="batch_processor",
+        ...     system_prompt="你是一个批量处理专家",
+        ...     concurrency_limit=10
+        ... )
+        >>> result = await agent.execute(state)
+    """
+    from flowagent.core.execution_config import ExecutionConfig, ExecutionMode
+
+    execution_config = ExecutionConfig(
+        mode=ExecutionMode.PARALLEL,
+        model_name=model_name,
+        concurrency_limit=concurrency_limit,
+        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+    )
+
+    # 动态创建Agent类
+    DynamicAgentClass = _create_dynamic_agent_class(
+        role_name=role_name,
+        system_prompt=system_prompt or "你是一个智能助手，可以并行处理多个任务。",
+        task_prompt_template=task_prompt_template,
+    )
+
+    agent = DynamicAgentClass(
+        model_name=model_name,
+        execution_config=execution_config,
+        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+    )
+
+    log.info(f"创建Parallel Agent: {role_name}，并发限制: {concurrency_limit}")
+    return agent
