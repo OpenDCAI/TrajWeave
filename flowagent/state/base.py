@@ -3,6 +3,15 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Load optional project-level environment variables from `.env`.
+# This keeps DF_API_URL/DF_API_KEY usable without manual shell export.
+try:
+    from flowagent.env import load_project_env
+
+    load_project_env(override=False)
+except Exception:
+    pass
+
 current_file = Path(__file__).resolve()
 
 # Generic project paths for framework

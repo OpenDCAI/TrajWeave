@@ -34,7 +34,7 @@ class PromptsTemplateGenerator:
         output_language: str,
         *,
         python_modules: Sequence[str] | None = ["prompts_repo"],
-        template_dirs: Sequence[str] | None = [f'{get_project_root()}/dataflow_agent/promptstemplates/resources'],
+        template_dirs: Sequence[str] | None = [os.path.join(get_project_root(), "flowagent", "prompts", "templates")],
     ) -> None:
         """
         Parameters
@@ -82,7 +82,10 @@ class PromptsTemplateGenerator:
     # ---------- 新增：从目录加载 ----------
     def _load_from_directories(self, dirs: Sequence[str]) -> None:
         """
-        扫描指定目录下所有 pt_*.py 文件并加载模板
+        扫描指定目录并加载模板。
+
+        - `pt_*.py`：作为 Python 模块动态加载（兼容原有逻辑）
+        - 其他普通文件：按“文件名 => 模板内容”的方式加载为纯文本模板
         """
         for dir_path in dirs:
             path = Path(dir_path)
@@ -93,6 +96,46 @@ class PromptsTemplateGenerator:
             # 查找所有 pt_*.py 文件
             for file_path in path.glob("pt_*.py"):
                 self._load_file_as_module(file_path)
+
+            # 加载纯文本模板（例如：greeter_system / greeter_task）
+            for file_path in path.iterdir():
+                if not file_path.is_file():
+                    continue
+
+                # 避免重复加载：pt_*.py 已经由上面处理
+                if file_path.name.startswith("pt_") and file_path.suffix == ".py":
+                    continue
+
+                # 跳过隐藏文件/常见无关文件
+                if file_path.name.startswith("."):
+                    continue
+
+                # 跳过 python 源文件，避免误把 .py 当作模板文本
+                if file_path.suffix == ".py":
+                    continue
+
+                self._load_text_template_file(file_path)
+
+    def _load_text_template_file(self, file_path: Path) -> None:
+        """将普通文件作为模板加载，键名为文件名（含后缀则包含后缀）。"""
+        template_key = file_path.name
+        source_info = str(file_path)
+
+        # 兼容无扩展名文件，以及 .txt/.md 等文本文件
+        try:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                content = file_path.read_text(encoding="utf-8-sig")
+        except Exception as e:
+            warnings.warn(f"Failed to load template file {file_path}: {e}")
+            return
+
+        # 去掉文件末尾多余空白，减少提示词噪声
+        content = content.rstrip()
+
+        self._track_and_add(template_key, source_info)
+        self.templates[template_key] = content
 
     def _load_file_as_module(self, file_path: Path) -> None:
         """
