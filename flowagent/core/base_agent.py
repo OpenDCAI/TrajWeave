@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import pickle
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Callable, Tuple
@@ -236,6 +237,9 @@ class BaseAgent(ABC):
         # ----- 消息历史配置 -----
         self.ignore_history = ignore_history
         self.message_history = message_history or AdvancedMessageHistory()
+
+        # Optional validators (used by validation-retry mode; can also be enabled for tool-calling react graph)
+        self.validators: List[Callable] = []
 
         # ----- 策略模式支持 -----
         self._execution_strategy: Optional[ExecutionStrategy] = None
@@ -441,7 +445,17 @@ class BaseAgent(ABC):
             sys_prompt += f"\n\n{format_instruction}"
         
         # 渲染任务提示词
-        task_params = self.get_task_prompt_params(pre_tool_results)
+        task_params = self.get_task_prompt_params(pre_tool_results) or {}
+        if not isinstance(task_params, dict):
+            # 兼容子类返回非 dict 的情况
+            task_params = {"pre_tool_results": task_params}
+
+        # 注入常用 request 字段，保证模板里 {target} 等变量可用
+        task_params.setdefault("target", state.request.target)
+        task_params.setdefault("model", state.request.model)
+        task_params.setdefault("language", state.request.language)
+        task_params.setdefault("pre_tool_results", pre_tool_results)
+
         task_prompt = ptg.render(self.task_prompt_template_name, **task_params)
         log.info(f"[build_messages]任务提示词: {task_prompt}")
         
@@ -565,12 +579,20 @@ class BaseAgent(ABC):
                  f"最大token: {self.max_tokens}, 模型: {actual_model}, "
                  f"接口URL: {actual_url}, API Key: {redacted_key}")
         
+        # 请求超时（秒）。可通过环境变量 DF_API_TIMEOUT 覆盖。
+        # 例：DF_API_TIMEOUT=120
+        try:
+            timeout = float(os.getenv("DF_API_TIMEOUT", "60"))
+        except Exception:
+            timeout = 60.0
+
         # 创建 LLM 实例
         llm = ChatOpenAI(
             openai_api_base=actual_url,
             openai_api_key=state.request.api_key,
             model_name=actual_model,
             temperature=self.temperature,
+            timeout=timeout,
         )
         
         # 绑定后置工具（如果需要）
@@ -1058,6 +1080,28 @@ class BaseAgent(ABC):
                 # 没有工具调用，解析最终结果
                 log.info(f"[create_assistant_node_func]: {self.role_name} LLM本次未调用工具，解析最终结果")
                 result = self.parse_result(response.content)
+
+                # 可选：对最终输出执行自定义 validators 校验
+                validation_errors: List[str] = []
+                validators = getattr(self, "validators", None) or []
+                for i, validator in enumerate(validators):
+                    try:
+                        passed, error_msg = validator(response.content, result)
+                        if not passed:
+                            name = getattr(validator, "__name__", f"validator_{i}")
+                            msg = error_msg or f"{name} 校验未通过"
+                            validation_errors.append(msg)
+                    except Exception as e:
+                        name = getattr(validator, "__name__", f"validator_{i}")
+                        validation_errors.append(f"{name} 校验异常: {e}")
+
+                if validation_errors:
+                    log.warning(f"[create_assistant_node_func]: {self.role_name} 输出未通过 validators 校验: {validation_errors}")
+                    result = {
+                        "error": "React输出验证失败",
+                        "validation_errors": validation_errors,
+                        "last_result": result,
+                    }
                 
                 # 同步 agent_results
                 state.agent_results[self.role_name.lower()] = {

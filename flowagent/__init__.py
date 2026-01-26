@@ -5,6 +5,16 @@ FlowAgent provides a clean, extensible framework for building LLM-powered agents
 with support for multiple execution modes, tool integration, and graph-based workflows.
 """
 
+# Load optional project-level environment variables from `.env`.
+# This is dependency-free and safe: it only reads from the current project root.
+try:
+    from flowagent.env import load_project_env
+
+    load_project_env(override=False)
+except Exception:
+    # Never fail import due to env loading issues.
+    pass
+
 __version__ = "1.0.0"
 
 # Core exports - most commonly used
