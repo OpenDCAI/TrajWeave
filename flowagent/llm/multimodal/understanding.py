@@ -90,6 +90,10 @@ async def call_image_understanding_async(
         **kwargs
     )
 
+    log.info(f"图像理解请求 URL: {url}")
+    log.info(f"Provider: {provider.__class__.__name__}")
+    log.debug(f"Payload keys: {list(payload.keys())}")
+
     # 发送请求
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -98,6 +102,16 @@ async def call_image_understanding_async(
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
         resp = await client.post(url, headers=headers, json=payload)
+        
+        if resp.status_code != 200:
+            error_text = resp.text
+            log.error(f"图像理解失败 [{resp.status_code}]: {error_text}")
+            try:
+                error_json = resp.json()
+                log.error(f"错误详情: {error_json}")
+            except Exception:
+                pass
+        
         resp.raise_for_status()
         data = resp.json()
 

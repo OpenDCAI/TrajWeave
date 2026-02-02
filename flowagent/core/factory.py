@@ -56,9 +56,9 @@ def _create_dynamic_agent_class(
     class DynamicAgent(BaseAgent):
         """动态创建的Agent类"""
 
-        _role_name = role_name
-        _system_prompt = system_prompt
-        _task_prompt_template = task_prompt_template or "default_task"
+        _role_name: str
+        _system_prompt: str
+        _task_prompt_template: str
 
         @property
         def role_name(self) -> str:
@@ -101,6 +101,12 @@ def _create_dynamic_agent_class(
                 SystemMessage(content=sys_prompt),
                 HumanMessage(content=task_prompt),
             ]
+
+    # 注意：类体作用域不会捕获外层函数局部变量（role_name/system_prompt 等），
+    # 需要在类定义之后再写入这些动态属性。
+    DynamicAgent._role_name = role_name
+    DynamicAgent._system_prompt = system_prompt
+    DynamicAgent._task_prompt_template = task_prompt_template or "default_task"
 
     # 设置类名
     DynamicAgent.__name__ = f"Dynamic{role_name}Agent"
@@ -157,7 +163,7 @@ def create_react_agent(
     execution_config = ExecutionConfig(
         mode=ExecutionMode.REACT,
         model_name=model_name,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类（支持直接传递system_prompt）
@@ -172,7 +178,7 @@ def create_react_agent(
         tool_manager=tool_manager,
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建ReAct Agent: {role_name}，工具数量: {len(tools)}")
@@ -220,7 +226,7 @@ def create_plan_execute_agent(
         max_plan_steps=max_plan_steps,
         max_replanning_rounds=max_replanning_rounds,
         require_plan_approval=require_plan_approval,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类
@@ -234,7 +240,7 @@ def create_plan_execute_agent(
         tool_manager=tool_manager,
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建Plan-Execute Agent: {role_name}")
@@ -272,7 +278,7 @@ def create_validation_agent(
         model_name=model_name,
         max_retries=max_retries,
         validators=validators,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类
@@ -285,7 +291,7 @@ def create_validation_agent(
     agent = DynamicAgentClass(
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建Validation Agent: {role_name}，验证器数量: {len(validators)}")
@@ -317,7 +323,7 @@ def create_simple_agent(
     execution_config = ExecutionConfig(
         mode=ExecutionMode.SIMPLE,
         model_name=model_name,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类
@@ -330,7 +336,7 @@ def create_simple_agent(
     agent = DynamicAgentClass(
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建Simple Agent: {role_name}")
@@ -382,7 +388,7 @@ def create_vlm_agent(
         vlm_mode=vlm_mode,
         image_detail=image_detail,
         max_image_size=max_image_size,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类
@@ -395,7 +401,7 @@ def create_vlm_agent(
     agent = DynamicAgentClass(
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建VLM Agent: {role_name}，模式: {vlm_mode}")
@@ -440,7 +446,7 @@ def create_parallel_agent(
         mode=ExecutionMode.PARALLEL,
         model_name=model_name,
         concurrency_limit=concurrency_limit,
-        **{k: v for k, v in kwargs.items() if hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k in ExecutionConfig.__dataclass_fields__}
     )
 
     # 动态创建Agent类
@@ -453,7 +459,7 @@ def create_parallel_agent(
     agent = DynamicAgentClass(
         model_name=model_name,
         execution_config=execution_config,
-        **{k: v for k, v in kwargs.items() if not hasattr(ExecutionConfig, k)}
+        **{k: v for k, v in kwargs.items() if k not in ExecutionConfig.__dataclass_fields__}
     )
 
     log.info(f"创建Parallel Agent: {role_name}，并发限制: {concurrency_limit}")

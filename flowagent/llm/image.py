@@ -107,6 +107,8 @@ class VisionLLMCaller(BaseLLMCaller):
         msgs = self._convert_messages(messages)
         image_path = self.vlm_config.get("input_image")
 
+        log.info(f"图像理解调用参数: model={self.model_name}, image={image_path}, api_url={self.state.request.chat_api_url}")
+
         content = await call_image_understanding_async(
             model=self.model_name,
             messages=msgs,
