@@ -15,6 +15,7 @@ nav:
       - workflow编写指南: tutorials/workflow_write.md
   - 指南:
       - 架构设计: guides/architecture.md
+      - 状态传递规范: guides/state_conventions.md
       - 算子编写: guides/operator_write.md
   - FAQ: faq.md
   - 贡献指南: contributing.md

@@ -621,7 +621,28 @@ class BaseAgent(ABC):
         Raises:
             Exception: LLM 调用失败时抛出异常
         """
-        llm = self.create_llm(state, bind_post_tools=True)
+        # 注意：若 tool_mode="required"，OpenAI 会强制每次都必须 tool_call，
+        # 这会导致 LangGraph 工具循环无法停下来（一直 tool_calls -> tools -> tool_calls ...）。
+        # 因此这里实现“至少调用一次工具”的语义：
+        # - 在尚未出现 ToolMessage 之前，tool_choice=required
+        # - 一旦出现 ToolMessage（说明工具已执行并返回），tool_choice 切为 auto，允许模型给出最终回答
+        llm = self.create_llm(state, bind_post_tools=False)
+
+        if self.tool_manager:
+            post_tools = self.get_post_tools()
+            if post_tools:
+                tool_choice = self.tool_mode
+                if isinstance(tool_choice, str) and tool_choice.lower() == "required":
+                    try:
+                        from langchain_core.messages import ToolMessage
+
+                        if any(isinstance(m, ToolMessage) for m in messages):
+                            tool_choice = "auto"
+                    except Exception:
+                        # 若 ToolMessage 类型不可用，则保守不改动 tool_choice。
+                        pass
+
+                llm = llm.bind_tools(post_tools, tool_choice=tool_choice)
         try:
             response = await llm.ainvoke(messages)
             log.info(response)
