@@ -71,11 +71,86 @@ class SkillRegistry:
             tools=tools,
             system_prompt=config.get("system_prompt", ""),
             user_prompt_template=config.get("user_prompt_template", "{input}"),
-            metadata=config.get("metadata", {})
+            metadata=config.get("metadata", {}),
+            execution_mode=config.get("execution_mode", "simple"),
+            model_name=config.get("model_name"),
+            steps=config.get("steps", []),
         )
 
         self.register(skill)
         log.info(f"从YAML加载Skill: {path}")
+        return skill
+
+    def load_from_markdown(self, path: str) -> Skill:
+        """从 Markdown 文件加载 Skill（YAML frontmatter + body sections）。
+
+        格式::
+
+            ---
+            name: my_skill
+            description: ...
+            execution_mode: react
+            model_name: gpt-4o
+            tools:
+              - function: module.path.func_name
+            ---
+            # System Prompt
+            你是...
+
+            # User Prompt Template
+            请处理：{input}
+        """
+        import importlib
+
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 解析 YAML frontmatter
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            raise ValueError(f"Invalid skill.md format (missing --- delimiters): {path}")
+
+        config = yaml.safe_load(parts[1]) or {}
+        body = parts[2]
+
+        # 从 body 中提取 # 标题分段
+        sections: dict[str, str] = {}
+        current_section = None
+        current_lines: list[str] = []
+        for line in body.strip().split("\n"):
+            if line.startswith("# "):
+                if current_section:
+                    sections[current_section] = "\n".join(current_lines).strip()
+                current_section = line[2:].strip().lower().replace(" ", "_")
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_section:
+            sections[current_section] = "\n".join(current_lines).strip()
+
+        # 加载工具
+        tools = []
+        for tool_config in config.get("tools", []):
+            func_path = tool_config.get("function", "") if isinstance(tool_config, dict) else str(tool_config)
+            if func_path:
+                module_path, func_name = func_path.rsplit(".", 1)
+                module = importlib.import_module(module_path)
+                tools.append(getattr(module, func_name))
+
+        skill = Skill(
+            name=config.get("name", ""),
+            description=config.get("description", ""),
+            tools=tools,
+            system_prompt=sections.get("system_prompt", config.get("system_prompt", "")),
+            user_prompt_template=sections.get("user_prompt_template", config.get("user_prompt_template", "{input}")),
+            metadata=config.get("metadata", {}),
+            execution_mode=config.get("execution_mode", "simple"),
+            model_name=config.get("model_name"),
+            steps=config.get("steps", []),
+        )
+
+        self.register(skill)
+        log.info(f"从Markdown加载Skill: {path}")
         return skill
 
 

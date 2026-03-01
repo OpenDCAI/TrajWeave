@@ -1341,3 +1341,19 @@ class StrategyFactory:
     def register(cls, mode: str, strategy_cls: type):
         """注册自定义策略"""
         cls._strategies[mode.lower()] = strategy_cls
+
+    @classmethod
+    def register_strategy(cls, mode: str):
+        """装饰器形式注册自定义策略。
+
+        Example::
+
+            @StrategyFactory.register_strategy("rag_react")
+            class RAGReactStrategy(ExecutionStrategy):
+                async def execute(self, state, **kwargs):
+                    ...
+        """
+        def decorator(strategy_cls):
+            cls.register(mode, strategy_cls)
+            return strategy_cls
+        return decorator

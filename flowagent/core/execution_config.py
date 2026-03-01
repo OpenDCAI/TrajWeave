@@ -15,10 +15,12 @@ class ExecutionMode(str, Enum):
     SIMPLE = "simple"
     VALIDATION_RETRY = "validation_retry"
     REACT = "react"
+    GRAPH = "graph"
     VLM = "vlm"
     PARALLEL = "parallel"
     PLAN_SOLVE = "plan_solve"
     PLAN_EXECUTE = "plan_execute"
+    CUSTOM = "custom"
 
 
 @dataclass
@@ -66,3 +68,6 @@ class ExecutionConfig:
     interrupt_before_step: bool = False
     interrupt_after_step: bool = False
     interrupt_on_replan: bool = False
+
+    # 自定义策略扩展参数（供用户自定义策略读取）
+    extra: Dict[str, Any] = field(default_factory=dict)

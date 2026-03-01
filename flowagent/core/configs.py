@@ -1,18 +1,7 @@
 from typing import Any, Dict, Optional, List, Callable, Tuple
 from dataclasses import dataclass, field
-from enum import Enum
 
-
-class ExecutionMode(Enum):
-    """执行模式枚举"""
-    SIMPLE = "simple"           # 简单模式：单次LLM调用
-    REACT = "react"             # ReAct模式：带验证的循环
-    GRAPH = "graph"             # 图模式：子图+工具调用
-    VLM = "vlm"                 # 视觉语言模型模式
-    PARALLEL = "parallel"       # 并行模式：同时调用多个LLM
-    PLAN_SOLVE = "plan_solve"   # Plan-and-Solve模式：一次性生成计划，按顺序执行
-    PLAN_EXECUTE = "plan_execute"  # Plan-and-Execute模式：动态调整计划
-    CUSTOM = "custom"           # 自定义模式（预留）
+from flowagent.core.execution_config import ExecutionMode
 
 
 @dataclass

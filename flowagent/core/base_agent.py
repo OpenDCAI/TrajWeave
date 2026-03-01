@@ -253,8 +253,9 @@ class BaseAgent(ABC):
 
             # 创建执行策略
             from flowagent.core.strategies import StrategyFactory
+            mode_val = execution_config.mode.value if hasattr(execution_config.mode, 'value') else str(execution_config.mode)
             self._execution_strategy = StrategyFactory.create(
-                execution_config.mode.value,
+                mode_val,
                 self,
                 execution_config
             )
@@ -457,8 +458,9 @@ class BaseAgent(ABC):
         task_params.setdefault("pre_tool_results", pre_tool_results)
 
         task_prompt = ptg.render(self.task_prompt_template_name, **task_params)
+
         log.info(f"[build_messages]任务提示词: {task_prompt}")
-        
+
         # 构建消息列表
         messages = [
             SystemMessage(content=sys_prompt),

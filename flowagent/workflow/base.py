@@ -118,20 +118,28 @@ def agent_node(agent: Any, *, name: Optional[str] = None) -> AsyncNodeCallable:
 	async def _node(state: Any):
 		agent_results = _ensure_mapping(state, "agent_results")
 
+		# 将上游节点结果追加到 request.target，让下游 agent prompt 自动感知
+		if agent_results:
+			import json
+			req = _state_get(state, "request", None)
+			if req is not None:
+				orig_target = getattr(req, "target", "") or ""
+				upstream_str = json.dumps(
+					{k: v.get("results") if isinstance(v, dict) else v for k, v in agent_results.items()},
+					ensure_ascii=False,
+				)
+				req.target = f"{orig_target}\n\n上游节点输出：{upstream_str}"
+
 		try:
 			_inject_workflow_tools(state)
 			res = agent.execute(state)
 			if asyncio.iscoroutine(res):
 				res = await res
 
-			# BaseAgent.execute 通常返回 state 本身；但我们不强依赖。
-			# 只要 agent 在 state.agent_results 里写了结果，workflow 就能串起来。
 			agent_results = _ensure_mapping(state, "agent_results")
 			if role_key not in agent_results and getattr(agent, "role_name", None):
-				# 兜底：如果 agent 没写入 agent_results，则至少记录一个占位
 				agent_results[role_key] = {"results": res}
 
-			# 规范化：保证每个节点都有 status/results/error 三个关键字段
 			entry = agent_results.get(role_key)
 			if isinstance(entry, dict):
 				if "results" not in entry:
@@ -149,7 +157,6 @@ def agent_node(agent: Any, *, name: Optional[str] = None) -> AsyncNodeCallable:
 			agent_results[role_key] = {
 				"status": "error",
 				"error": err,
-				# 兼容旧读取方式：results 里也放一份 error
 				"results": {"error": err},
 			}
 			return {"agent_results": agent_results}
@@ -301,6 +308,30 @@ class WorkflowBuilder:
 	def set_entry(self, name: str) -> "WorkflowBuilder":
 		self._entry_point = name
 		self._graph.set_entry_point(name)
+		return self
+
+	def add_agent_node(
+		self,
+		name: str,
+		agent: Any,
+		*,
+		tools: Optional[List[Any]] = None,
+	) -> "WorkflowBuilder":
+		"""将 BaseAgent 直接添加为工作流节点（内部自动调用 agent_node 适配）。"""
+		node_func = agent_node(agent, name=name)
+		self._graph.add_node(name, node_func)
+		if tools:
+			self.bind_tools(name, tools)
+		return self
+
+	def chain(self, *names: str) -> "WorkflowBuilder":
+		"""将多个节点串联为线性链，并自动设置入口。"""
+		if not names:
+			return self
+		if not self._entry_point:
+			self.set_entry(names[0])
+		for i in range(len(names) - 1):
+			self.add_edge(names[i], names[i + 1])
 		return self
 
 	def compile(self) -> Workflow:

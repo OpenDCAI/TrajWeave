@@ -39,6 +39,12 @@ class Skill:
     post_hooks: List[Callable] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # 执行配置（Stage 3 新增）
+    execution_mode: str = "simple"  # 对应 StrategyFactory 的 mode key
+    model_name: Optional[str] = None
+    # 多步 Skill 的工作流定义，每项: {"name": str, "system_prompt": str, "tools": [...], ...}
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+
     def get_tools(self) -> List[Tool]:
         """获取工具列表"""
         return self.tools
