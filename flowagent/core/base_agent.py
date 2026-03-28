@@ -241,6 +241,10 @@ class BaseAgent(ABC):
         # Optional validators (used by validation-retry mode; can also be enabled for tool-calling react graph)
         self.validators: List[Callable] = []
 
+
+        # ----- DeerFlow 2.0: 子 Agent 管理器 -----
+        self._sub_agent_manager: Optional[Any] = None
+
         # ----- 策略模式支持 -----
         self._execution_strategy: Optional[ExecutionStrategy] = None
         if execution_config:
@@ -279,6 +283,26 @@ class BaseAgent(ABC):
             >>> agent = WriterAgent.create(tool_manager=tm, temperature=0.7)
         """
         return cls(tool_manager=tool_manager, **kwargs)
+
+    # =========================================================================
+    # A2. DeerFlow 2.0: Sub-Agent support
+    # =========================================================================
+
+    @property
+    def sub_agents(self):
+        """Get SubAgentManager (lazy init).
+
+        DeerFlow 2.0: Main Agent can dynamically create and manage sub-agents.
+
+        Returns:
+            SubAgentManager instance
+        """
+        if self._sub_agent_manager is None:
+            from flowagent.core.agent_pool import SubAgentManager
+            self._sub_agent_manager = SubAgentManager(
+                tool_manager=self.tool_manager or ToolManager()
+            )
+        return self._sub_agent_manager
 
     # =========================================================================
     # B. 抽象属性 - 子类必须实现

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 # Load optional project-level environment variables from `.env`.
 # This keeps DF_API_URL/DF_API_KEY usable without manual shell export.
@@ -53,12 +54,33 @@ class MainRequest:
 # ==================== 最基础的 State（所有State的祖先）====================
 @dataclass
 class MainState:
-    """所有State的基类，只包含核心字段"""
+    """所有State的基类，只包含核心字段
+
+    DeerFlow 2.0 对齐说明：
+      - parent_agent_id / sub_agent_results: 支持子 Agent 动态生成（Phase 1）
+      - session_id: 跨会话记忆的关联键（Phase 2）
+      - memory_context: 长期记忆上下文注入（Phase 2）
+    - context_budget / context_summary: 上下文工程 token 管理（Phase 3）
+    """
     request: MainRequest = field(default_factory=MainRequest)
     messages: Annotated[list[BaseMessage], add_messages] = field(default_factory=list)
     # 通用字段
     agent_results: Dict[str, Any] = field(default_factory=dict)
     temp_data: Dict[str, Any] = field(default_factory=dict)
+
+    # ===== DeerFlow 2.0 新增字段（全部带默认值，向后兼容） =====
+
+    # -- Phase 1: 子 Agent 动态生成 --
+    parent_agent_id: Optional[str] = None
+    sub_agent_results: Dict[str, Any] = field(default_factory=dict)
+
+    # -- Phase 2: 跨会话记忆 --
+    session_id: str = field(default_factory=lambda: str(uuid4()))
+    memory_context: Optional[Any] = None
+
+    # -- Phase 3: 上下文工程 --
+    context_budget: int = 120_000
+    context_summary: Optional[str] = None
 
     def get(self, key, default=None):
         return getattr(self, key, default)

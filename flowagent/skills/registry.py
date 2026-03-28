@@ -8,6 +8,7 @@ import yaml
 
 from flowagent.logger import get_logger
 from flowagent.skills.base import Skill
+from flowagent.skills.markdown_loader import MarkdownSkillLoader
 
 log = get_logger(__name__)
 
@@ -152,6 +153,64 @@ class SkillRegistry:
         self.register(skill)
         log.info(f"从Markdown加载Skill: {path}")
         return skill
+
+    @property
+    def markdown_loader(self) -> MarkdownSkillLoader:
+        """获取 Markdown 技能加载器（懒初始化）"""
+        if not hasattr(self, "_markdown_loader"):
+            self._markdown_loader = MarkdownSkillLoader()
+        return self._markdown_loader
+
+    def discover_all(self, skills_dir: str = "") -> Dict[str, Dict]:
+        """发现并注册所有可用的 Skill（YAML + Markdown）
+
+        扫描 Markdown 技能目录，自动加载并注册所有发现的技能。
+
+        Args:
+            skills_dir: 技能目录路径，为空时使用默认目录
+
+        Returns:
+            所有已注册的 Skill 字典
+        """
+        if skills_dir:
+            loader = MarkdownSkillLoader(skills_dir)
+        else:
+            loader = self.markdown_loader
+
+        metadata = loader.scan()
+        for skill_name, meta in metadata.items():
+            if skill_name not in self._skills:
+                file_path = meta.get("_file", "")
+                if file_path:
+                    try:
+                        self.load_from_markdown(file_path)
+                    except Exception as e:
+                        log.warning(f"自动加载 Skill '{skill_name}' 失败: {e}")
+
+        log.info(f"discover_all 完成，共 {len(self._skills)} 个 Skill")
+        result = {}
+        for name, skill in self._skills.items():
+            result[name] = {
+                "name": name,
+                "description": skill.description,
+                "type": "markdown" if name in metadata else "code",
+                "execution_mode": skill.execution_mode,
+            }
+        return result
+
+    def get_all_skill_descriptions(self) -> List[Dict[str, str]]:
+        """获取所有已注册 Skill 的描述信息（供 LLM 选择用）
+
+        Returns:
+            [{"name": ..., "description": ...}, ...]
+        """
+        descriptions = []
+        for name, skill in self._skills.items():
+            descriptions.append({
+                "name": name,
+                "description": skill.description,
+            })
+        return descriptions
 
 
 # 全局单例
