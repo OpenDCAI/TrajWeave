@@ -1,15 +1,26 @@
-# FlowAgent Research Assistant Demo
+# FlowAgent Multi-Scenario Demo
 
-Multi-agent research assistant with memory, powered by FlowAgent + Chainlit.
+Multi-agent demo with 6 scenarios, powered by FlowAgent + Chainlit.
+
+## Scenarios
+
+| Scenario | Mode | Description |
+|---|---|---|
+| Deep Research | Multi-SubAgent | Orchestrator → Researcher → Analyzer → Writer |
+| Code Review | Simple Agent + Skill | Professional code review report |
+| Smart Chat | Simple + Memory | Multi-turn conversation with cross-session memory |
+| Image Analysis | VLM | Vision Language Model image understanding |
+| Task Planner | Plan-Execute | Break down complex tasks into steps |
+| Data Analysis | Parallel SubAgents | Trend/Impact/Risk analysts + Synthesizer |
 
 ## Features Demonstrated
 
 | FlowAgent Feature | Usage |
 |---|---|
-| Sub-Agent System | 3 specialized agents (Researcher/Analyzer/Writer) |
-| Long-term Memory | Remembers user preferences across sessions |
-| Context Budget | Token usage monitoring |
-| Observability | Agent execution tracing |
+| Sub-Agent System | Dynamic sub-agent spawning (spawn / spawn_many) |
+| Long-term Memory | SQLite-backed cross-session memory |
+| Context Budget | Token usage monitoring and compression |
+| Observability | Agent execution tracing (LangSmith compatible) |
 | Model Router | Task-based model selection |
 | Markdown Skills | Extensible skill system |
 
