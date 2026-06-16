@@ -14,8 +14,7 @@
 """Coexistence test: yaml-defined native tools + ``@function_tool`` tools.
 
 Pins :func:`verl.tools.tool_registry.load_all_tools`, the loader both
-``AgentLoopWorker`` and ``RLHFDataset`` use. The yaml mirrors
-``recipe/search_agent/config/all_tool_config.yaml`` but points at CPU-only
+``AgentLoopWorker`` and ``RLHFDataset`` use. The yaml points at CPU-only
 ``BaseTool`` stubs in ``tests.tools._stub_search_tools``.
 """
 

@@ -57,8 +57,7 @@ def vocab_parallel_log_softmax(
 
 class _VocabParallelKLDivergence(torch.autograd.Function):
     """
-    Adapted from:
-      https://github.com/verl-project/verl-recipe/blob/ccdb8d140dfc540761a9b209b854dbd2c0011e7e/gkd/megatron/megatron_kl_loss.py.
+    Adapted from the upstream VERL recipe implementation of Megatron KL loss.
     """
 
     @staticmethod

@@ -1,22 +1,11 @@
-# verl documentations
+# TrajWeave Docs
 
-## Build the docs
+This directory is reserved for TrajWeave-specific architecture and recipe documentation.
 
-```bash
-# If you want to view auto-generated API docstring, please make sure verl is available in python path. For instance, install verl via:
-# pip install .. -e[test]
+The previous upstream VERL documentation set was removed during repository cleanup. When adding new docs, keep them focused on:
 
-# Install dependencies needed for building docs.
-pip install -r requirements-docs.txt
-
-# Build the docs.
-make clean
-make html
-```
-
-## Open the docs with your browser
-
-```bash
-python -m http.server -d _build/html/
-```
-Launch your browser and navigate to http://localhost:8000 to view the documentation. Alternatively you could drag the file `_build/html/index.html` to your local browser and view directly.
+- Multi-Agent LLM RL architecture.
+- TrajWeave trajectory schema.
+- reward and credit assignment.
+- VERL backend adapter behavior.
+- runnable TrajWeave recipes.

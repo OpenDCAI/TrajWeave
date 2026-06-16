@@ -1,1 +1,4 @@
-Copyright 2023-2024 Bytedance Ltd. and/or its affiliates 
+TrajWeave includes code derived from VERL / HybridFlow.
+
+Original VERL copyright:
+Copyright 2023-2024 Bytedance Ltd. and/or its affiliates

@@ -286,7 +286,7 @@ router_replay:
 #   - Fast quantization is used when syncing weights to vLLM rollout
 # Supported modes: "w4a16" (NVFP4 weight-only)
 # Note: "w4a4" mode is included in the code but currently has KL divergence issues and is NOT recommended for use.
-# For usage examples, see: https://github.com/verl-project/verl-recipe/blob/main/qat/README.md
+# Upstream VERL recipe examples were removed from TrajWeave. Add TrajWeave QAT docs before enabling this path.
 qat:
 
   # Whether to enable QAT
@@ -310,4 +310,3 @@ qat:
 
   # Path to vLLM quantization config JSON file
   quantization_config_path: null
-
