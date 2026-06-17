@@ -8,7 +8,7 @@ TrajWeave is an early-stage Multi-Agent LLM Reinforcement Learning framework bui
 
 The goal is not to maintain a full VERL mirror. TrajWeave keeps the core distributed RL runtime from VERL, then adds a MASRL layer for training systems made of multiple LLM agents, such as solver, verifier, planner, executor, critic, searcher, and tool-using agents.
 
-> Current status: repository cleanup base. The VERL backend is retained, upstream recipes and large CI/Docker/doc matrices have been removed, and the project is ready for MASRL-oriented refactoring.
+> Current status: first TrajWeave MAS slice. The VERL backend is retained, and a decoupled DrMAS-style Solver-Verifier Math recipe now runs through TrajWeave trajectory collection, agent-wise credit assignment, and optional VERL `DataProto` conversion.
 
 ## Why TrajWeave
 
@@ -72,23 +72,36 @@ TrajWeave will add a MASRL layer above the retained backend:
 
 The first implementation should keep these interfaces small and concrete. Generality should come from real recipes, not from speculative abstraction.
 
-## First MVP
+## First Runnable Slice
 
-The first planned runnable recipe is `solver_verifier_math`:
+The first runnable recipe is `doctor_mas_math`, a small DrMAS-style Solver-Verifier workflow:
 
 ```text
 Solver -> Verifier -> Solver refine -> Verifier approve / max_turns -> final answer
 ```
 
-Initial variants:
+Implemented boundaries:
 
-- train Solver only.
-- train Verifier only.
-- train Solver and Verifier with shared weights.
-- compare global reward broadcast with agent-wise normalization.
-- log trajectory examples, per-agent reward statistics, average turns, and final accuracy.
+- `trajweave.core`: agent/team specs, turns, trajectories, training samples.
+- `trajweave.orchestration`: Solver-Verifier turn order and shared team context.
+- `trajweave.envs`: math task observation and exact-match evaluation.
+- `trajweave.credit`: global reward broadcast and DrMAS agent-wise GRPO normalization.
+- `trajweave.backends.verl`: optional `TrainingSample` -> VERL `DataProto` bridge.
+- `trajweave.recipes.doctor_mas`: composition layer for the runnable recipe.
 
-This MVP is intentionally small: math reward is easy to verify, the workflow is easy to understand, and the results should expose whether the MAS trajectory and credit assignment layers are correct.
+Run the minimal smoke:
+
+```bash
+PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/smoke.py --backend rule
+```
+
+With torch installed, the smoke can exercise a tiny local torch policy backend:
+
+```bash
+PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/smoke.py --backend tiny-torch --device cpu
+```
+
+See [docs/trajweave-mas-layer.md](docs/trajweave-mas-layer.md) for the module boundary and contribution map.
 
 ## Repository Layout
 
@@ -97,6 +110,7 @@ assets/brand/          Project logo and brand assets.
 docs/                  TrajWeave-specific architecture docs.
 examples/              Future runnable MASRL examples.
 tests/                 Reduced tests for retained backend behavior.
+trajweave/             Decoupled MASRL layer and runnable recipes.
 verl/                  Retained VERL backend code.
 ```
 
