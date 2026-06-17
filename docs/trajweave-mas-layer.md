@@ -45,3 +45,30 @@ python3 examples/trajweave/doctor_mas_math/smoke.py --backend tiny-torch --devic
 ```
 
 Use `--backend rule` for deterministic CPU-only tests. Use `--backend tiny-torch --device cuda:0` only when CUDA is available.
+
+## Tiny Training Command
+
+```bash
+PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/train_tiny.py \
+  --steps 160 \
+  --batch-tasks 16 \
+  --rollouts-per-task 8 \
+  --eval-interval 20 \
+  --lr 0.05 \
+  --entropy-coef 0.0 \
+  --seed 7 \
+  --task-mode random \
+  --num-solver-candidates 3 \
+  --max-turns 2 \
+  --output-dir outputs/doctor_mas_tiny_train_random_solver_2turn_delta
+```
+
+This command runs a real torch policy update loop on top of the MAS layer:
+
+1. `SolverVerifierOrchestra` collects Solver -> Verifier -> Solver trajectories.
+2. `SolverVerifierMathEnvironment` scores the final answer.
+3. `DoctorMASCreditAssigner` computes agent-wise GRPO-style advantages.
+4. `TrainableTinyMathPolicyBackend.policy_loss` rebuilds logits from trajectory metadata and applies policy-gradient loss.
+5. `torch.optim.Adam` updates the tiny solver policy.
+
+The command writes `config.json`, `metrics.jsonl`, and `tiny_policy.pt` under the output directory. This is a small diagnostic policy for validating the MAS training path; it is not intended to replace the later VERL LLM trainer integration.
