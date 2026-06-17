@@ -131,3 +131,7 @@ logs
 log
 outputs
 .history
+
+# Node / Remotion assets
+node_modules/
+.remotion-output/
