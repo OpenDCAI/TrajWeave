@@ -59,7 +59,12 @@ The long-term direction is a recipe hub where different MASRL papers and agent w
 
 ## MAS Data Flow
 
-README files can include animated GIFs. TrajWeave keeps local GIF assets under `assets/diagrams/` so the project overview remains readable without external image hosting.
+README files can include animated GIFs. TrajWeave keeps local GIF assets under `assets/diagrams/` so the project overview remains readable without external image hosting. The current English and Chinese GIFs are rendered from Remotion compositions and encoded with gifski:
+
+```bash
+npm install
+npm run render:mas-gifs
+```
 
 <p align="center">
   <img src="assets/diagrams/mas-dataflow-en.gif" width="820" alt="TrajWeave MAS data flow animation">
