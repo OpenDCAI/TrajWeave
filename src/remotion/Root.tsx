@@ -7,7 +7,7 @@ export const Root = () => {
       <Composition
         id="MasDataFlowEN"
         component={MasDataFlow}
-        durationInFrames={150}
+        durationInFrames={180}
         fps={30}
         width={1000}
         height={560}
@@ -16,7 +16,7 @@ export const Root = () => {
       <Composition
         id="MasDataFlowZH"
         component={MasDataFlow}
-        durationInFrames={150}
+        durationInFrames={180}
         fps={30}
         width={1000}
         height={560}
