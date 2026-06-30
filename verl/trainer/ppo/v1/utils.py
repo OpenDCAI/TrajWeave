@@ -20,6 +20,17 @@ from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.ray_trainer import compute_advantage
 
 
+def _config_get(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    try:
+        return config.get(key, default)
+    except (AttributeError, TypeError):
+        return getattr(config, key, default)
+
+
 def compute_advantage_for_multi_trajectories(
     data: DataProto,
     batch_keys: list[str],
@@ -40,6 +51,17 @@ def compute_advantage_for_multi_trajectories(
     original ``compute_advantage()`` unchanged.
     """
     if adv_estimator != core_algos.AdvantageEstimator.GRPO:
+        return compute_advantage(
+            data,
+            adv_estimator=adv_estimator,
+            gamma=gamma,
+            lam=lam,
+            num_repeat=num_repeat,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+        )
+
+    if _config_get(config, "group_by_agent_id", False):
         return compute_advantage(
             data,
             adv_estimator=adv_estimator,

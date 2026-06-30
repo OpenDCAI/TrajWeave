@@ -24,6 +24,7 @@ class SolverVerifierOrchestra:
         team: TeamSpec,
         observation: str,
         policy_backend: PolicyBackend,
+        environment: object | None = None,
     ) -> MultiAgentTrajectory:
         trajectory = MultiAgentTrajectory(
             episode_id=episode_id,

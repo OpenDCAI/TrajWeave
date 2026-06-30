@@ -12,6 +12,7 @@ with open(os.path.join(root, "verl/version/version")) as f:
 
 install_requires = [
     "accelerate",
+    "cachetools",
     "codetiming",
     "datasets",
     "dill",
@@ -23,10 +24,12 @@ install_requires = [
     "pyarrow>=19.0.0",
     "pybind11",
     "pylatexenc",
+    "PyYAML",
     "ray[default]>=2.41.0",
     "torchdata",
     "tensordict>=0.8.0,<=0.10.0,!=0.9.0",
     "transformers",
+    "TransferQueue==0.1.8",
     "wandb",
     "packaging>=20.0",
     "tensorboard",

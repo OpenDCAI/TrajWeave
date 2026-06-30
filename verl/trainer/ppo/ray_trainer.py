@@ -184,6 +184,31 @@ def compute_spec_decode_metrics(
     }
 
 
+def _config_get(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    try:
+        return config.get(key, default)
+    except (AttributeError, TypeError):
+        return getattr(config, key, default)
+
+
+def _drmas_grpo_group_index(data: DataProto, group_by_agent_id: bool) -> np.ndarray:
+    if not group_by_agent_id:
+        return data.non_tensor_batch["uid"]
+    if "agent_id" not in data.non_tensor_batch:
+        raise KeyError("algorithm.group_by_agent_id=True requires non_tensor_batch['agent_id'].")
+    return np.array(
+        [
+            f"{uid}_{agent_id}"
+            for uid, agent_id in zip(data.non_tensor_batch["uid"], data.non_tensor_batch["agent_id"], strict=True)
+        ],
+        dtype=object,
+    )
+
+
 def compute_advantage(
     data: DataProto,
     adv_estimator: AdvantageEstimator,
@@ -214,6 +239,9 @@ def compute_advantage(
     # Back-compatible with trainers that do not compute response mask in fit
     if "response_mask" not in data.batch.keys():
         data.batch["response_mask"] = compute_response_mask(data)
+    group_by_agent_id = bool(_config_get(config, "group_by_agent_id", False))
+    group_index = _drmas_grpo_group_index(data, group_by_agent_id)
+    traj_index = data.non_tensor_batch.get("traj_uid")
     # prepare response group
     if adv_estimator == AdvantageEstimator.GAE:
         # Compute advantages and returns using Generalized Advantage Estimation (GAE)
@@ -226,7 +254,7 @@ def compute_advantage(
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
-        if config.get("use_pf_ppo", False):
+        if _config_get(config, "use_pf_ppo", False):
             data = core_algos.compute_pf_ppo_reweight_data(
                 data,
                 config.pf_ppo.get("reweight_method"),
@@ -240,8 +268,11 @@ def compute_advantage(
         advantages, returns = core_algos.compute_grpo_outcome_advantage(
             token_level_rewards=data.batch["token_level_rewards"],
             response_mask=grpo_calculation_mask,
-            index=data.non_tensor_batch["uid"],
+            index=group_index,
+            traj_index=traj_index,
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+            group_by_agent_id=group_by_agent_id,
         )
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns

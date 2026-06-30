@@ -1,0 +1,11 @@
+recipe: doctor_mas_search
+mode: smoke
+
+backend:
+  type: rule
+
+team:
+  max_turns: 2
+
+rollout:
+  rollouts_per_task: 2

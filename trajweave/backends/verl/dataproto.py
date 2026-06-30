@@ -8,6 +8,14 @@ import torch
 from trajweave.core.trajectory import TrainingSample
 from verl.protocol import DataProto
 
+DRMAS_AGENT_IDS = {
+    "solver": "Solver Agent",
+    "verifier": "Verifier Agent",
+    "searcher": "Search Agent",
+    "search": "Search Agent",
+    "answer": "Answer Agent",
+}
+
 
 def _pad(sequences: list[list[int]], pad_value: int = 0) -> torch.Tensor:
     width = max(len(item) for item in sequences) if sequences else 1
@@ -49,6 +57,10 @@ class VerlDataProtoAdapter:
             "sample_id": np.array([sample.sample_id for sample in samples], dtype=object),
             "task_id": np.array([sample.task_id for sample in samples], dtype=object),
             "agent_name": np.array([sample.agent_name for sample in samples], dtype=object),
+            "agent_id": np.array(
+                [DRMAS_AGENT_IDS.get(sample.agent_name, sample.agent_name) for sample in samples],
+                dtype=object,
+            ),
             "role": np.array([sample.role for sample in samples], dtype=object),
             "policy_group": np.array([sample.policy_group for sample in samples], dtype=object),
             "turn_id": np.array([sample.turn_id for sample in samples], dtype=object),

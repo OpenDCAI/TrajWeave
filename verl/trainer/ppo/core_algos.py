@@ -269,9 +269,11 @@ def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
+    traj_index: Optional[np.ndarray] = None,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
     config: Optional[AlgoConfig] = None,
+    group_by_agent_id: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO, operating only on Outcome reward
@@ -284,12 +286,20 @@ def compute_grpo_outcome_advantage(
             shape is (bs, response_length)
         index: `(np.ndarray)`
             index array for grouping
+        traj_index: `(Optional[np.ndarray])`
+            trajectory id array. When present, non-agent-wise GRPO first
+            averages duplicate rows from the same trajectory so multi-agent
+            turns do not overweight one rollout.
         epsilon: `(float)`
             small value to avoid division by zero
         norm_adv_by_std_in_grpo: `(bool)`
             whether to scale the GRPO advantage
         config: `(Optional[AlgoConfig])`
             algorithm configuration object
+        group_by_agent_id: `(bool)`
+            whether ``index`` already includes agent identity and every agent
+            turn should participate in its own group statistics. This is the
+            Dr.MAS agent-wise advantage normalization path.
 
     Note:
         If norm_adv_by_std_in_grpo is True, the advantage is scaled by the std, as in the original GRPO.
@@ -306,15 +316,33 @@ def compute_grpo_outcome_advantage(
     id2score = defaultdict(list)
     id2mean = {}
     id2std = {}
+    traj_accumulator = defaultdict(list)
+    traj2avg = {}
 
     with torch.no_grad():
         bsz = scores.shape[0]
+        if traj_index is None:
+            traj_index = np.array([str(i) for i in range(bsz)], dtype=object)
+
         for i in range(bsz):
-            id2score[index[i]].append(scores[i])
+            traj_accumulator[(index[i], traj_index[i])].append(scores[i])
+
+        for (idx, t_idx), reward_list in traj_accumulator.items():
+            if group_by_agent_id:
+                id2score[idx].extend(reward_list)
+            else:
+                avg_score = torch.stack(reward_list).mean()
+                traj2avg[(idx, t_idx)] = avg_score
+                id2score[idx].append(avg_score)
+
+        if not group_by_agent_id:
+            for i in range(bsz):
+                scores[i] = traj2avg[(index[i], traj_index[i])]
+
         for idx in id2score:
             if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-                id2std[idx] = torch.tensor(1.0)
+                id2mean[idx] = scores.new_tensor(0.0)
+                id2std[idx] = scores.new_tensor(1.0)
             elif len(id2score[idx]) > 1:
                 scores_tensor = torch.stack(id2score[idx])
                 id2mean[idx] = torch.mean(scores_tensor)

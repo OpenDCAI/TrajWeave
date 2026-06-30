@@ -1,0 +1,27 @@
+recipe: doctor_mas_search
+mode: smoke
+
+prepare:
+  tiny_verl_assets:
+    enabled: true
+    output_dir: outputs/doctor_mas_verl_search_tiny_assets
+    task_family: search
+    train_size: 2
+    val_size: 2
+    overwrite: true
+
+backend:
+  type: hf-transformers
+  model_path: outputs/doctor_mas_verl_search_tiny_assets/model
+  device: cuda:0
+  max_new_tokens: 8
+  generation_config:
+    do_sample: false
+    pad_token_id: 0
+    eos_token_id: 1
+
+team:
+  max_turns: 1
+
+rollout:
+  rollouts_per_task: 1

@@ -73,6 +73,10 @@ algorithm:
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 
+  # Dr.MAS: group GRPO statistics by both prompt uid and agent_id.
+  # Keep False for standard single-agent / ordinary multi-turn GRPO.
+  group_by_agent_id: False
+
   # Whether to enable in-reward KL penalty
   use_kl_in_reward: False
 
