@@ -124,6 +124,8 @@ ENV/
 
 # data
 *.parquet
+*.npy
+*.npz
 
 
 # local logs
@@ -131,6 +133,30 @@ logs
 log
 outputs
 .history
+*.out
+*.err
+
+# Local experiment/runtime artifacts
+ray_results/
+.ray/
+.hydra/
+hydra/
+multirun/
+mlruns/
+.mlflow/
+wandb/
+swanlog/
+trackio/
+
+# Local model caches and large checkpoint artifacts
+.hf_cache/
+.cache/huggingface/
+*.safetensors
+*.safetensors.index.json
+*.bin
+*.bin.index.json
+*.gguf
+*.onnx
 
 # Node / Remotion assets
 node_modules/
