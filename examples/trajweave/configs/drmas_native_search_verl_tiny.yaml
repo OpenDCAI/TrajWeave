@@ -22,7 +22,7 @@ verl:
   command_file: outputs/drmas_native_search_tiny/run_verl_ppo.sh
   stdout_path: outputs/drmas_native_search_tiny/verl_stdout.log
   stderr_path: outputs/drmas_native_search_tiny/verl_stderr.log
-  module: verl.trainer.main_ppo
+  module: trajweave.backends.verl.main_ppo
   env:
     CUDA_VISIBLE_DEVICES: "0"
     HF_HOME: "outputs/.hf_cache"

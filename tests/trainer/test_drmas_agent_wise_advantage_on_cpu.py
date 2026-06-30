@@ -2,10 +2,9 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
+from trajweave.backends.verl.extensions import apply_verl_runtime_extensions
 from verl.protocol import DataProto
-from verl.trainer.ppo.core_algos import AdvantageEstimator, compute_grpo_outcome_advantage
-from verl.trainer.ppo.ray_trainer import compute_advantage
-from verl.trainer.ppo.v1.utils import compute_advantage_for_multi_trajectories
+from verl.trainer.ppo.core_algos import AdvantageEstimator
 
 
 def _drmas_batch() -> DataProto:
@@ -22,8 +21,11 @@ def _drmas_batch() -> DataProto:
 
 
 def test_grpo_supports_drmas_agent_wise_grouping():
+    apply_verl_runtime_extensions(_drmas_extension_config())
+    from verl.trainer.ppo import core_algos
+
     data = _drmas_batch()
-    global_adv, _ = compute_grpo_outcome_advantage(
+    global_adv, _ = core_algos.compute_grpo_outcome_advantage(
         token_level_rewards=data.batch["token_level_rewards"].clone(),
         response_mask=data.batch["response_mask"],
         index=data.non_tensor_batch["uid"],
@@ -37,7 +39,7 @@ def test_grpo_supports_drmas_agent_wise_grouping():
         ],
         dtype=object,
     )
-    agent_adv, _ = compute_grpo_outcome_advantage(
+    agent_adv, _ = core_algos.compute_grpo_outcome_advantage(
         token_level_rewards=data.batch["token_level_rewards"].clone(),
         response_mask=data.batch["response_mask"],
         index=group_index,
@@ -53,6 +55,9 @@ def test_grpo_supports_drmas_agent_wise_grouping():
 
 
 def test_compute_advantage_reads_group_by_agent_id_from_config():
+    apply_verl_runtime_extensions(_drmas_extension_config())
+    from verl.trainer.ppo.ray_trainer import compute_advantage
+
     data = _drmas_batch()
     result = compute_advantage(
         data,
@@ -65,6 +70,9 @@ def test_compute_advantage_reads_group_by_agent_id_from_config():
 
 
 def test_v1_multi_trajectory_advantage_uses_all_agent_rows_for_drmas():
+    apply_verl_runtime_extensions(_drmas_extension_config())
+    from verl.trainer.ppo.v1.utils import compute_advantage_for_multi_trajectories
+
     data = _drmas_batch()
     result = compute_advantage_for_multi_trajectories(
         data=data,
@@ -77,3 +85,7 @@ def test_v1_multi_trajectory_advantage_uses_all_agent_rows_for_drmas():
     assert result.batch["advantages"][1].item() < 0
     assert result.batch["advantages"][2].item() < 0
     assert result.batch["advantages"][3].item() > 0
+
+
+def _drmas_extension_config():
+    return OmegaConf.create({"trajweave": {"verl_extensions": ["drmas_agent_wise_grpo"]}})

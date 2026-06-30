@@ -272,7 +272,7 @@ def _maybe_prepare_drmas_native_verl_launch(
     overrides = build_drmas_native_launch_overrides(config, config_path=config_path)
     launch_config = VerlTrainerLaunchConfig(
         python=str(verl_cfg.get("python", VerlTrainerLaunchConfig.python)),
-        module=str(verl_cfg.get("module", "verl.trainer.main_ppo")),
+        module=str(verl_cfg.get("module", "trajweave.backends.verl.main_ppo")),
         overrides=overrides,
         env=dict(verl_cfg.get("env", {})),
         cwd=verl_cfg.get("cwd"),

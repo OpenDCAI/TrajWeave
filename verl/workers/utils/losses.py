@@ -22,38 +22,7 @@ from verl.utils.dataset.dataset_utils import DatasetPadMode
 from verl.utils.metric import AggregationType, Metric
 from verl.utils.torch_functional import masked_mean, masked_sum
 from verl.workers.config import ActorConfig, CriticConfig
-from verl.workers.utils.padding import no_padding_2_padding, response_from_nested
-
-
-def _nested_to_padded_tensor_compat(nested_tensor: torch.Tensor, padding: int | float = 0):
-    try:
-        return nested_tensor.to_padded_tensor(padding)
-    except NotImplementedError:
-        values = nested_tensor.values()
-        offsets = nested_tensor.offsets()
-        if values.dim() != 1:
-            raise
-        batch_size = len(offsets) - 1
-        max_len = int(offsets.diff().max().item()) if batch_size else 0
-        padded = torch.full((batch_size, max_len), padding, dtype=values.dtype, device=values.device)
-        lengths = offsets.diff().tolist()
-        starts = offsets[:-1].tolist()
-        for row, (start, length) in enumerate(zip(starts, lengths)):
-            padded[row, :length] = values[start : start + length]
-        return padded
-
-
-def _tensordict_to_padded_tensor_compat(data: TensorDict) -> TensorDict:
-    try:
-        return data.to_padded_tensor()
-    except NotImplementedError:
-        padded = {}
-        for key, value in data.items():
-            if isinstance(value, torch.Tensor) and getattr(value, "is_nested", False):
-                padded[key] = _nested_to_padded_tensor_compat(value, padding=0)
-            else:
-                padded[key] = value
-        return TensorDict(padded, batch_size=data.batch_size)
+from verl.workers.utils.padding import no_padding_2_padding
 
 
 def sft_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None):
@@ -87,31 +56,10 @@ def sft_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
 def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None):
     """Computes ppo loss from model output (log_prob, entropy, values, etc. ) and old_log_probs from data."""
-    pad_mode = tu.get_non_tensor_data(data=data, key="pad_mode", default=DatasetPadMode.NO_PADDING)
-    response_mask_source = data["response_mask"]
-    use_nested_response_loss = (
-        pad_mode == DatasetPadMode.NO_PADDING and getattr(model_output["log_probs"], "is_nested", False)
-    )
-    use_flat_response_loss = (
-        pad_mode == DatasetPadMode.NO_PADDING
-        and not getattr(model_output["log_probs"], "is_nested", False)
-        and model_output["log_probs"].dim() == 2
-        and model_output["log_probs"].shape[0] == 1
-        and getattr(response_mask_source, "is_nested", False)
-    )
-    if use_nested_response_loss:
-        log_prob = response_from_nested(model_output["log_probs"], response_mask_source).values().unsqueeze(0)
-        entropy = model_output.get("entropy", None)
-        if entropy is not None:
-            entropy = response_from_nested(entropy, response_mask_source).values().unsqueeze(0)
-    elif use_flat_response_loss:
-        log_prob = model_output["log_probs"]
-        entropy = model_output.get("entropy", None)
-    else:
-        log_prob = no_padding_2_padding(model_output["log_probs"], data)
-        entropy = model_output.get("entropy", None)
-        if entropy is not None:
-            entropy = no_padding_2_padding(entropy, data)
+    log_prob = no_padding_2_padding(model_output["log_probs"], data)
+    entropy = model_output.get("entropy", None)
+    if entropy is not None:
+        entropy = no_padding_2_padding(entropy, data)
 
     # global batch info for loss aggregation
     config.global_batch_info["dp_size"] = data["dp_size"]
@@ -140,21 +88,13 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
         fields.append("ref_log_prob")
-    data = data.select(*fields)
+    data = data.select(*fields).to_padded_tensor()
 
-    if use_nested_response_loss or use_flat_response_loss:
-        response_mask = data["response_mask"].values().to(bool).unsqueeze(0)
-        old_log_prob = data["old_log_probs"].values().unsqueeze(0)
-        advantages = data["advantages"].values().unsqueeze(0)
-        rollout_is_weights = data["rollout_is_weights"].values().unsqueeze(0) if "rollout_is_weights" in data else None
-        ref_log_prob = data["ref_log_prob"].values().unsqueeze(0) if "ref_log_prob" in data else None
-    else:
-        data = _tensordict_to_padded_tensor_compat(data)
-        response_mask = data["response_mask"].to(bool)
-        old_log_prob = data["old_log_probs"]
-        advantages = data["advantages"]
-        rollout_is_weights = data.get("rollout_is_weights", None)
-        ref_log_prob = data.get("ref_log_prob", None)
+    response_mask = data["response_mask"].to(bool)
+    # compute policy loss
+    old_log_prob = data["old_log_probs"]
+    advantages = data["advantages"]
+    rollout_is_weights = data.get("rollout_is_weights", None)
 
     loss_agg_mode = config.loss_agg_mode
 
@@ -190,7 +130,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     # add kl loss
     if config.use_kl_loss:
-        assert ref_log_prob is not None, "ref_log_prob is required when use_kl_loss is enabled"
+        ref_log_prob = data["ref_log_prob"]
         # compute kl loss
         kld = kl_penalty(logprob=log_prob, ref_logprob=ref_log_prob, kl_penalty=config.kl_loss_type)
         kl_loss = agg_loss(
@@ -219,7 +159,7 @@ def value_loss(config: CriticConfig, model_output, data: TensorDict, dp_group=No
     vpreds = no_padding_2_padding(model_output["values"], data)  # (bsz, response_length)
 
     # select fields and convert to padded tensor
-    data = _tensordict_to_padded_tensor_compat(data.select("values", "returns", "response_mask"))
+    data = data.select("values", "returns", "response_mask").to_padded_tensor()
     values = data["values"]
     returns = data["returns"]
     response_mask = data["response_mask"].to(bool)

@@ -87,46 +87,6 @@ from verl.workers.utils.losses import value_loss
 from verl.workers.utils.padding import response_from_nested, response_to_nested
 
 
-def _nested_to_padded_tensor_compat(nested_tensor: torch.Tensor, padding: int | float = 0):
-    try:
-        return nested_tensor.to_padded_tensor(padding)
-    except NotImplementedError:
-        values = nested_tensor.values()
-        offsets = nested_tensor.offsets()
-        if values.dim() != 1:
-            raise
-        batch_size = len(offsets) - 1
-        max_len = int(offsets.diff().max().item()) if batch_size else 0
-        padded = torch.full((batch_size, max_len), padding, dtype=values.dtype, device=values.device)
-        lengths = offsets.diff().tolist()
-        starts = offsets[:-1].tolist()
-        for row, (start, length) in enumerate(zip(starts, lengths)):
-            padded[row, :length] = values[start : start + length]
-        return padded
-
-
-def _tensordict_to_padded_tensor_compat(data: TensorDict) -> TensorDict:
-    try:
-        return data.to_padded_tensor()
-    except NotImplementedError:
-        padded = {}
-        for key, value in data.items():
-            if isinstance(value, torch.Tensor) and getattr(value, "is_nested", False):
-                padded[key] = _nested_to_padded_tensor_compat(value, padding=0)
-            else:
-                padded[key] = value
-        return TensorDict(padded, batch_size=data.batch_size)
-
-
-def _pop_tq_field_as_object_array(data: DataProto, key: str) -> np.ndarray:
-    value = data.batch.pop(key)
-    if hasattr(value, "tolist"):
-        value = value.tolist()
-    elif hasattr(value, "data"):
-        value = value.data
-    return np.array(value, dtype=object)
-
-
 def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     params["top_p"] = 1.0
     params["top_k"] = -1
@@ -135,26 +95,6 @@ def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
-
-
-class _NullLLMServerManager:
-    def get_client(self):
-        return None
-
-    def get_replicas(self):
-        return []
-
-
-class _NullCheckpointEngineManager:
-    def sleep_replicas(self):
-        return None
-
-    def update_weights(self, global_steps: int = None):
-        return None
-
-
-def _is_trajweave_self_managed_tq(config: DictConfig) -> bool:
-    return config.get("trajweave", {}).get("agent_loop_backend") in {"synthetic_tq", "hf_local_tq"}
 
 
 class PPOTrainer(ABC):
@@ -195,12 +135,7 @@ class PPOTrainer(ABC):
         self.resource_pool_to_cls = {pool: {} for pool in self.resource_pool_manager.resource_pool_dict.values()}
 
         # 1. define actor and rollout class
-        if Role.ActorRolloutRef in self.role_worker_mapping:
-            actor_role = Role.ActorRolloutRef
-        elif Role.ActorRollout in self.role_worker_mapping:
-            actor_role = Role.ActorRollout
-        else:
-            actor_role = Role.Actor
+        actor_role = Role.ActorRolloutRef if Role.ActorRolloutRef in self.role_worker_mapping else Role.ActorRollout
         actor_rollout_resource_pool = self.resource_pool_manager.get_resource_pool(actor_role)
         actor_rollout_cls = RayClassWithInitArgs(
             cls=self.role_worker_mapping[actor_role],
@@ -302,24 +237,18 @@ class PPOTrainer(ABC):
             self.distillation_config = None
 
         # 9. initialize agent loop manager
-        if _is_trajweave_self_managed_tq(self.config):
-            self.llm_server_manager = _NullLLMServerManager()
-        else:
-            self.llm_server_manager: LLMServerManager = LLMServerManager.create(
-                config=self.config, worker_group=self.actor_rollout_wg, rollout_resource_pool=actor_rollout_resource_pool
-            )
+        self.llm_server_manager: LLMServerManager = LLMServerManager.create(
+            config=self.config, worker_group=self.actor_rollout_wg, rollout_resource_pool=actor_rollout_resource_pool
+        )
 
         # 10. initialize checkpoint engine manager
-        if _is_trajweave_self_managed_tq(self.config):
-            self.checkpoint_manager = _NullCheckpointEngineManager()
-        else:
-            checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
-            checkpoint_engine_config.backend = "naive"
-            self.checkpoint_manager: CheckpointEngineManager = CheckpointEngineManager(
-                config=checkpoint_engine_config,
-                actor_wg=self.actor_rollout_wg,
-                replicas=self.llm_server_manager.get_replicas(),
-            )
+        checkpoint_engine_config = omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
+        checkpoint_engine_config.backend = "naive"
+        self.checkpoint_manager: CheckpointEngineManager = CheckpointEngineManager(
+            config=checkpoint_engine_config,
+            actor_wg=self.actor_rollout_wg,
+            replicas=self.llm_server_manager.get_replicas(),
+        )
         logger.info("checkpoint engine manager initialized")
 
         # sleep all replicas to load checkpoint
@@ -623,10 +552,7 @@ class PPOTrainer(ABC):
             lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
         ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
 
-        if _is_trajweave_self_managed_tq(config):
-            role = Role.Actor
-        else:
-            role = Role.ActorRolloutRef if need_reference_policy(config) and not ref_in_actor else Role.ActorRollout
+        role = Role.ActorRolloutRef if need_reference_policy(config) and not ref_in_actor else Role.ActorRollout
         self.role_worker_mapping[role] = ray.remote(ActorRolloutRefWorker)
         self.mapping[role] = "global_pool"
 
@@ -1244,7 +1170,7 @@ class PPOTrainer(ABC):
             keys=batch.keys, partition_id=batch.partition_id, fields=data.select("old_log_probs", "entropy")
         )
 
-        data = DataProto(batch=_tensordict_to_padded_tensor_compat(data))
+        data = DataProto(batch=data.to_padded_tensor())
 
         # 3. calculate actor entroy metrics
         actor_config = self.config.actor_rollout_ref.actor
@@ -1311,17 +1237,12 @@ class PPOTrainer(ABC):
     def _compute_advantage(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
         """Compute the advantage of the batch."""
         fields = ["uid", "response_mask", "rm_scores", "rollout_log_probs", "old_log_probs", "ref_log_prob", "values"]
-        if self.config.algorithm.get("group_by_agent_id", False):
-            fields.extend(["agent_id", "traj_uid"])
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
 
         response_mask = data["response_mask"]
-        data = DataProto(batch=_tensordict_to_padded_tensor_compat(data))
+        data = DataProto(batch=data.to_padded_tensor())
         data.batch["token_level_scores"] = data.batch["rm_scores"]
-        data.non_tensor_batch["uid"] = _pop_tq_field_as_object_array(data, "uid")
-        if self.config.algorithm.get("group_by_agent_id", False):
-            data.non_tensor_batch["agent_id"] = _pop_tq_field_as_object_array(data, "agent_id")
-            data.non_tensor_batch["traj_uid"] = _pop_tq_field_as_object_array(data, "traj_uid")
+        data.non_tensor_batch["uid"] = np.array(data.batch.pop("uid").tolist(), dtype=object)
 
         # 1. apply kl penalty to rewards
         if self.config.algorithm.use_kl_in_reward:
@@ -1462,7 +1383,7 @@ class PPOTrainer(ABC):
             spec_accepts = [extra_field["spec_num_accepted_tokens"] for extra_field in extra_fields]
             spec_verifies = [extra_field["spec_num_verify_steps"] for extra_field in extra_fields]
 
-        data = _tensordict_to_padded_tensor_compat(data)
+        data = data.to_padded_tensor()
         data["token_level_scores"] = data["rm_scores"]
         if "token_level_rewards" not in data:
             data["token_level_rewards"] = data["rm_scores"]

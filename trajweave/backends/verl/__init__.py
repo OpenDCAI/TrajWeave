@@ -1,3 +1,31 @@
+def _ensure_torch_dtensor_import_compat() -> None:
+    """Expose DTensor on the path expected by this vendored VERL snapshot."""
+
+    try:
+        import builtins
+        import torch.distributed.tensor as tensor_mod
+
+        from torch.distributed._tensor import DTensor, Shard
+        from torch.distributed._tensor.placement_types import DTensorSpec
+
+        if not hasattr(tensor_mod, "DTensor"):
+            tensor_mod.DTensor = DTensor
+        if not hasattr(tensor_mod, "Shard"):
+            tensor_mod.Shard = Shard
+        for name, value in {
+            "DTensor": DTensor,
+            "Shard": Shard,
+            "DTensorSpec": DTensorSpec,
+        }.items():
+            if not hasattr(builtins, name):
+                setattr(builtins, name, value)
+    except Exception:
+        return
+
+
+_ensure_torch_dtensor_import_compat()
+
+
 __all__ = [
     "TRAJWEAVE_AGENT_LOOP_MANAGER_FQN",
     "TrajWeaveAgentLoopManager",

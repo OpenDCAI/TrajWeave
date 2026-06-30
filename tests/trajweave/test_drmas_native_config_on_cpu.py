@@ -25,8 +25,10 @@ def test_drmas_native_math_config_prepares_agent_wise_verl_launch():
     command = result["verl_launch"]["command"]
     command_text = " ".join(command)
     assert result["drmas_native"]["task"] == "math"
-    assert "algorithm.group_by_agent_id=true" in command
+    assert "trajweave.backends.verl.main_ppo" in command
+    assert "++algorithm.group_by_agent_id=true" in command
     assert "+agent.agent_ids=[\"Solver Agent\",\"Verifier Agent\"]" in command
+    assert "+trajweave.verl_extensions=[drmas_agent_wise_grpo]" in command
     assert "+agent.orchestra.math.max_loop_num=2" in command
     assert "+trajweave.agent_loop_backend=synthetic_tq" in command
     assert "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager" in command_text

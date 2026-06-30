@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from trajweave.backends.verl.agent_loop import TRAJWEAVE_AGENT_LOOP_MANAGER_FQN
+TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ def build_drmas_native_launch_overrides(
 
     required = [
         "algorithm.adv_estimator=grpo",
-        "algorithm.group_by_agent_id=true",
+        "++algorithm.group_by_agent_id=true",
         "algorithm.norm_adv_by_std_in_grpo=true",
         f"+agent.agent_ids={_hydra_list(agent_ids)}",
         f"+agent.model_ids={_hydra_list(model_ids)}",
@@ -82,6 +82,7 @@ def build_drmas_native_launch_overrides(
         f"+trajweave.coordination_protocol={spec.coordination_protocol}",
         "+trajweave.trajectory_schema=multi_agent_turn_v1",
         "+trajweave.credit_allocator=drmas_agent_wise_grpo",
+        "+trajweave.verl_extensions=[drmas_agent_wise_grpo]",
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
