@@ -78,5 +78,7 @@ def test_verl_dataproto_adapter_preserves_agent_metadata():
 
     assert len(data) == len(result.samples)
     assert "agent_name" in data.non_tensor_batch
+    assert "agent_id" in data.non_tensor_batch
+    assert set(data.non_tensor_batch["agent_id"]) == {"Solver Agent", "Verifier Agent"}
     assert "token_level_rewards" in data.batch
     assert data.batch["token_level_rewards"].shape == data.batch["responses"].shape

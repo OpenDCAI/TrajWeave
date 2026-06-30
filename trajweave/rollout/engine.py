@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from trajweave.backends.policy import PolicyBackend
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import MultiAgentTrajectory, TrainingSample
 from trajweave.credit.base import CreditAssigner
-from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
-from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
+from trajweave.envs.base import Environment
+from trajweave.orchestration.base import Orchestra
 
 
 @dataclass
@@ -26,12 +27,12 @@ class RolloutResult:
 @dataclass
 class RolloutEngine:
     team: TeamSpec
-    orchestra: SolverVerifierOrchestra
-    environment: SolverVerifierMathEnvironment
+    orchestra: Orchestra
+    environment: Environment
     policy_backend: PolicyBackend
     credit_assigner: CreditAssigner
 
-    def run(self, tasks: list[MathTask], rollouts_per_task: int = 1) -> RolloutResult:
+    def run(self, tasks: list[Any], rollouts_per_task: int = 1) -> RolloutResult:
         trajectories: list[MultiAgentTrajectory] = []
         for task in tasks:
             observation = self.environment.initial_observation(task)
@@ -44,6 +45,7 @@ class RolloutEngine:
                     team=self.team,
                     observation=observation,
                     policy_backend=self.policy_backend,
+                    environment=self.environment,
                 )
                 reward, success = self.environment.evaluate(task, trajectory.final_answer)
                 trajectory.global_reward = reward

@@ -35,3 +35,7 @@ class StableByteTokenizer:
     def encode(self, text: str) -> list[int]:
         values = list(text.encode("utf-8"))
         return [value + 1 for value in values] or [1]
+
+    def decode(self, token_ids: list[int]) -> str:
+        values = bytes(max(0, min(255, token_id - 1)) for token_id in token_ids if token_id > 0)
+        return values.decode("utf-8", errors="ignore")

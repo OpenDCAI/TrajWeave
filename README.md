@@ -8,7 +8,7 @@ TrajWeave is an early-stage Multi-Agent LLM Reinforcement Learning framework bui
 
 The goal is not to maintain a full VERL mirror. TrajWeave keeps the core distributed RL runtime from VERL, then adds a MASRL layer for training systems made of multiple LLM agents, such as solver, verifier, planner, executor, critic, searcher, and tool-using agents.
 
-> Current status: first TrajWeave MAS slice. The VERL backend is retained, and a decoupled DrMAS-style Solver-Verifier Math recipe now runs through TrajWeave trajectory collection, agent-wise credit assignment, optional VERL `DataProto` conversion, and a tiny torch policy training loop.
+> Current status: first configurable TrajWeave MAS slice. The VERL backend is retained, DrMAS-style Math and Search recipes run through TrajWeave trajectory collection and agent-wise credit assignment, and YAML configs can launch smoke rollouts, tiny torch training, VERL `DataProto` export, VERL trainer dry-run scripts, and a custom VERL `AgentLoopManager` import bridge.
 
 ## Why TrajWeave
 
@@ -76,9 +76,9 @@ npm run render:mas-gifs
   <img src="assets/diagrams/mas-dataflow-zh.gif" width="820" alt="TrajWeave MAS 数据流动图">
 </p>
 
-## Planned Core Abstractions
+## Core Abstractions
 
-TrajWeave will add a MASRL layer above the retained backend:
+TrajWeave adds a MASRL layer above the retained backend:
 
 | Abstraction              | Responsibility                                                |
 | ------------------------ | ------------------------------------------------------------- |
@@ -88,12 +88,13 @@ TrajWeave will add a MASRL layer above the retained backend:
 | `MultiAgentTrajectory`   | Step-level agent turns, tool calls, rewards, final outcome.   |
 | `CreditAssigner`         | Converts global/per-agent rewards into training samples.      |
 | `BackendAdapter`         | Bridges MASRL samples into VERL `DataProto` training batches. |
+| YAML runner              | Starts a recipe from one config file instead of ad-hoc scripts. |
 
 The first implementation should keep these interfaces small and concrete. Generality should come from real recipes, not from speculative abstraction.
 
-## First Runnable Slice
+## Runnable Slices
 
-The first runnable recipe is `doctor_mas_math`, a small DrMAS-style Solver-Verifier workflow:
+The first trainable recipe is `doctor_mas_math`, a small DrMAS-style Solver-Verifier workflow:
 
 ```text
 Solver -> Verifier -> Solver refine -> Verifier approve / max_turns -> final answer
@@ -102,13 +103,28 @@ Solver -> Verifier -> Solver refine -> Verifier approve / max_turns -> final ans
 Implemented boundaries:
 
 - `trajweave.core`: agent/team specs, turns, trajectories, training samples.
-- `trajweave.orchestration`: Solver-Verifier turn order and shared team context.
-- `trajweave.envs`: math task observation and exact-match evaluation.
+- `trajweave.orchestration`: Solver-Verifier and Search-Answer turn order with shared team context.
+- `trajweave.envs`: math/search task observation, tool execution, and exact-match evaluation.
 - `trajweave.credit`: global reward broadcast and DrMAS agent-wise GRPO normalization.
-- `trajweave.backends.verl`: optional `TrainingSample` -> VERL `DataProto` bridge.
+- `trajweave.backends`: rule, tiny torch, optional HF Transformers, and VERL adapters.
+- `trajweave.backends.verl`: optional `TrainingSample` -> VERL `DataProto` bridge, trainer launch adapter, and AgentLoopManager bridge.
 - `trajweave.recipes.doctor_mas`: composition layer for the runnable recipe.
 
-Run the minimal smoke:
+Run from a YAML config:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_math_smoke.yaml
+```
+
+Run the DrMAS Search smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_search_smoke.yaml
+```
+
+Run the legacy direct Math smoke:
 
 ```bash
 PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/smoke.py --backend rule
@@ -123,11 +139,32 @@ PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/smoke.py --backend tiny-
 Run the tiny training loop:
 
 ```bash
-PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/train_tiny.py \
-  --steps 160 \
-  --task-mode random \
-  --max-turns 2
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_math_tiny_train.yaml
 ```
+
+Prepare a VERL export and trainer launch dry-run:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_math_verl_export.yaml
+```
+
+Prepare a VERL V1 AgentLoopManager bridge dry-run:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_math_verl_agent_loop_dryrun.yaml
+```
+
+Run a minimal local Transformers/GPU rollout without downloading a model:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/doctor_mas_math_hf_gpu_smoke.yaml
+```
+
+This uses `backend.model_path: __tiny_random_gpt2__`, a tiny randomly initialized GPT-2 model created locally through Transformers. It validates the GPU generation path and MAS trajectory plumbing; it is not expected to solve the task.
 
 See [docs/trajweave-mas-layer.md](docs/trajweave-mas-layer.md) for the module boundary and contribution map.
 
@@ -159,13 +196,29 @@ Required fields for each paper recipe:
 | Contribution      | Algorithmic recipe centered on agent-wise reward statistics and advantage.  |
 | MAS pattern       | Solver produces an answer, verifier approves or asks for refinement.        |
 | TrajWeave mapping | `SolverVerifierOrchestra` + math env + `DoctorMASCreditAssigner`.          |
-| Training path     | `MultiAgentTrajectory` -> agent-wise GRPO advantage -> tiny torch policy.   |
+| Training path     | `MultiAgentTrajectory` -> agent-wise GRPO advantage -> tiny torch policy / VERL export. |
 | Inference path    | Task -> orchestrator -> solver/verifier turns -> final answer.              |
-| Current status    | `tiny-train`: random held-out tiny policy eval reached 1.000 success rate.  |
-| Run command       | `PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/train_tiny.py`.    |
-| Known limits      | Not yet full VERL RayPPO/GRPO trainer validation with a real LLM backend.   |
+| Current status    | `tiny-train`: random held-out tiny policy eval reached 1.000 success rate; VERL AgentLoopManager bridge import is validated. |
+| Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/doctor_mas_math_tiny_train.yaml`. |
+| Known limits      | VERL RayPPO/GRPO real LLM training is not yet validated end-to-end on GPU; the custom AgentLoopManager currently delegates to VERL TransferQueue workers instead of emitting native TrajWeave multi-agent turns into TransferQueue. |
 
-中文说明：当前 DrMAS 第一版不是完整论文复现，而是先把 DrMAS 最关键的 agent-wise credit assignment 复刻成 TrajWeave recipe。已经验证 Solver-Verifier 多 Agent 轨迹可以进入奖励计算、按 agent 分组归因，并驱动 tiny torch policy 真实更新。下一步需要把 tiny policy 换成真实小模型，再接入 VERL trainer 做端到端 LLM 训练。
+中文说明：当前 DrMAS Math 不是完整论文全量复现，而是先把 DrMAS 最关键的 agent-wise credit assignment 复刻成 TrajWeave recipe。已经验证 Solver-Verifier 多 Agent 轨迹可以进入奖励计算、按 agent 分组归因，并驱动 tiny torch policy 真实更新。VERL 侧目前已有 `DataProto` export、trainer launch adapter 和 `TrajWeaveAgentLoopManager` 动态加载入口；下一步需要实现 TrajWeave 原生 TransferQueue worker，并在 GPU 环境把真实小 LLM 的 RayPPO/GRPO 训练跑通。
+
+### DrMAS-style Search-Answer
+
+| Item              | Description                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| Paper             | Dr. MAS-style search workflow direction.                                    |
+| Contribution      | Framework recipe using a verifier as a bounded router over search/answer.  |
+| MAS pattern       | Verifier checks evidence, Searcher retrieves evidence, Answer writes final. |
+| TrajWeave mapping | `SearchAnswerOrchestra` + search env/tool + `DoctorMASCreditAssigner`.     |
+| Training path     | `MultiAgentTrajectory` -> agent-wise GRPO advantage -> VERL/tiny-compatible samples. |
+| Inference path    | Question -> verifier -> searcher/tool -> verifier -> answer.               |
+| Current status    | `smoke`: deterministic rule backend validates rollout, reward, and credit. |
+| Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/doctor_mas_search_smoke.yaml`. |
+| Known limits      | Not yet connected to a real search API, real LLM policy, or VERL GPU training run. |
+
+中文说明：Search 场景现在已经不是空白了，已经有 Verifier / Searcher / Answer 三 Agent 的固定协议和本地工具环境。它验证的是 DrMAS Search 的数据结构和 credit 链路；还没验证真实检索器、真实 LLM 和分布式训练。
 
 ## Repository Layout
 

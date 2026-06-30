@@ -1,0 +1,40 @@
+recipe: doctor_mas_math
+mode: smoke
+
+backend:
+  type: rule
+  device: cpu
+
+team:
+  max_turns: 2
+
+rollout:
+  rollouts_per_task: 1
+
+export:
+  dataproto_path: outputs/doctor_mas_verl_agent_loop/math_samples.pt
+  required: false
+
+verl:
+  enabled: true
+  execute: false
+  command_file: outputs/doctor_mas_verl_agent_loop/run_verl_ppo_with_trajweave_agent_loop.sh
+  python: python3
+  module: verl.trainer.main_ppo
+  overrides:
+    - trainer.use_v1=true
+    - trainer.v1.trainer_mode=sync
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=doctor_mas_math_agent_loop
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=1
+    - trainer.logger=[console]
+    - algorithm.adv_estimator=grpo
+    - algorithm.group_by_agent_id=true
+    - +actor_rollout_ref.rollout.agent.agent_loop_manager_class=trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager
+    - +trajweave.agent_loop_backend=verl_tq
+    - +trajweave.recipe=doctor_mas_math
+    - +trajweave.config=examples/trajweave/configs/doctor_mas_math_smoke.yaml
+    - +trajweave.coordination_protocol=solver_verifier_loop
+    - +trajweave.trajectory_schema=multi_agent_turn_v1
+    - +trajweave.credit_allocator=doctor_mas_agent_wise

@@ -1,0 +1,12 @@
+recipe: doctor_mas_math
+mode: smoke
+
+backend:
+  type: rule
+  device: cpu
+
+team:
+  max_turns: 2
+
+rollout:
+  rollouts_per_task: 2
