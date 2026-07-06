@@ -19,7 +19,7 @@ def test_drmas_native_math_config_prepares_agent_wise_verl_launch():
                 "overrides": ["trainer.use_v1=true"],
             },
         },
-        config_path="examples/trajweave/configs/drmas_native_math_verl_tiny.yaml",
+        config_path="configs/drmas_native_math_verl_tiny.yaml",
     )
 
     command = result["verl_launch"]["command"]

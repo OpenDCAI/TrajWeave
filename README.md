@@ -107,7 +107,7 @@ assets/
   diagrams/                      Remotion-generated GIFs used by README.
 
 docs/                            Architecture notes and design records.
-examples/trajweave/configs/      YAML entrypoints for smoke and VERL runs.
+configs/                         YAML entrypoints for smoke and VERL runs.
 tests/trajweave/                 TrajWeave unit and integration tests.
 
 trajweave/
@@ -196,39 +196,39 @@ Smoke runs:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/doctor_mas_math_smoke.yaml
+  --config configs/doctor_mas_math_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/doctor_mas_search_smoke.yaml
+  --config configs/doctor_mas_search_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/maporl/debate_math_smoke.yaml
+  --config configs/maporl/debate_math_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/agentflow/flow_grpo_smoke.yaml
+  --config configs/agentflow/flow_grpo_smoke.yaml
 ```
 
 Tiny VERL runs:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/drmas/math_verl_tiny.yaml
+  --config configs/drmas/math_verl_tiny.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/drmas/search_verl_tiny.yaml
+  --config configs/drmas/search_verl_tiny.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
+  --config configs/maporl/debate_math_verl_tiny.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml
+  --config configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
 The 0.5B and heterogeneous worker-group configs are experimental resource checks, not README baseline checks:
 
 ```text
-examples/trajweave/configs/maporl/debate_math_qwen05b_2gpu.yaml
-examples/trajweave/configs/maporl/debate_math_worker_groups_hetero.yaml
+configs/maporl/debate_math_qwen05b_2gpu.yaml
+configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
 ## 9. MAS Data Flow GIFs
@@ -267,7 +267,7 @@ Use this checklist:
 4. Add or reuse a credit assigner under `trajweave/credit`.
 5. Add a recipe package under `trajweave/recipes/PAPER_NAME`.
 6. Register the recipe in `trajweave/recipes/registry.py`.
-7. Add a YAML entrypoint under `examples/trajweave/configs/PAPER_NAME/`.
+7. Add a YAML entrypoint under `configs/PAPER_NAME/`.
 8. If VERL online training needs special fields, add an emitter under `trajweave/backends/verl/emitters/`.
 9. If VERL advantage or trainer behavior needs a formal hook, add it under `trajweave/backends/verl/extensions/`.
 10. Log artifacts, metrics, and trajectory output through `RunStore` and `ExperimentTracker`.
@@ -283,7 +283,7 @@ trajweave/recipes/my_paper/
   my_task.py             # task-specific recipe construction
   plugin.py              # RecipePlugin implementation
 
-examples/trajweave/configs/my_paper/
+configs/my_paper/
   my_task_smoke.yaml
   my_task_verl_tiny.yaml
 
