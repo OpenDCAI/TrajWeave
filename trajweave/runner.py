@@ -56,7 +56,11 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
         output.setdefault("run_id", run_store.run_id)
         output.setdefault("run_dir", str(run_store.run_dir))
         output = tracker.write_summary(output)
-        tracker.finalize("completed")
+        failure_reason = _output_failure_reason(output)
+        if failure_reason:
+            tracker.finalize("failed", error=failure_reason)
+        else:
+            tracker.finalize("completed")
         return output
     except Exception as exc:
         tracker.log_event("run_failed", "TrajWeave run failed.", {"error": str(exc)}, level="ERROR")
@@ -66,6 +70,17 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
 
 def dumps_result(result: dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def _output_failure_reason(output: dict[str, Any]) -> str | None:
+    verl_launch = output.get("verl_launch")
+    if not isinstance(verl_launch, dict):
+        return None
+    status = verl_launch.get("status")
+    returncode = verl_launch.get("returncode")
+    if status == "failed" or (isinstance(returncode, int) and returncode != 0):
+        return f"VERL launch failed with status={status!r}, returncode={returncode!r}."
+    return None
 
 
 __all__ = ["dumps_result", "load_yaml_config", "run_from_config", "run_from_config_path"]

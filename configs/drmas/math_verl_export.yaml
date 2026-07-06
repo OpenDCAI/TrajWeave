@@ -27,5 +27,5 @@ verl:
     - trainer.n_gpus_per_node=1
     - trainer.total_epochs=1
     - algorithm.adv_estimator=grpo
-    - algorithm.group_by_agent_id=true
+    - ++algorithm.group_by_agent_id=true
     - trainer.logger=[console]

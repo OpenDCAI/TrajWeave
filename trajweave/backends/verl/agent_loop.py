@@ -20,6 +20,7 @@ from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 
 from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
+from trajweave.backends.verl.emitters.registry import build_recipe_outputs
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
 from trajweave.backends.verl.runtime_config import (
     TrajWeaveAgentLoopRuntimeConfig,
@@ -108,22 +109,13 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
             for session_id in range(n):
                 use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-                if runtime.recipe == "agentflow_planner_tool" and use_hf_local:
-                    outputs = self._build_hf_agentflow_planner_tool_outputs(prompt, session_id=session_id)
-                elif runtime.recipe == "agentflow_planner_tool":
-                    outputs = self._build_agentflow_planner_tool_outputs(prompt, session_id=session_id)
-                elif runtime.recipe == "maporl_debate_math" and use_hf_local:
-                    outputs = self._build_hf_maporl_debate_math_outputs(prompt, session_id=session_id)
-                elif runtime.recipe == "maporl_debate_math":
-                    outputs = self._build_maporl_debate_math_outputs(prompt, session_id=session_id)
-                elif runtime.recipe == "doctor_mas_search" and use_hf_local:
-                    outputs = self._build_hf_search_answer_outputs(prompt, session_id=session_id)
-                elif runtime.recipe == "doctor_mas_search":
-                    outputs = self._build_search_answer_outputs(prompt, session_id=session_id)
-                elif use_hf_local:
-                    outputs = self._build_hf_solver_verifier_outputs(prompt, session_id=session_id)
-                else:
-                    outputs = self._build_solver_verifier_outputs(prompt, session_id=session_id)
+                outputs = build_recipe_outputs(
+                    self,
+                    recipe=runtime.recipe,
+                    use_hf_local=use_hf_local,
+                    prompt=prompt,
+                    session_id=session_id,
+                )
                 await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception:

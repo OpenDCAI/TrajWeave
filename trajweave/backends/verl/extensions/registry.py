@@ -53,9 +53,9 @@ def _normalize_names(value: Any) -> tuple[str, ...]:
 
 def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.agentflow import apply_agentflow_planner_grpo_patch
+    from trajweave.backends.verl.extensions.common.nested_compat import apply_tq_nested_compat_patch
     from trajweave.backends.verl.extensions.drmas import apply_drmas_agent_wise_grpo_patch
     from trajweave.backends.verl.extensions.maporl import apply_maporl_full_ppo_patch, apply_maporl_single_model_patch
-    from trajweave.backends.verl.extensions.nested_compat import apply_tq_nested_compat_patch
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,

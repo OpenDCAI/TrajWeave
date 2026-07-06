@@ -30,7 +30,7 @@ verl:
   command_file: outputs/doctor_mas_verl_search_synthetic/run_verl_ppo_synthetic.sh
   stdout_path: outputs/doctor_mas_verl_search_synthetic/verl_stdout.log
   stderr_path: outputs/doctor_mas_verl_search_synthetic/verl_stderr.log
-  module: verl.trainer.main_ppo
+  module: trajweave.backends.verl.main_ppo
   env:
     CUDA_VISIBLE_DEVICES: "0"
     HF_HOME: "outputs/.hf_cache"
@@ -88,7 +88,7 @@ verl:
     - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
     - actor_rollout_ref.actor.optim.lr=1e-5
     - algorithm.adv_estimator=grpo
-    - algorithm.group_by_agent_id=true
+    - ++algorithm.group_by_agent_id=true
     - algorithm.norm_adv_by_std_in_grpo=true
     - algorithm.use_kl_in_reward=false
     - critic.enable=false
@@ -96,8 +96,9 @@ verl:
     - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
     - ray_kwargs.ray_init.num_cpus=8
     - +trajweave.recipe=doctor_mas_search
-    - +trajweave.config=configs/doctor_mas_search_verl_synthetic_train.yaml
+    - +trajweave.config=configs/drmas/search_verl_synthetic_train.yaml
     - +trajweave.coordination_protocol=search_answer
     - +trajweave.trajectory_schema=multi_agent_turn_v1
     - +trajweave.credit_allocator=doctor_mas_agent_wise
+    - +trajweave.verl_extensions=[drmas_agent_wise_grpo]
     - +trajweave.agent_loop_backend=synthetic_tq

@@ -62,6 +62,32 @@ def test_verl_dry_run_is_registered_as_run_artifact(tmp_path):
     assert any(row["name"] == "run_verl_ppo.sh" for row in artifact_rows)
 
 
+def test_verl_failed_launch_marks_run_failed(tmp_path):
+    result = run_from_config(
+        {
+            "recipe": "agentflow.flow_grpo.planner_tool",
+            "mode": "verl_train",
+            "run": {"root_dir": str(tmp_path), "name": "unit-verl-failed-launch"},
+            "logging": {"console": False},
+            "prepare": {"tiny_verl_assets": {"enabled": False}},
+            "agentflow": {"agent_loop_backend": "synthetic_tq", "max_steps": 2},
+            "verl": {
+                "enabled": True,
+                "execute": True,
+                "module": "trajweave.tests.no_such_verl_module",
+                "overrides": ["trainer.use_v1=true"],
+            },
+        }
+    )
+
+    run_dir = Path(result["run_dir"])
+    assert result["verl_launch"]["status"] == "failed"
+    assert read_jsonl(run_dir / "logs" / "events.jsonl")[-1]["event"] == "run_failed_finalized"
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "failed"
+    assert "VERL launch failed" in status["error"]
+
+
 def test_verl_metric_parser_extracts_step_metrics():
     events = parse_verl_console_metrics(
         "step:1 - actor/pg_loss:0.25 - actor/grad_norm:2 - critic/score/mean:0.5",
