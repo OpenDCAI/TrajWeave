@@ -12,7 +12,7 @@ def test_trajweave_agent_loop_runtime_config_reads_verl_overrides():
         {
             "trajweave": {
                 "recipe": "doctor_mas_math",
-                "config": "examples/trajweave/configs/doctor_mas_math_smoke.yaml",
+                "config": "configs/doctor_mas_math_smoke.yaml",
                 "coordination_protocol": "solver_verifier_loop",
                 "trajectory_schema": "multi_agent_turn_v1",
                 "credit_allocator": "doctor_mas_agent_wise",
@@ -23,7 +23,7 @@ def test_trajweave_agent_loop_runtime_config_reads_verl_overrides():
     runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(config)
 
     assert runtime.recipe == "doctor_mas_math"
-    assert runtime.config_path == "examples/trajweave/configs/doctor_mas_math_smoke.yaml"
+    assert runtime.config_path == "configs/doctor_mas_math_smoke.yaml"
     assert runtime.as_overrides()["trajweave.credit_allocator"] == "doctor_mas_agent_wise"
 
 

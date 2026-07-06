@@ -58,7 +58,7 @@ def test_agentflow_verl_config_prepares_planner_grpo_launch():
                 "overrides": ["trainer.use_v1=true"],
             },
         },
-        config_path="examples/trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml",
+        config_path="configs/agentflow/flow_grpo_verl_tiny.yaml",
     )
 
     command = result["verl_launch"]["command"]

@@ -81,7 +81,7 @@ def test_maporl_verl_config_prepares_namespaced_launch():
                 "overrides": ["trainer.use_v1=true"],
             },
         },
-        config_path="examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml",
+        config_path="configs/maporl/debate_math_verl_tiny.yaml",
     )
 
     command = result["verl_launch"]["command"]

@@ -95,7 +95,7 @@ verl:
     - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
     - ray_kwargs.ray_init.num_cpus=8
     - +trajweave.recipe=doctor_mas_math
-    - +trajweave.config=examples/trajweave/configs/doctor_mas_math_verl_synthetic_train.yaml
+    - +trajweave.config=configs/doctor_mas_math_verl_synthetic_train.yaml
     - +trajweave.coordination_protocol=solver_verifier_loop
     - +trajweave.trajectory_schema=multi_agent_turn_v1
     - +trajweave.credit_allocator=doctor_mas_agent_wise

@@ -33,12 +33,12 @@ maporl.debate_math.full_verl_tiny
 agentflow.flow_grpo.planner_tool
 ```
 
-Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new examples should live under algorithm folders:
+Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new configs should live under algorithm folders:
 
 ```text
-examples/trajweave/configs/drmas/
-examples/trajweave/configs/maporl/
-examples/trajweave/configs/agentflow/
+configs/drmas/
+configs/maporl/
+configs/agentflow/
 ```
 
 ## DrMAS First Slice
@@ -67,7 +67,7 @@ The DrMAS behavior in this first slice is intentionally narrow:
 ## Smoke Command
 
 ```bash
-python3 examples/trajweave/doctor_mas_math/smoke.py --backend tiny-torch --device cpu
+python3 -m trajweave.recipes.doctor_mas.math_smoke --backend tiny-torch --device cpu
 ```
 
 Use `--backend rule` for deterministic CPU-only tests. Use `--backend tiny-torch --device cuda:0` only when CUDA is available.
@@ -75,7 +75,7 @@ Use `--backend rule` for deterministic CPU-only tests. Use `--backend tiny-torch
 ## Tiny Training Command
 
 ```bash
-PYTHONPATH=. python3 examples/trajweave/doctor_mas_math/train_tiny.py \
+PYTHONPATH=. python3 -m trajweave.recipes.doctor_mas.train_tiny \
   --steps 160 \
   --batch-tasks 16 \
   --rollouts-per-task 8 \
@@ -128,7 +128,7 @@ Run it through YAML:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/doctor_mas_search_smoke.yaml
+  --config configs/doctor_mas_search_smoke.yaml
 ```
 
 ## MAPoRL Debate Math Slice
@@ -163,14 +163,14 @@ Run the smoke:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/maporl/debate_math_smoke.yaml
+  --config configs/maporl/debate_math_smoke.yaml
 ```
 
 Prepare the VERL tiny launch:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
+  --config configs/maporl/debate_math_verl_tiny.yaml
 ```
 
 The tiny E2E currently validates shared physical policy training with logical `agent_id` and `model_id` metadata. Physical heterogeneous multi-model worker groups, adapter routing, and paper-scale LLM validation are still separate backend milestones.
@@ -205,14 +205,14 @@ Run the smoke:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/agentflow/flow_grpo_smoke.yaml
+  --config configs/agentflow/flow_grpo_smoke.yaml
 ```
 
 Run the VERL tiny training entry:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config examples/trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml
+  --config configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
 The current validation includes the default 1-step tiny run plus a separate strict 3-step run that exercises AgentFlow rollout, TransferQueue fields, GRPO advantage calculation, and actor update.
@@ -252,7 +252,7 @@ The runtime patch files should stay thin: they install compatibility shims, sele
 
 ## YAML Launch Path
 
-Every new recipe should have a YAML config under `examples/trajweave/configs/`. The intended user path is:
+Every new recipe should have a YAML config under `configs/`. The intended user path is:
 
 ```text
 YAML config
@@ -265,7 +265,7 @@ YAML config
 -> optional VERL AgentLoopManager bridge
 ```
 
-Current examples:
+Current configs:
 
 | Config | Purpose |
 | --- | --- |
