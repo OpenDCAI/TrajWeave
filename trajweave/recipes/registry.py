@@ -45,11 +45,11 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         aliases=("drmas_native_search", "doctor_mas_native_search"),
     ),
     RecipeDefinition(
-        name="maporl.debate_math.verl_tiny",
+        name="maporl.debate_math.full_verl_tiny",
         family="maporl",
         task="math",
         runtime_recipe="maporl_debate_math",
-        aliases=("maporl_debate_math",),
+        aliases=("maporl_debate_math", "maporl.debate_math.verl_tiny"),
     ),
 )
 

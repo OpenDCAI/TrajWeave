@@ -144,6 +144,8 @@ def _run_rollout_recipe(config: dict[str, Any], recipe: str):
         protocol_cfg = config.get("protocol", {})
         credit_cfg = config.get("credit", {})
         agent_count = int(config.get("maporl", {}).get("agent_count", team_cfg.get("agent_count", 2)))
+        agent_ids = tuple(maporl_cfg.get("agent_ids", [f"agent_{idx}" for idx in range(agent_count)]))
+        model_ids = tuple(maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
         consensus_threshold = int(
             protocol_cfg.get(
                 "consensus_threshold",
@@ -154,13 +156,35 @@ def _run_rollout_recipe(config: dict[str, Any], recipe: str):
             backend=backend_type,
             device=device,
             agent_count=agent_count,
+            agent_ids=agent_ids,
+            model_ids=model_ids,
             rollouts_per_task=rollouts_per_task,
             max_turns=max_turns,
             consensus_threshold=consensus_threshold,
             early_stop=bool(protocol_cfg.get("early_stop", maporl_cfg.get("early_stop", True))),
-            correct_turn_bonus=float(credit_cfg.get("correct_turn_bonus", maporl_cfg.get("correct_turn_bonus", 0.25))),
-            consensus_bonus=float(credit_cfg.get("consensus_bonus", maporl_cfg.get("consensus_bonus", 0.25))),
-            baseline_scope=str(credit_cfg.get("baseline_scope", maporl_cfg.get("baseline_scope", "policy_group"))),
+            reward_feedback=bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False))),
+            criteria_for_consensus_percentage=(
+                float(maporl_cfg["criteria_for_consensus_percentage"])
+                if "criteria_for_consensus_percentage" in maporl_cfg
+                else (
+                    float(protocol_cfg["criteria_for_consensus_percentage"])
+                    if "criteria_for_consensus_percentage" in protocol_cfg
+                    else None
+                )
+            ),
+            criteria_for_consensus_reward_threshold=float(
+                maporl_cfg.get(
+                    "criteria_for_consensus_reward_threshold",
+                    protocol_cfg.get("criteria_for_consensus_reward_threshold", 0.7),
+                )
+            ),
+            rule_horizon=str(credit_cfg.get("rule_horizon", maporl_cfg.get("rule_horizon", "discounted_sum"))),
+            rule_agent_share=str(credit_cfg.get("rule_agent_share", maporl_cfg.get("rule_agent_share", "all"))),
+            rule_discount=float(credit_cfg.get("rule_discount", maporl_cfg.get("rule_discount", 0.3))),
+            alpha=tuple(float(value) for value in credit_cfg.get("alpha", maporl_cfg.get("alpha", [0, 0, 0, 0]))),
+            policy_separation=bool(maporl_cfg.get("policy_separation", True)),
+            collaboration_separation=bool(maporl_cfg.get("collaboration_separation", True)),
+            task_training=bool(maporl_cfg.get("task_training", False)),
         )
     raise ValueError(f"Unknown recipe: {recipe}")
 
@@ -387,8 +411,11 @@ def _maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
         "coordination_protocol": "debate_consensus",
         "communication_graph": protocol_cfg.get("communication_graph", "fully_connected"),
         "aggregation": protocol_cfg.get("aggregation", "consensus"),
-        "credit_allocator": "maporl_score_bonus",
-        "single_model_only": True,
+        "credit_allocator": "maporl_ppo_score_rule",
+        "single_model_only": len(set(maporl_cfg.get("model_ids", ["shared"] * agent_count))) == 1,
+        "policy_separation": bool(maporl_cfg.get("policy_separation", True)),
+        "collaboration_separation": bool(maporl_cfg.get("collaboration_separation", True)),
+        "reward_feedback": bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False))),
     }
 
 

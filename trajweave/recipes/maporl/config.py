@@ -24,42 +24,63 @@ def build_maporl_launch_overrides(
     model_ids = tuple(maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
     if len(agent_ids) != len(model_ids):
         raise ValueError("maporl.model_ids must have the same length as maporl.agent_ids.")
-    if len(set(model_ids)) != 1:
-        raise ValueError("MAPoRL v1 integration is single-model/shared-policy only; maporl.model_ids must be identical.")
-
     max_rounds = int(maporl_cfg.get("max_rounds", team_cfg.get("max_turns", 2)))
     consensus_threshold = int(
         protocol_cfg.get("consensus_threshold", maporl_cfg.get("consensus_threshold", len(agent_ids)))
     )
     early_stop = bool(protocol_cfg.get("early_stop", maporl_cfg.get("early_stop", True)))
-    correct_turn_bonus = float(maporl_cfg.get("correct_turn_bonus", credit_cfg.get("correct_turn_bonus", 0.25)))
-    consensus_bonus = float(maporl_cfg.get("consensus_bonus", credit_cfg.get("consensus_bonus", 0.25)))
-    baseline_scope = str(maporl_cfg.get("baseline_scope", credit_cfg.get("baseline_scope", "policy_group")))
+    reward_feedback = bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False)))
+    criteria_percentage = float(
+        maporl_cfg.get(
+            "criteria_for_consensus_percentage",
+            protocol_cfg.get("criteria_for_consensus_percentage", (consensus_threshold - 1e-9) / max(len(agent_ids), 1)),
+        )
+    )
+    criteria_reward = float(
+        maporl_cfg.get(
+            "criteria_for_consensus_reward_threshold",
+            protocol_cfg.get("criteria_for_consensus_reward_threshold", 0.7),
+        )
+    )
+    policy_separation = bool(maporl_cfg.get("policy_separation", True))
+    collaboration_separation = bool(maporl_cfg.get("collaboration_separation", True))
+    task_training = bool(maporl_cfg.get("task_training", False))
+    rule_horizon = str(maporl_cfg.get("rule_horizon", credit_cfg.get("rule_horizon", "discounted_sum")))
+    rule_agent_share = str(maporl_cfg.get("rule_agent_share", credit_cfg.get("rule_agent_share", "all")))
+    rule_discount = float(maporl_cfg.get("rule_discount", credit_cfg.get("rule_discount", 0.3)))
+    alpha = tuple(float(value) for value in maporl_cfg.get("alpha", credit_cfg.get("alpha", [0.0, 0.0, 0.0, 0.0])))
     agent_loop_backend = str(maporl_cfg.get("agent_loop_backend", maporl_cfg.get("rollout_backend", "hf_local_tq")))
     if agent_loop_backend == "verl_tq":
-        raise ValueError("MAPoRL v1 requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
+        raise ValueError("MAPoRL full PPO requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
     source_config = config_path or str(Path.cwd())
 
     required = [
-        "algorithm.adv_estimator=grpo",
-        "++algorithm.group_by_agent_id=true",
-        "algorithm.norm_adv_by_std_in_grpo=true",
+        "algorithm.adv_estimator=gae",
+        "++algorithm.group_by_agent_id=false",
+        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.MAPoRLFullPPOHooks",
         f"+agent.agent_ids={_hydra_list(agent_ids)}",
         f"+agent.model_ids={_hydra_list(model_ids)}",
-        "+agent.model_sharing=true",
+        f"+agent.model_sharing={str(len(set(model_ids)) == 1).lower()}",
         "+agent.orchestra_type=maporl",
         f"+agent.orchestra.maporl.max_rounds={max_rounds}",
         f"+agent.orchestra.maporl.consensus_threshold={consensus_threshold}",
         f"+agent.orchestra.maporl.early_stop={str(early_stop).lower()}",
-        f"+agent.orchestra.maporl.correct_turn_bonus={correct_turn_bonus}",
-        f"+agent.orchestra.maporl.consensus_bonus={consensus_bonus}",
-        f"+agent.orchestra.maporl.baseline_scope={baseline_scope}",
+        f"+agent.orchestra.maporl.reward_feedback={str(reward_feedback).lower()}",
+        f"+agent.orchestra.maporl.criteria_for_consensus_percentage={criteria_percentage}",
+        f"+agent.orchestra.maporl.criteria_for_consensus_reward_threshold={criteria_reward}",
+        f"+agent.orchestra.maporl.policy_separation={str(policy_separation).lower()}",
+        f"+agent.orchestra.maporl.collaboration_separation={str(collaboration_separation).lower()}",
+        f"+agent.orchestra.maporl.task_training={str(task_training).lower()}",
+        f"+agent.orchestra.maporl.rule_horizon={rule_horizon}",
+        f"+agent.orchestra.maporl.rule_agent_share={rule_agent_share}",
+        f"+agent.orchestra.maporl.rule_discount={rule_discount}",
+        f"+agent.orchestra.maporl.alpha={_hydra_float_list(alpha)}",
         "+trajweave.recipe=maporl_debate_math",
         f"+trajweave.config={source_config}",
         "+trajweave.coordination_protocol=debate_consensus",
         "+trajweave.trajectory_schema=multi_agent_turn_v1",
-        "+trajweave.credit_allocator=maporl_score_bonus",
-        "+trajweave.verl_extensions=[trajweave_maporl_single_model]",
+        "+trajweave.credit_allocator=maporl_ppo_score_rule",
+        "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]",
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
@@ -68,6 +89,10 @@ def build_maporl_launch_overrides(
 
 def _hydra_list(values: tuple[str, ...]) -> str:
     return "[" + ",".join(_quote(value) for value in values) + "]"
+
+
+def _hydra_float_list(values: tuple[float, ...]) -> str:
+    return "[" + ",".join(str(value) for value in values) + "]"
 
 
 def _quote(value: str) -> str:

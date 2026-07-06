@@ -10,6 +10,6 @@ def test_recipe_registry_keeps_legacy_drmas_aliases():
 def test_recipe_registry_exposes_maporl_namespace():
     recipe = resolve_recipe("maporl_debate_math")
 
-    assert recipe.name == "maporl.debate_math.verl_tiny"
+    assert recipe.name == "maporl.debate_math.full_verl_tiny"
     assert recipe.family == "maporl"
     assert recipe.runtime_recipe == "maporl_debate_math"

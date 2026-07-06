@@ -1352,11 +1352,13 @@ class FSDPEngineWithValueHead(FSDPEngineWithLMHead):
             if pad_mode == DatasetPadMode.NO_PADDING:
                 cu_seqlens = input_ids.offsets()
                 seq_lengths = cu_seqlens.diff()
-                starts = torch.zeros_like(seq_lengths, dtype=torch.int64)
-                values = torch.nested.narrow(values, 1, starts, seq_lengths, layout=torch.jagged)
-                values_rmpad = torch.cat([t for t in values.unbind()])
-                # (bsz, j1), for each sample, length of each sample: [real_prompt_length + real_response_length]
-                values = torch.nested.nested_tensor_from_jagged(values_rmpad, cu_seqlens)
+                if values.dim() == 3 and values.shape[-1] == 1:
+                    values = values.squeeze(-1)
+                values_list = [
+                    values[row, : int(seq_len.item())]
+                    for row, seq_len in enumerate(seq_lengths.to(device=values.device))
+                ]
+                values = torch.nested.as_nested_tensor(values_list, layout=torch.jagged)
             else:
                 raise NotImplementedError(f"pad_mode {pad_mode} not implemented")
 

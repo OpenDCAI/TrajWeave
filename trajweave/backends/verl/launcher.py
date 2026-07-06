@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -29,7 +30,7 @@ class VerlTrainerLauncher:
     def write_command_file(self, path: str | Path) -> Path:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        command = " ".join(self.config.command())
+        command = " ".join(shlex.quote(part) for part in self.config.command())
         lines = ["#!/usr/bin/env bash", "set -euo pipefail", command]
         output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         output_path.chmod(0o755)

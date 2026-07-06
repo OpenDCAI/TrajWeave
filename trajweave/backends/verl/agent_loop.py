@@ -21,8 +21,6 @@ from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
 from verl.utils.chat_template import apply_chat_template
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 
-from trajweave.credit.maporl import shape_maporl_reward
-
 logger = logging.getLogger(__name__)
 
 
@@ -204,12 +202,14 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         is_correct = session_id % 2 == 0
         reward = 1.0 if is_correct else 0.0
         agent_ids = self._maporl_agent_ids()
+        model_ids = self._maporl_model_ids(default_agent_ids=agent_ids)
         max_rounds = self._maporl_max_rounds()
         consensus_threshold = self._maporl_consensus_threshold(default=len(agent_ids))
         early_stop = self._maporl_early_stop()
-        correct_turn_bonus, consensus_bonus = self._maporl_bonus_config()
+        reward_feedback = self._maporl_reward_feedback()
         consensus_answer = ground_truth if is_correct else "__wrong__"
         consensus_reached = bool(is_correct)
+        finished_round = 0 if consensus_reached and early_stop else -1
         outputs: list[AgentLoopOutput] = []
         running_prompt_ids = list(prompt_ids)
         metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
@@ -218,20 +218,12 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             for agent_index, agent_id in enumerate(agent_ids):
                 text = f" Agent {agent_id} round {round_id}. Final answer: {round_answer}"
                 response_ids = self._encode_text(text)
-                shaped_reward, reward_metadata = shape_maporl_reward(
-                    reward,
-                    agent_answer=round_answer,
-                    consensus_answer=consensus_answer,
-                    consensus_reached=consensus_reached,
-                    correct_turn_bonus=correct_turn_bonus,
-                    consensus_bonus=consensus_bonus,
-                )
                 outputs.append(
                     AgentLoopOutput(
                         prompt_ids=list(running_prompt_ids),
                         response_ids=response_ids,
                         response_mask=[1] * len(response_ids),
-                        reward_score=shaped_reward,
+                        reward_score=reward,
                         num_turns=round_id + 1,
                         metrics=metrics,
                         extra_fields={
@@ -239,17 +231,20 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                             "tool_rewards": [],
                             "trajweave_agent_name": agent_id,
                             "trajweave_role": "solver",
-                            "agent_id": "shared",
-                            "policy_group": "shared",
+                            "agent_id": agent_id,
+                            "policy_group": model_ids[agent_index],
                             "agent_answer": round_answer,
+                            "raw_score": reward,
+                            "correctness": reward,
                             "consensus_answer": consensus_answer,
                             "consensus_reached": consensus_reached,
                             "communication_graph": "fully_connected",
                             "aggregation": "consensus",
-                            "reward_extra_info": reward_metadata,
+                            "reward_feedback": reward_feedback,
                             "round_id": round_id,
                             "agent_index": agent_index,
                             "consensus_threshold": consensus_threshold,
+                            "finished_round": finished_round,
                         },
                     )
                 )
@@ -272,35 +267,29 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         is_correct = session_id % 2 == 0
         reward = 1.0 if is_correct else 0.0
         agent_ids = self._maporl_agent_ids()
+        model_ids = self._maporl_model_ids(default_agent_ids=agent_ids)
         max_rounds = self._maporl_max_rounds()
         consensus_threshold = self._maporl_consensus_threshold(default=len(agent_ids))
         early_stop = self._maporl_early_stop()
-        correct_turn_bonus, consensus_bonus = self._maporl_bonus_config()
+        reward_feedback = self._maporl_reward_feedback()
         reward_model = _to_python(prompt.get("reward_model", {})) or {}
         ground_truth = str(reward_model.get("ground_truth", "2"))
         round_answer = ground_truth if is_correct else "__wrong__"
         consensus_answer = ground_truth if is_correct else "__wrong__"
         consensus_reached = bool(is_correct)
+        finished_round = 0 if consensus_reached and early_stop else -1
         outputs: list[AgentLoopOutput] = []
         running_prompt_ids = list(prompt_ids)
         metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
         for round_id in range(max_rounds):
             for agent_index, agent_id in enumerate(agent_ids):
                 response_ids = self._generate_local_response_ids(running_prompt_ids)
-                shaped_reward, reward_metadata = shape_maporl_reward(
-                    reward,
-                    agent_answer=round_answer,
-                    consensus_answer=consensus_answer,
-                    consensus_reached=consensus_reached,
-                    correct_turn_bonus=correct_turn_bonus,
-                    consensus_bonus=consensus_bonus,
-                )
                 outputs.append(
                     AgentLoopOutput(
                         prompt_ids=list(running_prompt_ids),
                         response_ids=response_ids,
                         response_mask=[1] * len(response_ids),
-                        reward_score=shaped_reward,
+                        reward_score=reward,
                         num_turns=round_id + 1,
                         metrics=metrics,
                         extra_fields={
@@ -308,17 +297,20 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                             "tool_rewards": [],
                             "trajweave_agent_name": agent_id,
                             "trajweave_role": "solver",
-                            "agent_id": "shared",
-                            "policy_group": "shared",
+                            "agent_id": agent_id,
+                            "policy_group": model_ids[agent_index],
                             "agent_answer": round_answer,
+                            "raw_score": reward,
+                            "correctness": reward,
                             "consensus_answer": consensus_answer,
                             "consensus_reached": consensus_reached,
                             "communication_graph": "fully_connected",
                             "aggregation": "consensus",
-                            "reward_extra_info": reward_metadata,
+                            "reward_feedback": reward_feedback,
                             "round_id": round_id,
                             "agent_index": agent_index,
                             "consensus_threshold": consensus_threshold,
+                            "finished_round": finished_round,
                             "rollout_source": "hf_local_tq",
                         },
                     )
@@ -555,6 +547,17 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             return [str(item) for item in ids]
         return ["agent_0", "agent_1"]
 
+    def _maporl_model_ids(self, *, default_agent_ids: list[str]) -> list[str]:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        ids = _get(agent_cfg, "model_ids", default=None)
+        ids = _to_python(ids)
+        if ids:
+            model_ids = [str(item) for item in ids]
+            if len(model_ids) != len(default_agent_ids):
+                raise ValueError("agent.model_ids must have the same length as agent.agent_ids.")
+            return model_ids
+        return ["shared" for _ in default_agent_ids]
+
     def _maporl_max_rounds(self) -> int:
         agent_cfg = _get(self.config, "agent", default={}) or {}
         orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
@@ -573,14 +576,11 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
         return bool(_get(maporl_cfg, "early_stop", default=True))
 
-    def _maporl_bonus_config(self) -> tuple[float, float]:
+    def _maporl_reward_feedback(self) -> bool:
         agent_cfg = _get(self.config, "agent", default={}) or {}
         orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
         maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
-        return (
-            float(_get(maporl_cfg, "correct_turn_bonus", default=0.25)),
-            float(_get(maporl_cfg, "consensus_bonus", default=0.25)),
-        )
+        return bool(_get(maporl_cfg, "reward_feedback", default=False))
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         final_output = outputs[-1]
@@ -629,11 +629,22 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
             field["turn_id"] = index
+            for mas_field in (
+                "round_id",
+                "agent_index",
+                "raw_score",
+                "correctness",
+                "consensus_reached",
+                "finished_round",
+            ):
+                if mas_field in output.extra_fields:
+                    field[mas_field] = output.extra_fields[mas_field]
             field["session_id"] = session_id
             field["loss_mask"] = field["response_mask"]
             field["input_ids"] = input_ids
             field["attention_mask"] = attention_mask
             field["position_ids"] = position_ids
+            field["temperature"] = float(_get(self.rollout_config, "temperature", 1.0))
             field["multi_modal_inputs"] = multi_modal_inputs
             fields.append(field)
             keys.append(f"{uid}_{session_id}_{index}")

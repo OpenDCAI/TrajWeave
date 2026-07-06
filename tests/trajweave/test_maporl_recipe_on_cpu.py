@@ -2,21 +2,38 @@ from trajweave.runner import run_from_config
 from trajweave.recipes.maporl import run_debate_math_smoke
 
 
-def test_maporl_smoke_shapes_rewards_by_shared_policy_group():
+def test_maporl_smoke_assigns_full_ppo_turn_rewards():
     _summary, result = run_debate_math_smoke(
         backend="rule",
         agent_count=2,
         rollouts_per_task=1,
         max_turns=2,
         consensus_threshold=2,
+        reward_feedback=True,
     )
 
     assert len(result.samples) == 4
     assert {sample.policy_group for sample in result.samples} == {"shared"}
-    assert {sample.metadata["advantage_group"].split(":")[-1] for sample in result.samples} == {"shared"}
-    assert {sample.metadata["credit"] for sample in result.samples} == {"maporl_score_bonus"}
-    assert {sample.metadata["raw_global_reward"] for sample in result.samples} == {1.0}
-    assert {sample.metadata["shaped_reward"] for sample in result.samples} == {1.5}
+    assert {sample.metadata["credit"] for sample in result.samples} == {"maporl_ppo_score_rule"}
+    assert {sample.metadata["raw_score"] for sample in result.samples} == {1.0}
+    assert {sample.metadata["correctness"] for sample in result.samples} == {1.0}
+    assert {sample.metadata["reward_feedback"] for sample in result.samples} == {True}
+    assert {sample.reward for sample in result.samples} == {1.0}
+
+
+def test_maporl_smoke_supports_logical_multi_policy_groups():
+    _summary, result = run_debate_math_smoke(
+        backend="rule",
+        agent_count=2,
+        agent_ids=("agent_0", "agent_1"),
+        model_ids=("policy_a", "policy_b"),
+        rollouts_per_task=1,
+        max_turns=2,
+        consensus_threshold=2,
+    )
+
+    assert {sample.agent_name for sample in result.samples} == {"agent_0", "agent_1"}
+    assert {sample.policy_group for sample in result.samples} == {"policy_a", "policy_b"}
 
 
 def test_yaml_runner_runs_maporl_debate_math_smoke_config():
@@ -40,7 +57,7 @@ def test_yaml_runner_runs_maporl_debate_math_smoke_config():
 def test_maporl_verl_config_prepares_namespaced_launch():
     result = run_from_config(
         {
-            "recipe": "maporl.debate_math.verl_tiny",
+            "recipe": "maporl.debate_math.full_verl_tiny",
             "mode": "verl_train",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
@@ -62,46 +79,47 @@ def test_maporl_verl_config_prepares_namespaced_launch():
 
     command = result["verl_launch"]["command"]
     command_text = " ".join(command)
-    assert result["canonical_recipe"] == "maporl.debate_math.verl_tiny"
+    assert result["canonical_recipe"] == "maporl.debate_math.full_verl_tiny"
     assert result["maporl"]["runtime_recipe"] == "maporl_debate_math"
     assert "trajweave.backends.verl.main_ppo" in command
     assert "+trajweave.recipe=maporl_debate_math" in command
-    assert "+trajweave.verl_extensions=[trajweave_maporl_single_model]" in command
+    assert "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]" in command
+    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.MAPoRLFullPPOHooks" in command
     assert "+agent.agent_ids=[\"agent_0\",\"agent_1\"]" in command
     assert "+agent.orchestra.maporl.max_rounds=2" in command
     assert "+agent.orchestra.maporl.early_stop=true" in command
-    assert "+agent.orchestra.maporl.baseline_scope=policy_group" in command
+    assert "+agent.orchestra.maporl.rule_horizon=discounted_sum" in command
+    assert "+trajweave.credit_allocator=maporl_ppo_score_rule" in command
     assert "+trajweave.agent_loop_backend=synthetic_tq" in command
     assert "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager" in command_text
 
 
-def test_maporl_verl_config_rejects_multi_model_v1():
-    try:
-        run_from_config(
-            {
-                "recipe": "maporl.debate_math.verl_tiny",
-                "mode": "verl_train",
-                "prepare": {"tiny_verl_assets": {"enabled": False}},
-                "maporl": {
-                    "agent_count": 2,
-                    "agent_ids": ["agent_0", "agent_1"],
-                    "model_ids": ["model_a", "model_b"],
-                    "agent_loop_backend": "synthetic_tq",
-                },
-                "verl": {"enabled": True, "execute": False},
-            }
-        )
-    except ValueError as exc:
-        assert "single-model/shared-policy" in str(exc)
-    else:
-        raise AssertionError("MAPoRL v1 should reject heterogeneous model_ids.")
+def test_maporl_verl_config_keeps_multi_policy_metadata():
+    result = run_from_config(
+        {
+            "recipe": "maporl.debate_math.full_verl_tiny",
+            "mode": "verl_train",
+            "prepare": {"tiny_verl_assets": {"enabled": False}},
+            "maporl": {
+                "agent_count": 2,
+                "agent_ids": ["agent_0", "agent_1"],
+                "model_ids": ["model_a", "model_b"],
+                "agent_loop_backend": "synthetic_tq",
+            },
+            "verl": {"enabled": True, "execute": False},
+        }
+    )
+
+    command = result["verl_launch"]["command"]
+    assert "+agent.model_ids=[\"model_a\",\"model_b\"]" in command
+    assert "+agent.model_sharing=false" in command
 
 
 def test_maporl_verl_config_rejects_native_verl_tq_backend():
     try:
         run_from_config(
             {
-                "recipe": "maporl.debate_math.verl_tiny",
+                "recipe": "maporl.debate_math.full_verl_tiny",
                 "mode": "verl_train",
                 "prepare": {"tiny_verl_assets": {"enabled": False}},
                 "maporl": {
@@ -116,4 +134,4 @@ def test_maporl_verl_config_rejects_native_verl_tq_backend():
     except ValueError as exc:
         assert "not verl_tq" in str(exc)
     else:
-        raise AssertionError("MAPoRL v1 should reject native verl_tq.")
+        raise AssertionError("MAPoRL full PPO should reject native verl_tq.")

@@ -139,7 +139,7 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config examples/trajweave/configs/maporl/debate_math_smoke.yaml
 ```
 
-Prepare the MAPoRL v1 VERL tiny launch:
+Prepare and run the MAPoRL full PPO VERL tiny launch:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
@@ -249,14 +249,14 @@ Required fields for each paper recipe:
 | Paper             | MAPoRL-style multi-agent collaborative post-training direction.             |
 | Contribution      | Algorithmic recipe for multi-agent debate, consensus, and trajectory-level reward shaping. |
 | MAS pattern       | Multiple solver agents answer across rounds, share previous messages, and stop on consensus. |
-| TrajWeave mapping | `MAPoRLDebateOrchestra` + math env + `MAPoRLScoreBonusCreditAssigner`.     |
-| Training path     | `MultiAgentTrajectory` -> score/bonus shaped rewards -> shared-policy samples -> VERL single-model tiny trainer. |
+| TrajWeave mapping | `MAPoRLDebateOrchestra` + math env + `MAPoRLPPOScoreRuleCreditAssigner` + `MAPoRLFullPPOHooks`. |
+| Training path     | `MultiAgentTrajectory` -> per-turn MAPoRL score/bonus rule -> VERL TransferQueue MAS fields -> PPO/GAE actor and critic update. |
 | Inference path    | Task -> debate agents -> fully connected message history -> consensus final answer. |
-| Current status    | deterministic debate smoke and 1-step VERL tiny smoke pass; MAPoRL reward shaping enters the VERL batch. |
+| Current status    | deterministic debate smoke and 1-step VERL tiny training pass; rollout, values, GAE advantage, critic update, and actor update all run through VERL. |
 | Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/maporl/debate_math_smoke.yaml`. |
-| Known limits      | This is v1 single-model/shared-policy integration; heterogeneous models, per-turn value heads, adapter routing, and exact MAPoRL PPOv2 parity are not implemented yet. |
+| Known limits      | Supports logical `agent_id` / `model_id` metadata and shared-policy tiny E2E. Physical heterogeneous multi-model worker groups and paper-scale LLM validation still need larger backend work. |
 
-中文说明：MAPoRL 当前接入的是第一阶段版本，用来验证 TrajWeave 能表达 debate、共识提前停止和 score/bonus reward shaping。它不是原仓库完整异构多模型 PPOv2 复刻；下一步需要在 VERL 后端继续补 adapter/value-head 路由和 per-turn/per-agent loss mask。
+中文说明：MAPoRL 当前已经不是只做一个 toy reward shaping。TrajWeave 会生成 debate/consensus 多智能体轨迹，把 `round_id`、`agent_index`、`raw_score`、`correctness` 等字段写入 VERL TransferQueue，再走 VERL PPO/GAE 的 value、advantage、critic update 和 actor update。当前 tiny E2E 用共享物理模型验证训练链路；真正多物理模型、多 worker-group、paper-scale 数据和大模型效果还需要继续扩展。
 
 ## Repository Layout
 

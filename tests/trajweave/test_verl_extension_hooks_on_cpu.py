@@ -2,7 +2,12 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from trajweave.backends.verl.extensions.hooks import AgentWiseGRPOHooks, PPOExtensionHooks, extension_hooks_for_config
+from trajweave.backends.verl.extensions.hooks import (
+    AgentWiseGRPOHooks,
+    MAPoRLFullPPOHooks,
+    PPOExtensionHooks,
+    extension_hooks_for_config,
+)
 from verl.protocol import DataProto
 from verl.trainer.ppo.core_algos import AdvantageEstimator
 
@@ -63,3 +68,13 @@ def test_extension_hooks_for_config_selects_agent_wise_grpo():
         AgentWiseGRPOHooks,
     )
     assert isinstance(extension_hooks_for_config({}), PPOExtensionHooks)
+
+
+def test_extension_hooks_for_config_selects_maporl_full_ppo():
+    hooks = extension_hooks_for_config({"trajweave": {"credit_allocator": "maporl_ppo_score_rule"}})
+
+    assert isinstance(hooks, MAPoRLFullPPOHooks)
+    fields = hooks.tq_select_fields("advantage", default_fields=("uid", "rm_scores"), config={})
+    assert "round_id" in fields
+    assert "raw_score" in fields
+    assert "policy_group" in fields

@@ -29,7 +29,7 @@ Examples:
 ```text
 drmas.math.verl_tiny
 drmas.search.verl_tiny
-maporl.debate_math.verl_tiny
+maporl.debate_math.full_verl_tiny
 ```
 
 Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new examples should live under algorithm folders:
@@ -140,19 +140,22 @@ flowchart LR
     D --> E
     E --> F[Consensus Aggregation]
     F --> G[MathEnvironment.evaluate]
-    G --> H[MAPoRLScoreBonusCreditAssigner]
-    H --> I[TrainingSample]
-    I --> J[VERL single-model launch]
+    G --> H[MAPoRLPPOScoreRuleCreditAssigner]
+    H --> I[TransferQueue MAS Fields]
+    I --> J[MAPoRLFullPPOHooks]
+    J --> K[VERL PPO/GAE]
+    K --> L[Actor and Critic Update]
 ```
 
-The first MAPoRL slice is intentionally a v1 single-model approximation:
+The MAPoRL tiny slice now runs through the full VERL PPO/GAE training path:
 
 1. Multiple solver agents run a fixed fully connected debate protocol.
 2. Each agent sees previous messages from the shared context.
 3. Consensus can stop the debate early.
-4. The environment computes final task success.
-5. `MAPoRLScoreBonusCreditAssigner` applies final success plus correct-turn and consensus bonuses.
-6. The VERL launch path uses one shared policy and the `trajweave_maporl_single_model` extension name.
+4. The environment records per-turn `raw_score`, `correctness`, `round_id`, `agent_index`, and consensus metadata.
+5. `MAPoRLPPOScoreRuleCreditAssigner` mirrors MAPoRL score-rule and bonus-rule credit allocation.
+6. `MAPoRLFullPPOHooks` carries MAPoRL fields through VERL TransferQueue.
+7. VERL computes values, GAE advantages, critic loss, and actor PPO loss.
 
 Run the smoke:
 
@@ -168,11 +171,11 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
 ```
 
-This slice does not yet reproduce MAPoRL's heterogeneous multi-model trainer, per-turn value heads, adapter routing, or custom PPOv2 update schedule.
+The tiny E2E currently validates shared physical policy training with logical `agent_id` and `model_id` metadata. Physical heterogeneous multi-model worker groups, adapter routing, and paper-scale LLM validation are still separate backend milestones.
 
 ## VERL Runtime Hook Boundary
 
-TrajWeave still avoids editing `verl/` source files for MASRL paper logic. Runtime integration is split into two layers:
+TrajWeave keeps paper-specific MASRL logic outside `verl/`, but it can add small upstream-style VERL extension points and compatibility fixes when the backend needs them. Runtime integration is split into two layers:
 
 ```mermaid
 flowchart TD
@@ -181,11 +184,11 @@ flowchart TD
     C --> D[PPOExtensionHooks]
     D --> E[batch_schema_fields]
     D --> F[tq_select_fields]
-    D --> G[build_advantage_groups]
-    D --> H[compute_grpo_outcome_advantage]
+    D --> G[prepare_dataproto]
+    D --> H[compute_advantage]
     E --> I[TransferQueue field contract]
     F --> I
-    G --> J[GRPO group index]
+    G --> J[DataProto schema bridge]
     H --> K[advantages and returns]
     I --> L[patched VERL adapter layer]
     J --> L
@@ -197,9 +200,10 @@ flowchart TD
 | Hook | Used by | Contract |
 | --- | --- | --- |
 | `PPOExtensionHooks` | Default fallback. | Standard VERL fields and prompt-level grouping. |
-| `AgentWiseGRPOHooks` | DrMAS and MAPoRL v1. | Requires `agent_id`, `traj_uid`, and `turn_id` in the MAS batch schema; can select `agent_id` and `traj_uid` from TransferQueue for advantage computation; builds `uid + agent_id` GRPO groups. |
+| `AgentWiseGRPOHooks` | DrMAS. | Requires `agent_id`, `traj_uid`, and `turn_id`; builds agent-wise GRPO groups for DrMAS-style normalization. |
+| `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 
-The runtime patch in `drmas.py` should stay thin: it installs compatibility shims into VERL, then delegates field contracts and GRPO math to hook objects. New MASRL algorithms should add or compose hooks instead of copying trainer patch code. If TrajWeave later accepts a small upstream-style change inside VERL, this hook API is the intended surface to wire into the trainer.
+The runtime patch files should stay thin: they install compatibility shims, select hook objects, and avoid copying trainer logic. New MASRL algorithms should add or compose hooks first; edit `verl/` only for stable extension points or general backend fixes that are useful beyond one paper.
 
 ## YAML Launch Path
 
@@ -228,8 +232,8 @@ Current examples:
 | `doctor_mas_math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |
 | `drmas/search_verl_tiny.yaml` | Namespaced DrMAS Search VERL tiny dry-run config. |
-| `maporl/debate_math_smoke.yaml` | MAPoRL v1 debate rollout and score/bonus credit smoke. |
-| `maporl/debate_math_verl_tiny.yaml` | MAPoRL v1 single-model VERL tiny dry-run config. |
+| `maporl/debate_math_smoke.yaml` | MAPoRL debate rollout and score/bonus credit smoke. |
+| `maporl/debate_math_verl_tiny.yaml` | MAPoRL full PPO/GAE VERL tiny E2E config. |
 
 The VERL path currently exposes four integration boundaries:
 
@@ -238,4 +242,4 @@ The VERL path currently exposes four integration boundaries:
 3. `TrajWeaveAgentLoopManager` can be loaded through `actor_rollout_ref.rollout.agent.agent_loop_manager_class`.
 4. `PPOExtensionHooks` declares VERL-side TransferQueue fields, advantage grouping, and algorithm-specific advantage computation.
 
-`TrajWeaveAgentLoopManager` is an importable bridge over VERL V1 `AgentLoopManagerTQ`. It validates TrajWeave runtime metadata from Hydra overrides, then uses TrajWeave-managed TransferQueue workers for `synthetic_tq` and `hf_local_tq`. DrMAS Math and MAPoRL v1 Debate Math both pass tiny 1-step VERL training smoke. Full paper-scale validation still needs larger LLM runs, Search native VERL training, and MAPoRL-specific heterogeneous PPOv2 components.
+`TrajWeaveAgentLoopManager` is an importable bridge over VERL V1 `AgentLoopManagerTQ`. It validates TrajWeave runtime metadata from Hydra overrides, then uses TrajWeave-managed TransferQueue workers for `synthetic_tq` and `hf_local_tq`. DrMAS Math and MAPoRL Debate Math both pass tiny 1-step VERL training smoke. Full paper-scale validation still needs larger LLM runs, Search native VERL training, and physical heterogeneous MAPoRL worker-group support.

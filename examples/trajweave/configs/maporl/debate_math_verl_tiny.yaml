@@ -1,4 +1,4 @@
-recipe: maporl.debate_math.verl_tiny
+recipe: maporl.debate_math.full_verl_tiny
 mode: verl_train
 
 maporl:
@@ -8,6 +8,16 @@ maporl:
   agent_loop_backend: hf_local_tq
   max_rounds: 2
   consensus_threshold: 2
+  policy_separation: true
+  collaboration_separation: true
+  task_training: false
+  reward_feedback: true
+  criteria_for_consensus_percentage: 0.999999
+  criteria_for_consensus_reward_threshold: 0.7
+  rule_horizon: discounted_sum
+  rule_agent_share: all
+  rule_discount: 0.3
+  alpha: [0.0, 0.0, 0.0, 0.0]
 
 team:
   agent_count: 2
@@ -21,7 +31,7 @@ protocol:
   consensus_threshold: 2
 
 credit:
-  type: maporl_score_bonus
+  type: maporl_ppo_score_rule
 
 prepare:
   tiny_verl_assets:
@@ -34,7 +44,7 @@ prepare:
 
 verl:
   enabled: true
-  execute: false
+  execute: true
   command_file: outputs/maporl_debate_math_tiny/run_verl_ppo.sh
   stdout_path: outputs/maporl_debate_math_tiny/verl_stdout.log
   stderr_path: outputs/maporl_debate_math_tiny/verl_stderr.log
@@ -95,7 +105,18 @@ verl:
     - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
     - actor_rollout_ref.actor.optim.lr=1e-5
     - algorithm.use_kl_in_reward=false
-    - critic.enable=false
+    - critic.enable=true
+    - critic.strategy=fsdp
+    - critic.model.path=outputs/maporl_debate_math_tiny_assets/model
+    - critic.model.tokenizer_path=outputs/maporl_debate_math_tiny_assets/model
+    - +critic.model.override_config.attn_implementation=eager
+    - critic.model.use_remove_padding=false
+    - critic.model.enable_gradient_checkpointing=false
+    - critic.ppo_mini_batch_size=2
+    - critic.ppo_micro_batch_size_per_gpu=1
+    - critic.ppo_max_token_len_per_gpu=128
+    - critic.forward_max_token_len_per_gpu=128
+    - critic.optim.lr=1e-5
     - reward.num_workers=1
     - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
     - ray_kwargs.ray_init.num_cpus=8

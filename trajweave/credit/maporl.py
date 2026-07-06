@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import sqrt
 
 from trajweave.core.specs import TeamSpec
@@ -94,3 +94,294 @@ def _same_answer(left: object | None, right: object | None) -> bool:
     if left is None or right is None:
         return False
     return str(left).strip() == str(right).strip()
+
+
+@dataclass
+class MAPoRLPPOScoreRuleCreditAssigner:
+    """MAPoRL-style per-turn credit allocation.
+
+    This mirrors the native MAPoRL trainer's split between ``score_rule`` and
+    ``bonus_rule``: each agent turn receives a verifier/rule score aggregated
+    over future turns, plus optional collaboration incentives based on answer
+    improvement or deterioration across rounds.
+    """
+
+    name: str = "maporl_ppo_score_rule"
+    rule_horizon: str = "discounted_sum"
+    rule_agent_share: str = "all"
+    rule_discount: float = 0.3
+    alpha: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    correct_threshold: float = 0.7
+    wrong_threshold: float = 0.3
+    bonus_correct_threshold: float = 0.5
+    bonus_wrong_threshold: float = 0.5
+    include_bonus: bool = True
+    metadata_defaults: dict[str, object] = field(default_factory=dict)
+
+    def assign(self, trajectories: list[MultiAgentTrajectory], team: TeamSpec) -> list[TrainingSample]:
+        trainable = {agent.name for agent in team.trainable_agents()}
+        samples: list[TrainingSample] = []
+        agent_order = {agent.name: idx for idx, agent in enumerate(team.agents)}
+
+        for trajectory in trajectories:
+            turns = [turn for turn in trajectory.turns if turn.agent_name in trainable]
+            if not turns:
+                continue
+            total_rounds = _trajectory_round_count(trajectory, turns)
+            total_agents = len(team.agents)
+            finished_round = int(trajectory.metadata.get("finished_round", -1))
+            raw_scores = _matrix_from_turns(turns, "raw_score", default=float(trajectory.global_reward or 0.0))
+            correctnesses = _matrix_from_turns(turns, "correctness", default=float(trajectory.success or 0.0))
+
+            for turn in turns:
+                round_id = int(turn.metadata.get("round_id", turn.turn_id))
+                agent_index = int(turn.metadata.get("agent_index", agent_order.get(turn.agent_name, 0)))
+                score = _score_rule(
+                    raw_scores,
+                    total_rounds=total_rounds,
+                    total_agents=total_agents,
+                    finished_round=finished_round,
+                    round_id=round_id,
+                    agent_index=agent_index,
+                    rule_horizon=self.rule_horizon,
+                    rule_agent_share=self.rule_agent_share,
+                    rule_discount=self.rule_discount,
+                    correct_threshold=self.correct_threshold,
+                    wrong_threshold=self.wrong_threshold,
+                )
+                bonus = (
+                    _bonus_rule(
+                        correctnesses,
+                        total_rounds=total_rounds,
+                        total_agents=total_agents,
+                        finished_round=finished_round,
+                        round_id=round_id,
+                        agent_index=agent_index,
+                        alpha=self._alpha4(),
+                        correct_threshold=self.bonus_correct_threshold,
+                        wrong_threshold=self.bonus_wrong_threshold,
+                    )
+                    if self.include_bonus
+                    else 0.0
+                )
+                reward = score + bonus
+                turn.reward = reward
+                sample = TrainingSample(
+                    sample_id=f"{trajectory.episode_id}:{turn.turn_id}:{turn.agent_name}",
+                    episode_id=trajectory.episode_id,
+                    task_id=trajectory.task_id,
+                    rollout_group=trajectory.rollout_group,
+                    turn_id=turn.turn_id,
+                    agent_name=turn.agent_name,
+                    role=turn.role,
+                    policy_group=turn.policy_group,
+                    prompt=turn.prompt,
+                    response=turn.action_text,
+                    response_token_ids=turn.action_token_ids,
+                    response_logprobs=turn.action_logprobs,
+                    reward=reward,
+                    metadata={
+                        **self.metadata_defaults,
+                        **turn.metadata,
+                        "credit": self.name,
+                        "score_rule": self.rule_horizon,
+                        "rule_agent_share": self.rule_agent_share,
+                        "rule_discount": self.rule_discount,
+                        "maporl_score": score,
+                        "maporl_bonus": bonus,
+                        "raw_global_reward": float(trajectory.global_reward or 0.0),
+                        "finished_round": finished_round,
+                    },
+                )
+                samples.append(sample)
+        return samples
+
+    def _alpha4(self) -> tuple[float, float, float, float]:
+        values = tuple(float(value) for value in self.alpha)
+        if len(values) >= 4:
+            return values[:4]
+        return values + (0.0,) * (4 - len(values))
+
+
+def _trajectory_round_count(trajectory: MultiAgentTrajectory, turns: list) -> int:
+    configured = trajectory.metadata.get("round_num") or trajectory.metadata.get("max_rounds")
+    if configured is not None:
+        return int(configured)
+    round_ids = [int(turn.metadata.get("round_id", 0)) for turn in turns]
+    return max(round_ids, default=0) + 1
+
+
+def _matrix_from_turns(turns: list, field: str, *, default: float) -> dict[tuple[int, int], float]:
+    values: dict[tuple[int, int], float] = {}
+    for turn in turns:
+        round_id = int(turn.metadata.get("round_id", turn.turn_id))
+        agent_index = int(turn.metadata.get("agent_index", 0))
+        values[(round_id, agent_index)] = float(turn.metadata.get(field, default))
+    return values
+
+
+def _get_matrix_score(
+    matrix: dict[tuple[int, int], float],
+    *,
+    total_agents: int,
+    finished_round: int,
+    round_id: int,
+    agent_index: int,
+) -> float:
+    if finished_round != -1 and round_id > finished_round:
+        return -1.0
+    if agent_index < 0 or agent_index >= total_agents:
+        return -1.0
+    return float(matrix.get((round_id, agent_index), -1.0))
+
+
+def _mean_other(
+    matrix: dict[tuple[int, int], float],
+    *,
+    total_agents: int,
+    finished_round: int,
+    round_id: int,
+    agent_index: int,
+) -> float:
+    values = [
+        _get_matrix_score(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=round_id,
+            agent_index=idx,
+        )
+        for idx in range(total_agents)
+        if idx != agent_index
+    ]
+    valid = [value for value in values if value != -1.0]
+    if not valid:
+        return -1.0
+    return sum(valid) / len(valid)
+
+
+def _score_rule(
+    matrix: dict[tuple[int, int], float],
+    *,
+    total_rounds: int,
+    total_agents: int,
+    finished_round: int,
+    round_id: int,
+    agent_index: int,
+    rule_horizon: str,
+    rule_agent_share: str,
+    rule_discount: float,
+    correct_threshold: float,
+    wrong_threshold: float,
+) -> float:
+    del correct_threshold, wrong_threshold
+
+    def score_at(t: int, a: int) -> float:
+        return _get_matrix_score(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=t,
+            agent_index=a,
+        )
+
+    final_round = total_rounds - 1 if finished_round == -1 else finished_round
+    if round_id > final_round:
+        return -1.0
+
+    if rule_horizon == "last" and rule_agent_share == "all":
+        values = [score_at(final_round, idx) for idx in range(total_agents)]
+        valid = [value for value in values if value != -1.0]
+        return sum(valid) / len(valid) if valid else -1.0
+    if rule_horizon == "last" and rule_agent_share == "individual":
+        return score_at(final_round, agent_index)
+    if rule_horizon == "current" and rule_agent_share == "all":
+        values = [score_at(round_id, idx) for idx in range(total_agents)]
+        valid = [value for value in values if value != -1.0]
+        return sum(valid) / len(valid) if valid else -1.0
+    if rule_horizon == "current" and rule_agent_share == "individual":
+        return score_at(round_id, agent_index)
+    if rule_horizon != "discounted_sum":
+        raise ValueError(f"Unsupported MAPoRL rule_horizon: {rule_horizon}")
+
+    discounted_factors = [rule_discount ** (future_round - round_id) for future_round in range(round_id, final_round + 1)]
+    discount_sum = sum(discounted_factors) or 1.0
+    if rule_agent_share == "individual":
+        total = 0.0
+        for future_round, factor in zip(range(round_id, final_round + 1), discounted_factors, strict=True):
+            value = score_at(future_round, agent_index)
+            total += 0.0 if value == -1.0 else factor * value
+        return total / discount_sum
+    if rule_agent_share == "all":
+        current = score_at(round_id, agent_index)
+        current = 0.0 if current == -1.0 else current
+        future_total = 0.0
+        for future_round in range(round_id + 1, final_round + 1):
+            values = [score_at(future_round, idx) for idx in range(total_agents)]
+            valid = [value for value in values if value != -1.0]
+            future_total += (rule_discount ** (future_round - round_id)) * (sum(valid) / len(valid) if valid else 0.0)
+        return (current + future_total) / discount_sum
+    raise ValueError(f"Unsupported MAPoRL rule_agent_share: {rule_agent_share}")
+
+
+def _bonus_rule(
+    matrix: dict[tuple[int, int], float],
+    *,
+    total_rounds: int,
+    total_agents: int,
+    finished_round: int,
+    round_id: int,
+    agent_index: int,
+    alpha: tuple[float, float, float, float],
+    correct_threshold: float,
+    wrong_threshold: float,
+) -> float:
+    score = 0.0
+
+    def current(t: int, a: int) -> float:
+        return _get_matrix_score(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=t,
+            agent_index=a,
+        )
+
+    if round_id > 0:
+        prev_score = current(round_id - 1, agent_index)
+        current_score = current(round_id, agent_index)
+        prev_others_score = _mean_other(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=round_id - 1,
+            agent_index=agent_index,
+        )
+        if prev_score > correct_threshold and current_score < wrong_threshold:
+            score -= alpha[1] if prev_others_score > correct_threshold else alpha[0]
+        if prev_score < wrong_threshold and current_score > correct_threshold:
+            score += alpha[1] if prev_others_score < wrong_threshold else alpha[0]
+
+    final_round = total_rounds - 1 if finished_round == -1 else finished_round
+    if round_id < final_round and total_agents > 1:
+        next_others_score = _mean_other(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=round_id + 1,
+            agent_index=agent_index,
+        )
+        current_others_score = _mean_other(
+            matrix,
+            total_agents=total_agents,
+            finished_round=finished_round,
+            round_id=round_id,
+            agent_index=agent_index,
+        )
+        current_score = current(round_id, agent_index)
+        if next_others_score > correct_threshold and current_others_score < wrong_threshold:
+            score -= alpha[3] if current_score > correct_threshold else alpha[2]
+        if next_others_score < wrong_threshold and current_others_score > correct_threshold:
+            score += alpha[3] if current_score < wrong_threshold else alpha[2]
+
+    return score

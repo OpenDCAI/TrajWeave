@@ -634,15 +634,25 @@ def patch_valuehead_model(model) -> None:
     model._no_split_modules = getattr(model.pretrained_model, "_no_split_modules", [])
 
 
+def _get_model_attn_implementation(model_config, default="flash_attention_2"):
+    return (
+        getattr(model_config, "_attn_implementation_internal", None)
+        or getattr(model_config, "_attn_implementation", None)
+        or getattr(model_config, "attn_implementation", None)
+        or default
+    )
+
+
 def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_code):
     from transformers import AutoModelForCausalLM, AutoModelForTokenClassification
 
+    attn_implementation = _get_model_attn_implementation(model_config)
     try:
         model = AutoModelForTokenClassification.from_pretrained(
             pretrained_model_name_or_path=local_path,
             torch_dtype=torch_dtype,
             config=model_config,
-            attn_implementation="flash_attention_2",
+            attn_implementation=attn_implementation,
             trust_remote_code=trust_remote_code,
         )
         return model
@@ -664,7 +674,7 @@ def load_valuehead_model(local_path, torch_dtype, model_config, trust_remote_cod
         pretrained_model_name_or_path=local_path,
         torch_dtype=torch_dtype,
         config=model_config,
-        attn_implementation="flash_attention_2",
+        attn_implementation=attn_implementation,
         trust_remote_code=trust_remote_code,
     )
     # vlm models
