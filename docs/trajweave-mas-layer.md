@@ -128,7 +128,7 @@ Run it through YAML:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config configs/doctor_mas_search_smoke.yaml
+  --config configs/drmas/search_smoke.yaml
 ```
 
 ## MAPoRL Debate Math Slice
@@ -239,7 +239,7 @@ flowchart TD
     K --> L
 ```
 
-`trajweave.backends.verl.extensions.hooks` is the stable TrajWeave-facing API. Current hook objects:
+`trajweave.backends.verl.extensions.common.hooks` is the stable TrajWeave-facing API. Current hook objects:
 
 | Hook | Used by | Contract |
 | --- | --- | --- |
@@ -269,20 +269,18 @@ Current configs:
 
 | Config | Purpose |
 | --- | --- |
-| `doctor_mas_math_smoke.yaml` | Deterministic Math rollout and DrMAS credit check. |
-| `doctor_mas_search_smoke.yaml` | Deterministic Search rollout and DrMAS credit check. |
-| `doctor_mas_math_tiny_train.yaml` | Tiny torch policy update loop. |
-| `doctor_mas_math_verl_export.yaml` | Optional DataProto export and VERL trainer dry-run command generation. |
+| `drmas/math_smoke.yaml` | Deterministic Math rollout and DrMAS credit check. |
+| `drmas/search_smoke.yaml` | Deterministic Search rollout and DrMAS credit check. |
+| `drmas/math_tiny_train.yaml` | Tiny torch policy update loop. |
+| `drmas/math_verl_export.yaml` | Optional DataProto export and VERL trainer dry-run command generation. |
 | `maporl/debate_math_smoke.yaml` | MAPoRL deterministic debate/consensus smoke. |
 | `maporl/debate_math_verl_tiny.yaml` | MAPoRL full PPO tiny VERL launch. |
 | `agentflow/flow_grpo_smoke.yaml` | AgentFlow planner-tool smoke with planner-only credit. |
 | `agentflow/flow_grpo_verl_tiny.yaml` | AgentFlow planner-only GRPO tiny VERL launch. |
-| `doctor_mas_math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
-| `doctor_mas_math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
+| `drmas/math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
+| `drmas/math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |
 | `drmas/search_verl_tiny.yaml` | Namespaced DrMAS Search VERL tiny dry-run config. |
-| `maporl/debate_math_smoke.yaml` | MAPoRL debate rollout and score/bonus credit smoke. |
-| `maporl/debate_math_verl_tiny.yaml` | MAPoRL full PPO/GAE VERL tiny E2E config. |
 
 The VERL path currently exposes four integration boundaries:
 

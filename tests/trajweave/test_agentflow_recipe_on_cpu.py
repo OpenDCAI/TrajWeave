@@ -68,7 +68,7 @@ def test_agentflow_verl_config_prepares_planner_grpo_launch():
     assert "trajweave.backends.verl.main_ppo" in command
     assert "+trajweave.recipe=agentflow_planner_tool" in command
     assert "+trajweave.verl_extensions=[trajweave_agentflow_planner_grpo]" in command
-    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.AgentFlowPlannerGRPOHooks" in command
+    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.AgentFlowPlannerGRPOHooks" in command
     assert "+agent.orchestra.agentflow.max_steps=2" in command
     assert "+agent.orchestra.agentflow.enabled_tools=[\"base_generator\"]" in command
     assert "+trajweave.credit_allocator=agentflow_planner_only_grpo" in command

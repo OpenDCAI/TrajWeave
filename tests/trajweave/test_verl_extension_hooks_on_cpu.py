@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
-from trajweave.backends.verl.extensions.hooks import (
+from trajweave.backends.verl.extensions.common.hooks import (
     AgentWiseGRPOHooks,
     AgentFlowPlannerGRPOHooks,
     MAPoRLFullPPOHooks,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from trajweave.backends.verl.emitters.registry import supported_emitter_recipes
+
 
 @dataclass(frozen=True)
 class TrajWeaveAgentLoopRuntimeConfig:
@@ -47,7 +49,7 @@ class TrajWeaveAgentLoopRuntimeConfig:
 
 
 def validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
-    supported_recipes = {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math", "agentflow_planner_tool"}
+    supported_recipes = supported_emitter_recipes()
     if recipe and recipe not in supported_recipes:
         raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
     if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:

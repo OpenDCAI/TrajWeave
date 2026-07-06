@@ -27,7 +27,7 @@ def build_agentflow_launch_overrides(
     required = [
         "algorithm.adv_estimator=grpo",
         "++algorithm.group_by_agent_id=false",
-        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.AgentFlowPlannerGRPOHooks",
+        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.AgentFlowPlannerGRPOHooks",
         "+agent.orchestra_type=agentflow",
         f"+agent.orchestra.agentflow.max_steps={max_steps}",
         f"+agent.orchestra.agentflow.trainable_agent={_quote(trainable_agent)}",

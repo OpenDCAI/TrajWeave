@@ -107,7 +107,10 @@ assets/
   diagrams/                      Remotion-generated GIFs used by README.
 
 docs/                            Architecture notes and design records.
-configs/                         YAML entrypoints for smoke and VERL runs.
+configs/                         YAML entrypoints grouped by algorithm.
+  drmas/                         DrMAS Math/Search smoke, tiny, and VERL configs.
+  maporl/                        MAPoRL debate configs.
+  agentflow/                     AgentFlow planner-tool configs.
 tests/trajweave/                 TrajWeave unit and integration tests.
 
 trajweave/
@@ -116,11 +119,25 @@ trajweave/
   pipeline/                      Config loading, context, recipe plugin API, assets, export, launch.
   core/                          AgentSpec, TeamSpec, AgentTurn, MultiAgentTrajectory.
   envs/                          Task environments, observations, tools, and final rewards.
+    math/                        Math task schema and evaluator.
+    search/                      Search task schema, retrieval tool, and evaluator.
   orchestration/                 Multi-agent protocols and message flow.
+    solver_verifier/             Fixed Solver -> Verifier loop.
+    search_answer/               Verifier -> Searcher -> Answer workflow.
+    maporl_debate/               MAPoRL debate and consensus protocol.
+    agentflow/                   AgentFlow planner/tool/verifier protocol.
   credit/                        Reward propagation and credit assignment.
+    agentflow/                   Planner-only Flow-GRPO credit.
+    doctor_mas/                  Agent-wise DrMAS normalization.
+    maporl/                      MAPoRL score and bonus rules.
   rollout/                       Offline rollout engine.
   recipes/                       Paper-specific recipe packages.
   backends/                      Local, HF, tiny, search, and VERL bridge backends.
+    verl/emitters/registry.py    Recipe -> AgentLoop emitter routing table.
+    verl/extensions/common/      Shared hook and nested TransferQueue compatibility.
+    verl/extensions/drmas/       DrMAS agent-wise GRPO runtime patch.
+    verl/extensions/maporl/      MAPoRL PPO runtime patch.
+    verl/extensions/agentflow/   AgentFlow planner-only GRPO runtime patch.
   storage/                       RunStore, ArtifactStore, trajectory JSONL helpers.
   metrics/                       MetricEvent, MetricRegistry, metrics JSONL sink, VERL metric parser.
   runtime/                       Logging and ExperimentTracker.
@@ -169,7 +186,7 @@ TrajWeave has two paths into VERL:
 | Path             | Purpose                                      | Main files                                      |
 | ---------------- | -------------------------------------------- | ----------------------------------------------- |
 | Offline export   | Convert offline `TrainingSample` to DataProto | `backends/verl/dataproto.py`, `backends/verl/export.py` |
-| Online training  | Let VERL call TrajWeave AgentLoop at rollout time | `backends/verl/main_ppo.py`, `agent_loop.py`, `runtime_config.py`, `emitters/`, `extensions/` |
+| Online training  | Let VERL call TrajWeave AgentLoop at rollout time | `backends/verl/main_ppo.py`, `agent_loop.py`, `runtime_config.py`, `emitters/registry.py`, `extensions/` |
 
 Use this rule before editing:
 
@@ -196,10 +213,10 @@ Smoke runs:
 
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config configs/doctor_mas_math_smoke.yaml
+  --config configs/drmas/math_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
-  --config configs/doctor_mas_search_smoke.yaml
+  --config configs/drmas/search_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/maporl/debate_math_smoke.yaml
@@ -262,13 +279,13 @@ Use this checklist:
    - training target: all agents, one role, planner only, aggregator only, topology policy
    - credit target: team, agent, role, turn, message, edge, tool call, token
    - aggregation: majority vote, consensus, judge selection, learned aggregator
-2. Add or reuse an environment under `trajweave/envs`.
-3. Add or reuse an orchestra under `trajweave/orchestration`.
-4. Add or reuse a credit assigner under `trajweave/credit`.
+2. Add or reuse an environment under `trajweave/envs/PAPER_OR_TASK/`.
+3. Add or reuse an orchestra under `trajweave/orchestration/PAPER_OR_PROTOCOL/`.
+4. Add or reuse a credit assigner under `trajweave/credit/PAPER_OR_METHOD/`.
 5. Add a recipe package under `trajweave/recipes/PAPER_NAME`.
 6. Register the recipe in `trajweave/recipes/registry.py`.
 7. Add a YAML entrypoint under `configs/PAPER_NAME/`.
-8. If VERL online training needs special fields, add an emitter under `trajweave/backends/verl/emitters/`.
+8. If VERL online training needs special fields, add an emitter under `trajweave/backends/verl/emitters/` and register it in `emitters/registry.py`.
 9. If VERL advantage or trainer behavior needs a formal hook, add it under `trajweave/backends/verl/extensions/`.
 10. Log artifacts, metrics, and trajectory output through `RunStore` and `ExperimentTracker`.
 11. Add tests under `tests/trajweave`.
@@ -367,7 +384,7 @@ Every integrated MASRL paper must be documented here. Include what the paper con
 | Inference flow    | question -> solver -> verifier -> refine or stop           |
 | Training flow     | final reward -> per-agent credit -> VERL actor update      |
 | Current status    | smoke, tiny train, VERL tiny train verified                |
-| Main configs      | `doctor_mas_math_smoke.yaml`, `drmas/math_verl_tiny.yaml`  |
+| Main configs      | `drmas/math_smoke.yaml`, `drmas/math_verl_tiny.yaml`  |
 | Known limits      | Not paper-scale Qwen or Llama validation.                  |
 
 ### DrMAS Search
@@ -382,7 +399,7 @@ Every integrated MASRL paper must be documented here. Include what the paper con
 | Inference flow    | question -> verifier -> searcher/tool -> answer             |
 | Training flow     | final answer reward -> agent-wise credit -> VERL update     |
 | Current status    | smoke and VERL tiny train verified                          |
-| Main configs      | `doctor_mas_search_smoke.yaml`, `drmas/search_verl_tiny.yaml` |
+| Main configs      | `drmas/search_smoke.yaml`, `drmas/search_verl_tiny.yaml` |
 | Known limits      | No real external search API or large LLM validation yet.     |
 
 ### MAPoRL Debate Math

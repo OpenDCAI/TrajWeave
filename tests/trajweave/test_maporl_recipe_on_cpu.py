@@ -91,7 +91,7 @@ def test_maporl_verl_config_prepares_namespaced_launch():
     assert "trajweave.backends.verl.main_ppo" in command
     assert "+trajweave.recipe=maporl_debate_math" in command
     assert "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]" in command
-    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.MAPoRLFullPPOHooks" in command
+    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.MAPoRLFullPPOHooks" in command
     assert "+agent.agent_ids=[\"agent_0\",\"agent_1\"]" in command
     assert "+agent.worker_group_ids=[\"shared\"]" in command
     assert "+agent.worker_groups=[{id:\"shared\",trainable:true,model_path:\"outputs/maporl_debate_math_tiny_assets/model\",gpus:2}]" in command

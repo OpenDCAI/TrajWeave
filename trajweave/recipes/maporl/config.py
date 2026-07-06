@@ -58,7 +58,7 @@ def build_maporl_launch_overrides(
     required = [
         "algorithm.adv_estimator=gae",
         "++algorithm.group_by_agent_id=false",
-        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.MAPoRLFullPPOHooks",
+        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.MAPoRLFullPPOHooks",
         f"+agent.agent_ids={_hydra_list(agent_ids)}",
         f"+agent.model_ids={_hydra_list(model_ids)}",
         f"+agent.model_sharing={str(len(set(model_ids)) == 1).lower()}",

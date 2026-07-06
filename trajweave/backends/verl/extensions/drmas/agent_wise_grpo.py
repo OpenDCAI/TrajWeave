@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from trajweave.backends.verl.extensions.hooks import AgentWiseGRPOHooks, extension_hooks_for_config
+from trajweave.backends.verl.extensions.common.hooks import AgentWiseGRPOHooks, extension_hooks_for_config
 from verl.workers.engine_workers import ActorRolloutRefWorker
 
 
@@ -14,7 +14,7 @@ class TrajWeaveActorRolloutRefWorker(ActorRolloutRefWorker):
 
     def __init__(self, *args, **kwargs):
         from trajweave.backends.verl import _ensure_torch_dtensor_import_compat
-        from trajweave.backends.verl.extensions.nested_compat import install_worker_nested_tensor_compat
+        from trajweave.backends.verl.extensions.common.nested_compat import install_worker_nested_tensor_compat
 
         _ensure_torch_dtensor_import_compat()
         install_worker_nested_tensor_compat()
@@ -28,7 +28,7 @@ def apply_drmas_agent_wise_grpo_patch(config: Any = None) -> None:
     when ``algorithm.group_by_agent_id`` is enabled by TrajWeave launch config.
     """
 
-    from trajweave.backends.verl.extensions import nested_compat
+    from trajweave.backends.verl.extensions.common import nested_compat
 
     _patch_core_grpo()
     _patch_ray_compute_advantage()
