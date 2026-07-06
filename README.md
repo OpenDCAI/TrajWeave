@@ -104,9 +104,9 @@ Solver -> Verifier -> Solver refine -> Verifier approve / max_turns -> final ans
 Implemented boundaries:
 
 - `trajweave.core`: agent/team specs, turns, trajectories, training samples.
-- `trajweave.orchestration`: Solver-Verifier and Search-Answer turn order with shared team context.
+- `trajweave.orchestration`: Solver-Verifier, Search-Answer, Debate, and AgentFlow planner-tool turn order with shared team context.
 - `trajweave.envs`: math/search task observation, tool execution, and exact-match evaluation.
-- `trajweave.credit`: global reward broadcast and DrMAS agent-wise GRPO normalization.
+- `trajweave.credit`: DrMAS agent-wise GRPO, MAPoRL score-rule, and AgentFlow planner-only reward allocation.
 - `trajweave.backends`: rule, tiny torch, optional HF Transformers, and VERL adapters.
 - `trajweave.backends.verl`: optional `TrainingSample` -> VERL `DataProto` bridge, trainer launch adapter, and AgentLoopManager bridge.
 - `trajweave.recipes`: namespaced paper recipes and the recipe registry.
@@ -144,6 +144,20 @@ Prepare and run the MAPoRL full PPO VERL tiny launch:
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
+```
+
+Run the AgentFlow planner-tool smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/agentflow/flow_grpo_smoke.yaml
+```
+
+Prepare and run the AgentFlow planner-only GRPO VERL tiny launch:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
 Run the legacy direct Math smoke:
@@ -257,6 +271,22 @@ Required fields for each paper recipe:
 | Known limits      | Supports logical `agent_id` / `model_id` metadata and shared-policy tiny E2E. Physical heterogeneous multi-model worker groups and paper-scale LLM validation still need larger backend work. |
 
 中文说明：MAPoRL 当前已经不是只做一个 toy reward shaping。TrajWeave 会生成 debate/consensus 多智能体轨迹，把 `round_id`、`agent_index`、`raw_score`、`correctness` 等字段写入 VERL TransferQueue，再走 VERL PPO/GAE 的 value、advantage、critic update 和 actor update。当前 tiny E2E 用共享物理模型验证训练链路；真正多物理模型、多 worker-group、paper-scale 数据和大模型效果还需要继续扩展。
+
+### AgentFlow-style Planner-Tool FlowGRPO
+
+| Item              | Description                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| Paper             | AgentFlow-style in-the-flow agentic system optimization direction.          |
+| Contribution      | Algorithmic recipe that optimizes the Planner while Executor, tools, and Verifier remain frozen protocol modules. |
+| MAS pattern       | Planner chooses sub-goal/tool, Executor emits tool command, tool returns result, Verifier decides stop/continue. |
+| TrajWeave mapping | `AgentFlowPlannerToolOrchestra` + math env + `FlowGRPOPlannerOnlyCreditAssigner` + `AgentFlowPlannerGRPOHooks`. |
+| Training path     | `MultiAgentTrajectory` records planner/executor/tool/verifier turns, but final reward is assigned only to planner steps before VERL GRPO update. |
+| Inference path    | Task -> planner -> executor -> tool -> verifier -> final answer or next planner step. |
+| Current status    | deterministic smoke, YAML runner, 1-step VERL tiny training, strict 3-step VERL training audit, and AgentFlow hook contract tests pass. |
+| Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/agentflow/flow_grpo_smoke.yaml`. |
+| Known limits      | Current slice validates planner-only GRPO wiring; it is not yet a full paper-scale AgentFlow reproduction with real external tools and large LLM training. |
+
+中文说明：AgentFlow 当前接入的是 planner-only 的最小可训练闭环。轨迹里完整记录 Planner、Executor、Tool、Verifier 四类 turn，但训练样本只从 Planner turn 生成；这样可以验证“多模块系统参与推理，只有某个模块参与 RL 更新”的边界。VERL 侧通过 `AgentFlowPlannerGRPOHooks` 携带 `agentflow_stage`、`tool_name`、`sub_goal`、`tool_result`、`verifier_decision` 等字段。
 
 ## Repository Layout
 

@@ -51,6 +51,13 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         runtime_recipe="maporl_debate_math",
         aliases=("maporl_debate_math", "maporl.debate_math.verl_tiny"),
     ),
+    RecipeDefinition(
+        name="agentflow.flow_grpo.planner_tool",
+        family="agentflow",
+        task="math",
+        runtime_recipe="agentflow_planner_tool",
+        aliases=("agentflow_planner_tool", "agentflow.flow_grpo"),
+    ),
 )
 
 

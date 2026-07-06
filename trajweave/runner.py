@@ -21,6 +21,7 @@ from trajweave.recipes.doctor_mas.search_smoke import (
 )
 from trajweave.recipes.doctor_mas.train_tiny import TrainConfig, run_training
 from trajweave.recipes.drmas_native import build_drmas_native_launch_overrides, recipe_spec
+from trajweave.recipes.agentflow import build_agentflow_launch_overrides, run_planner_tool_smoke
 from trajweave.recipes.maporl import build_maporl_launch_overrides, run_debate_math_smoke
 from trajweave.recipes.registry import resolve_recipe
 from trajweave.rollout.engine import RolloutEngine, RolloutResult
@@ -70,6 +71,18 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
         if prepared_assets:
             output["prepared_assets"] = prepared_assets
         _maybe_prepare_maporl_verl_launch(config, output, config_path=config_path)
+        return output
+    if recipe_definition.family == "agentflow" and mode == "verl_train":
+        output = {
+            "config_path": config_path,
+            "recipe": recipe,
+            "canonical_recipe": recipe_definition.name,
+            "mode": mode,
+            "agentflow": _agentflow_summary(config),
+        }
+        if prepared_assets:
+            output["prepared_assets"] = prepared_assets
+        _maybe_prepare_agentflow_verl_launch(config, output, config_path=config_path)
         return output
     if mode == "train_tiny":
         result = _run_tiny_training(config, config_path=config_path)
@@ -186,6 +199,14 @@ def _run_rollout_recipe(config: dict[str, Any], recipe: str):
             collaboration_separation=bool(maporl_cfg.get("collaboration_separation", True)),
             task_training=bool(maporl_cfg.get("task_training", False)),
         )
+    if runtime_recipe == "agentflow_planner_tool":
+        agentflow_cfg = config.get("agentflow", {})
+        return run_planner_tool_smoke(
+            backend=backend_type,
+            device=device,
+            rollouts_per_task=rollouts_per_task,
+            max_steps=int(agentflow_cfg.get("max_steps", team_cfg.get("max_turns", max_turns))),
+        )
     raise ValueError(f"Unknown recipe: {recipe}")
 
 
@@ -267,6 +288,7 @@ def _maybe_prepare_assets(config: dict[str, Any]) -> dict[str, str] | None:
         train_size=int(tiny_cfg.get("train_size", 2)),
         val_size=int(tiny_cfg.get("val_size", 2)),
         task_family=str(tiny_cfg.get("task_family", "math")),
+        recipe_name=str(tiny_cfg.get("recipe_name", _recipe_name(config))),
         overwrite=bool(tiny_cfg.get("overwrite", True)),
     )
 
@@ -382,6 +404,36 @@ def _maybe_prepare_maporl_verl_launch(
     output["verl_launch"] = launcher.run()
 
 
+def _maybe_prepare_agentflow_verl_launch(
+    config: dict[str, Any],
+    output: dict[str, Any],
+    *,
+    config_path: str | None,
+) -> None:
+    verl_cfg = config.get("verl", {})
+    if not verl_cfg.get("enabled", True):
+        output["verl_launch"] = {"status": "disabled"}
+        return
+    from trajweave.backends.verl.launcher import VerlTrainerLaunchConfig, VerlTrainerLauncher
+
+    overrides = build_agentflow_launch_overrides(config, config_path=config_path)
+    launch_config = VerlTrainerLaunchConfig(
+        python=str(verl_cfg.get("python", VerlTrainerLaunchConfig.python)),
+        module=str(verl_cfg.get("module", "trajweave.backends.verl.main_ppo")),
+        overrides=overrides,
+        env=dict(verl_cfg.get("env", {})),
+        cwd=verl_cfg.get("cwd"),
+        execute=bool(verl_cfg.get("execute", False)),
+        stdout_path=verl_cfg.get("stdout_path"),
+        stderr_path=verl_cfg.get("stderr_path"),
+    )
+    launcher = VerlTrainerLauncher(launch_config)
+    command_file = verl_cfg.get("command_file")
+    if command_file:
+        output["verl_command_file"] = str(launcher.write_command_file(command_file))
+    output["verl_launch"] = launcher.run()
+
+
 def _is_drmas_native_recipe(recipe: str) -> bool:
     return resolve_recipe(recipe).family == "drmas_native"
 
@@ -404,18 +456,62 @@ def _maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
     team_cfg = config.get("team", {})
     protocol_cfg = config.get("protocol", {})
     agent_count = int(maporl_cfg.get("agent_count", team_cfg.get("agent_count", 2)))
+    model_ids = list(maporl_cfg.get("model_ids", ["shared"] * agent_count))
+    worker_groups = _maporl_worker_groups_summary(maporl_cfg, model_ids=model_ids)
+    trainable_groups = [group_id for group_id, group in worker_groups.items() if group.get("trainable", True)]
     return {
         "task": "math",
         "runtime_recipe": "maporl_debate_math",
         "agent_ids": list(maporl_cfg.get("agent_ids", [f"agent_{idx}" for idx in range(agent_count)])),
+        "model_ids": model_ids,
+        "worker_groups": worker_groups,
         "coordination_protocol": "debate_consensus",
         "communication_graph": protocol_cfg.get("communication_graph", "fully_connected"),
         "aggregation": protocol_cfg.get("aggregation", "consensus"),
         "credit_allocator": "maporl_ppo_score_rule",
-        "single_model_only": len(set(maporl_cfg.get("model_ids", ["shared"] * agent_count))) == 1,
+        "single_model_only": len(set(model_ids)) == 1,
+        "trainable_worker_groups": trainable_groups,
+        "native_multi_actor_training": False,
+        "training_backend": "verl_v1_single_actor_wg",
         "policy_separation": bool(maporl_cfg.get("policy_separation", True)),
         "collaboration_separation": bool(maporl_cfg.get("collaboration_separation", True)),
         "reward_feedback": bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False))),
+    }
+
+
+def _maporl_worker_groups_summary(maporl_cfg: dict[str, Any], *, model_ids: list[str]) -> dict[str, dict[str, Any]]:
+    raw_groups = maporl_cfg.get("worker_groups", {}) or {}
+    groups: dict[str, dict[str, Any]] = {}
+    for model_id in dict.fromkeys(model_ids):
+        raw_group = raw_groups.get(model_id, {}) if isinstance(raw_groups, dict) else {}
+        group = dict(raw_group) if isinstance(raw_group, dict) else {}
+        group.setdefault("trainable", True)
+        groups[str(model_id)] = group
+    if isinstance(raw_groups, dict):
+        for group_id, raw_group in raw_groups.items():
+            if group_id in groups:
+                continue
+            group = dict(raw_group) if isinstance(raw_group, dict) else {}
+            group.setdefault("trainable", False)
+            groups[str(group_id)] = group
+    return groups
+
+
+def _agentflow_summary(config: dict[str, Any]) -> dict[str, Any]:
+    agentflow_cfg = config.get("agentflow", {})
+    team_cfg = config.get("team", {})
+    return {
+        "task": "math",
+        "runtime_recipe": "agentflow_planner_tool",
+        "coordination_protocol": "planner_executor_tool_verifier",
+        "communication_graph": "memory_blackboard",
+        "aggregation": "verifier_stop_then_final_answer",
+        "credit_allocator": "agentflow_planner_only_grpo",
+        "trainable_agent": str(agentflow_cfg.get("trainable_agent", "planner")),
+        "frozen_agents": ["executor", "verifier"],
+        "enabled_tools": list(agentflow_cfg.get("enabled_tools", ["base_generator", "python_stub"])),
+        "max_steps": int(agentflow_cfg.get("max_steps", team_cfg.get("max_turns", 3))),
+        "training_backend": "verl_v1_single_actor_wg",
     }
 
 

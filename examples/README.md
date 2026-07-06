@@ -17,6 +17,8 @@ trajweave/configs/drmas/math_verl_tiny.yaml
 trajweave/configs/drmas/search_verl_tiny.yaml
 trajweave/configs/maporl/debate_math_smoke.yaml
 trajweave/configs/maporl/debate_math_verl_tiny.yaml
+trajweave/configs/agentflow/flow_grpo_smoke.yaml
+trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
 Run a config with:

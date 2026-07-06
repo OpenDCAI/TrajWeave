@@ -24,6 +24,7 @@ def build_maporl_launch_overrides(
     model_ids = tuple(maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
     if len(agent_ids) != len(model_ids):
         raise ValueError("maporl.model_ids must have the same length as maporl.agent_ids.")
+    worker_groups = _normalize_worker_groups(maporl_cfg, model_ids=model_ids)
     max_rounds = int(maporl_cfg.get("max_rounds", team_cfg.get("max_turns", 2)))
     consensus_threshold = int(
         protocol_cfg.get("consensus_threshold", maporl_cfg.get("consensus_threshold", len(agent_ids)))
@@ -61,6 +62,7 @@ def build_maporl_launch_overrides(
         f"+agent.agent_ids={_hydra_list(agent_ids)}",
         f"+agent.model_ids={_hydra_list(model_ids)}",
         f"+agent.model_sharing={str(len(set(model_ids)) == 1).lower()}",
+        f"+agent.worker_group_ids={_hydra_list(tuple(worker_groups))}",
         "+agent.orchestra_type=maporl",
         f"+agent.orchestra.maporl.max_rounds={max_rounds}",
         f"+agent.orchestra.maporl.consensus_threshold={consensus_threshold}",
@@ -84,6 +86,8 @@ def build_maporl_launch_overrides(
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
+    if worker_groups:
+        required.append(f"+agent.worker_groups={_hydra_dict_list(tuple(worker_groups.items()))}")
     return tuple(str(item) for item in verl_cfg.get("overrides", [])) + tuple(required)
 
 
@@ -98,3 +102,49 @@ def _hydra_float_list(values: tuple[float, ...]) -> str:
 def _quote(value: str) -> str:
     escaped = str(value).replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _hydra_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int | float):
+        return str(value)
+    return _quote(str(value))
+
+
+def _hydra_dict_list(groups: tuple[tuple[str, dict[str, Any]], ...]) -> str:
+    items: list[str] = []
+    for group_id, group in groups:
+        fields = [f"id:{_quote(group_id)}", f"trainable:{str(bool(group.get('trainable', True))).lower()}"]
+        for key in ("model_path", "tokenizer_path", "gpus"):
+            if key in group:
+                fields.append(f"{key}:{_hydra_value(group[key])}")
+        items.append("{" + ",".join(fields) + "}")
+    return "[" + ",".join(items) + "]"
+
+
+def _normalize_worker_groups(maporl_cfg: dict[str, Any], *, model_ids: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    raw_groups = maporl_cfg.get("worker_groups", {}) or {}
+    if raw_groups and not isinstance(raw_groups, dict):
+        raise ValueError("maporl.worker_groups must be a mapping keyed by model id.")
+
+    groups: dict[str, dict[str, Any]] = {}
+    for model_id in dict.fromkeys(model_ids):
+        raw_group = raw_groups.get(model_id, {}) if isinstance(raw_groups, dict) else {}
+        if raw_group is None:
+            raw_group = {}
+        if not isinstance(raw_group, dict):
+            raise ValueError(f"maporl.worker_groups.{model_id} must be a mapping.")
+        group = dict(raw_group)
+        group.setdefault("trainable", True)
+        groups[str(model_id)] = group
+
+    for group_id, raw_group in raw_groups.items():
+        if group_id in groups:
+            continue
+        if not isinstance(raw_group, dict):
+            raise ValueError(f"maporl.worker_groups.{group_id} must be a mapping.")
+        group = dict(raw_group)
+        group.setdefault("trainable", False)
+        groups[str(group_id)] = group
+    return groups

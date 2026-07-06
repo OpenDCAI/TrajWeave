@@ -66,6 +66,13 @@ def test_maporl_verl_config_prepares_namespaced_launch():
                 "model_ids": ["shared", "shared"],
                 "agent_loop_backend": "synthetic_tq",
                 "max_rounds": 2,
+                "worker_groups": {
+                    "shared": {
+                        "model_path": "outputs/maporl_debate_math_tiny_assets/model",
+                        "trainable": True,
+                        "gpus": 2,
+                    }
+                },
             },
             "protocol": {"consensus_threshold": 2},
             "verl": {
@@ -86,6 +93,8 @@ def test_maporl_verl_config_prepares_namespaced_launch():
     assert "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]" in command
     assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.hooks.MAPoRLFullPPOHooks" in command
     assert "+agent.agent_ids=[\"agent_0\",\"agent_1\"]" in command
+    assert "+agent.worker_group_ids=[\"shared\"]" in command
+    assert "+agent.worker_groups=[{id:\"shared\",trainable:true,model_path:\"outputs/maporl_debate_math_tiny_assets/model\",gpus:2}]" in command
     assert "+agent.orchestra.maporl.max_rounds=2" in command
     assert "+agent.orchestra.maporl.early_stop=true" in command
     assert "+agent.orchestra.maporl.rule_horizon=discounted_sum" in command
@@ -105,6 +114,10 @@ def test_maporl_verl_config_keeps_multi_policy_metadata():
                 "agent_ids": ["agent_0", "agent_1"],
                 "model_ids": ["model_a", "model_b"],
                 "agent_loop_backend": "synthetic_tq",
+                "worker_groups": {
+                    "model_a": {"model_path": "/models/model-a", "trainable": True, "gpus": 1},
+                    "model_b": {"model_path": "/models/model-b", "trainable": False, "gpus": 0},
+                },
             },
             "verl": {"enabled": True, "execute": False},
         }
@@ -113,6 +126,43 @@ def test_maporl_verl_config_keeps_multi_policy_metadata():
     command = result["verl_launch"]["command"]
     assert "+agent.model_ids=[\"model_a\",\"model_b\"]" in command
     assert "+agent.model_sharing=false" in command
+    assert "+agent.worker_group_ids=[\"model_a\",\"model_b\"]" in command
+    assert "+agent.worker_groups=[{id:\"model_a\",trainable:true,model_path:\"/models/model-a\",gpus:1},{id:\"model_b\",trainable:false,model_path:\"/models/model-b\",gpus:0}]" in command
+    assert result["maporl"]["single_model_only"] is False
+    assert result["maporl"]["native_multi_actor_training"] is False
+
+
+def test_maporl_verl_config_uses_safe_worker_group_list_override_for_special_ids():
+    result = run_from_config(
+        {
+            "recipe": "maporl.debate_math.full_verl_tiny",
+            "mode": "verl_train",
+            "prepare": {"tiny_verl_assets": {"enabled": False}},
+            "maporl": {
+                "agent_count": 2,
+                "agent_ids": ["agent_0", "agent_1"],
+                "model_ids": ["qwen2.5/0.5b", "qwen2.5/0.5b"],
+                "agent_loop_backend": "synthetic_tq",
+                "worker_groups": {
+                    "qwen2.5/0.5b": {
+                        "model_path": "/models/qwen2.5-0.5b",
+                        "tokenizer_path": "/models/qwen2.5-0.5b-tokenizer",
+                        "trainable": True,
+                    }
+                },
+            },
+            "verl": {"enabled": True, "execute": False},
+        }
+    )
+
+    command = result["verl_launch"]["command"]
+    assert "+agent.worker_group_ids=[\"qwen2.5/0.5b\"]" in command
+    assert (
+        "+agent.worker_groups=[{id:\"qwen2.5/0.5b\",trainable:true,"
+        "model_path:\"/models/qwen2.5-0.5b\",tokenizer_path:\"/models/qwen2.5-0.5b-tokenizer\"}]"
+        in command
+    )
+    assert not any("agent.worker_groups.qwen2.5/0.5b" in item for item in command)
 
 
 def test_maporl_verl_config_rejects_native_verl_tq_backend():

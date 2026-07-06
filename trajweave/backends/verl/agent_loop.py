@@ -127,7 +127,11 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
             for session_id in range(n):
                 use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-                if runtime.recipe == "maporl_debate_math" and use_hf_local:
+                if runtime.recipe == "agentflow_planner_tool" and use_hf_local:
+                    outputs = self._build_hf_agentflow_planner_tool_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "agentflow_planner_tool":
+                    outputs = self._build_agentflow_planner_tool_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "maporl_debate_math" and use_hf_local:
                     outputs = self._build_hf_maporl_debate_math_outputs(prompt, session_id=session_id)
                 elif runtime.recipe == "maporl_debate_math":
                     outputs = self._build_maporl_debate_math_outputs(prompt, session_id=session_id)
@@ -233,6 +237,8 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                             "trajweave_role": "solver",
                             "agent_id": agent_id,
                             "policy_group": model_ids[agent_index],
+                            "worker_group": model_ids[agent_index],
+                            "worker_group_model_path": self._maporl_worker_group_model_path(model_ids[agent_index]),
                             "agent_answer": round_answer,
                             "raw_score": reward,
                             "correctness": reward,
@@ -283,7 +289,8 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
         for round_id in range(max_rounds):
             for agent_index, agent_id in enumerate(agent_ids):
-                response_ids = self._generate_local_response_ids(running_prompt_ids)
+                policy_group = model_ids[agent_index]
+                response_ids = self._generate_local_response_ids(running_prompt_ids, policy_group=policy_group)
                 outputs.append(
                     AgentLoopOutput(
                         prompt_ids=list(running_prompt_ids),
@@ -298,7 +305,9 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                             "trajweave_agent_name": agent_id,
                             "trajweave_role": "solver",
                             "agent_id": agent_id,
-                            "policy_group": model_ids[agent_index],
+                            "policy_group": policy_group,
+                            "worker_group": policy_group,
+                            "worker_group_model_path": self._maporl_worker_group_model_path(policy_group),
                             "agent_answer": round_answer,
                             "raw_score": reward,
                             "correctness": reward,
@@ -482,6 +491,115 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             ),
         ]
 
+    def _build_agentflow_planner_tool_outputs(
+        self,
+        prompt: dict[str, Any],
+        *,
+        session_id: int = 0,
+    ) -> list[AgentLoopOutput]:
+        raw_prompt = _to_python(prompt.get("raw_prompt", []))
+        prompt_ids = self._encode_prompt(raw_prompt)
+        reward_model = _to_python(prompt.get("reward_model", {})) or {}
+        ground_truth = str(reward_model.get("ground_truth", "2"))
+        is_correct = session_id % 2 == 0
+        reward = 1.0 if is_correct else 0.0
+        max_steps = self._agentflow_max_steps()
+        metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=float(max_steps), compute_score=0.0, num_preempted=-1)
+        outputs: list[AgentLoopOutput] = []
+        running_prompt_ids = list(prompt_ids)
+        final_answer = ground_truth if is_correct else "__wrong__"
+        for step_id in range(1, max_steps + 1):
+            tool_name = self._agentflow_enabled_tools()[0]
+            verifier_decision = "STOP" if is_correct or step_id == max_steps else "CONTINUE"
+            text = (
+                f" Context: solve with memory step {step_id}.\n"
+                f"Sub-Goal: compute final answer.\n"
+                f"Tool Name: {tool_name}\n"
+                f"Planner answer: Final answer: {final_answer}"
+            )
+            response_ids = self._encode_text(text)
+            outputs.append(
+                AgentLoopOutput(
+                    prompt_ids=list(running_prompt_ids),
+                    response_ids=response_ids,
+                    response_mask=[1] * len(response_ids),
+                    reward_score=reward,
+                    num_turns=step_id,
+                    metrics=metrics,
+                    extra_fields={
+                        "turn_scores": [],
+                        "tool_rewards": [],
+                        "trajweave_agent_name": "planner",
+                        "trajweave_role": "planner",
+                        "agent_id": "planner",
+                        "policy_group": "planner",
+                        "agentflow_stage": "planner_next_step",
+                        "tool_name": tool_name,
+                        "sub_goal": "compute final answer",
+                        "tool_result": f"Final answer: {final_answer}",
+                        "verifier_decision": verifier_decision,
+                        "memory_snapshot": f"step={step_id}; result=Final answer: {final_answer}",
+                        "step_id": step_id,
+                    },
+                )
+            )
+            running_prompt_ids = running_prompt_ids + response_ids
+            if verifier_decision == "STOP":
+                break
+        return outputs
+
+    def _build_hf_agentflow_planner_tool_outputs(
+        self,
+        prompt: dict[str, Any],
+        *,
+        session_id: int = 0,
+    ) -> list[AgentLoopOutput]:
+        raw_prompt = _to_python(prompt.get("raw_prompt", []))
+        prompt_ids = self._encode_prompt(raw_prompt)
+        reward_model = _to_python(prompt.get("reward_model", {})) or {}
+        ground_truth = str(reward_model.get("ground_truth", "2"))
+        is_correct = session_id % 2 == 0
+        reward = 1.0 if is_correct else 0.0
+        max_steps = self._agentflow_max_steps()
+        tool_name = self._agentflow_enabled_tools()[0]
+        metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=float(max_steps), compute_score=0.0, num_preempted=-1)
+        outputs: list[AgentLoopOutput] = []
+        running_prompt_ids = list(prompt_ids)
+        for step_id in range(1, max_steps + 1):
+            response_ids = self._generate_local_response_ids(running_prompt_ids, policy_group="planner")
+            verifier_decision = "STOP" if is_correct or step_id == max_steps else "CONTINUE"
+            tool_result = f"Final answer: {ground_truth if is_correct else '__wrong__'}"
+            outputs.append(
+                AgentLoopOutput(
+                    prompt_ids=list(running_prompt_ids),
+                    response_ids=response_ids,
+                    response_mask=[1] * len(response_ids),
+                    reward_score=reward,
+                    num_turns=step_id,
+                    metrics=metrics,
+                    extra_fields={
+                        "turn_scores": [],
+                        "tool_rewards": [],
+                        "trajweave_agent_name": "planner",
+                        "trajweave_role": "planner",
+                        "agent_id": "planner",
+                        "policy_group": "planner",
+                        "agentflow_stage": "planner_next_step",
+                        "tool_name": tool_name,
+                        "sub_goal": "compute final answer",
+                        "tool_result": tool_result,
+                        "verifier_decision": verifier_decision,
+                        "memory_snapshot": f"step={step_id}; result={tool_result}",
+                        "step_id": step_id,
+                        "rollout_source": "hf_local_tq",
+                    },
+                )
+            )
+            running_prompt_ids = running_prompt_ids + response_ids
+            if verifier_decision == "STOP":
+                break
+        return outputs
+
     def _encode_prompt(self, raw_prompt: Any) -> list[int]:
         try:
             token_ids = apply_chat_template(
@@ -506,10 +624,12 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             token_ids = [self.tokenizer.eos_token_id or self.tokenizer.pad_token_id or 0]
         return token_ids[: self.rollout_config.response_length]
 
-    def _generate_local_response_ids(self, prompt_ids: list[int]) -> list[int]:
-        model = self._local_model()
+    def _generate_local_response_ids(self, prompt_ids: list[int], *, policy_group: str = "shared") -> list[int]:
+        model = self._local_model(policy_group=policy_group)
+        tokenizer = self._local_tokenizer(policy_group=policy_group)
         device = next(model.parameters()).device
-        input_ids = torch.tensor([prompt_ids[-self.rollout_config.prompt_length :]], dtype=torch.long, device=device)
+        input_ids = self._local_prompt_ids(prompt_ids, policy_group=policy_group, tokenizer=tokenizer)
+        input_ids = torch.tensor([input_ids[-self.rollout_config.prompt_length :]], dtype=torch.long, device=device)
         attention_mask = torch.ones_like(input_ids)
         with torch.no_grad():
             sequences = model.generate(
@@ -517,27 +637,79 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                 attention_mask=attention_mask,
                 max_new_tokens=self.rollout_config.response_length,
                 do_sample=False,
-                pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id or 0,
-                eos_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id or 0,
+                eos_token_id=tokenizer.eos_token_id,
             )
-        response_ids = sequences[0, input_ids.shape[-1] :].detach().cpu().tolist()
-        if not response_ids:
-            response_ids = [self.tokenizer.eos_token_id or self.tokenizer.pad_token_id or 0]
+        group_response_ids = sequences[0, input_ids.shape[-1] :].detach().cpu().tolist()
+        if not group_response_ids:
+            return [self.tokenizer.eos_token_id or self.tokenizer.pad_token_id or 0]
+        if tokenizer is self.tokenizer:
+            response_ids = group_response_ids
+        else:
+            response_text = tokenizer.decode(group_response_ids, skip_special_tokens=True)
+            response_ids = self._encode_text(response_text)
         return [int(token_id) for token_id in response_ids[: self.rollout_config.response_length]]
 
-    def _local_model(self):
-        if hasattr(self, "_trajweave_local_model"):
-            return self._trajweave_local_model
+    def _local_model(self, *, policy_group: str = "shared"):
+        if not hasattr(self, "_trajweave_local_models"):
+            self._trajweave_local_models = {}
+        cache: dict[str, Any] = self._trajweave_local_models
+        if policy_group in cache:
+            return cache[policy_group]
         from transformers import AutoModelForCausalLM
 
+        model_path = self._maporl_worker_group_model_path(policy_group) or self.model_config.local_path
+        kwargs: dict[str, Any] = {"trust_remote_code": self.model_config.trust_remote_code}
+        if str(model_path) == str(self.model_config.local_path):
+            kwargs["config"] = self.model_config.hf_config
         model = AutoModelForCausalLM.from_pretrained(
-            self.model_config.local_path,
-            config=self.model_config.hf_config,
-            trust_remote_code=self.model_config.trust_remote_code,
+            model_path,
+            **kwargs,
         )
         model.eval()
-        self._trajweave_local_model = model
-        return self._trajweave_local_model
+        cache[policy_group] = model
+        return cache[policy_group]
+
+    def _local_tokenizer(self, *, policy_group: str = "shared"):
+        tokenizer_path = self._maporl_worker_group_tokenizer_path(policy_group)
+        model_path = self._maporl_worker_group_model_path(policy_group)
+        if not tokenizer_path and not model_path:
+            return self.tokenizer
+        tokenizer_source = tokenizer_path or model_path
+        if str(tokenizer_source) == str(self.model_config.local_path):
+            return self.tokenizer
+        if not hasattr(self, "_trajweave_local_tokenizers"):
+            self._trajweave_local_tokenizers = {}
+        cache: dict[str, Any] = self._trajweave_local_tokenizers
+        cache_key = str(tokenizer_source)
+        if cache_key in cache:
+            return cache[cache_key]
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_source,
+            trust_remote_code=self.model_config.trust_remote_code,
+        )
+        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        cache[cache_key] = tokenizer
+        return tokenizer
+
+    def _local_prompt_ids(self, prompt_ids: list[int], *, policy_group: str, tokenizer: Any) -> list[int]:
+        if tokenizer is self.tokenizer:
+            return prompt_ids
+        try:
+            prompt_text = self.tokenizer.decode(prompt_ids, skip_special_tokens=True)
+        except TypeError:
+            prompt_text = self.tokenizer.decode(prompt_ids)
+        try:
+            ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+        except TypeError:
+            ids = tokenizer.encode(prompt_text)
+        ids = _flatten_token_ids(ids)
+        if not ids:
+            ids = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
+        return ids
 
     def _maporl_agent_ids(self) -> list[str]:
         agent_cfg = _get(self.config, "agent", default={}) or {}
@@ -557,6 +729,32 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                 raise ValueError("agent.model_ids must have the same length as agent.agent_ids.")
             return model_ids
         return ["shared" for _ in default_agent_ids]
+
+    def _maporl_worker_group_model_path(self, group_id: str) -> str | None:
+        group_cfg = self._maporl_worker_group_config(group_id)
+        model_path = _get(group_cfg, "model_path", default=None)
+        if model_path is None:
+            return None
+        return str(_to_python(model_path))
+
+    def _maporl_worker_group_tokenizer_path(self, group_id: str) -> str | None:
+        group_cfg = self._maporl_worker_group_config(group_id)
+        tokenizer_path = _get(group_cfg, "tokenizer_path", default=None)
+        if tokenizer_path is None:
+            return None
+        return str(_to_python(tokenizer_path))
+
+    def _maporl_worker_group_config(self, group_id: str) -> Any:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        worker_groups = _get(agent_cfg, "worker_groups", default={}) or {}
+        worker_groups = _to_python(worker_groups)
+        if isinstance(worker_groups, dict):
+            return worker_groups.get(group_id, {}) or {}
+        if isinstance(worker_groups, list):
+            for group in worker_groups:
+                if isinstance(group, dict) and str(group.get("id")) == str(group_id):
+                    return group
+        return {}
 
     def _maporl_max_rounds(self) -> int:
         agent_cfg = _get(self.config, "agent", default={}) or {}
@@ -581,6 +779,21 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
         maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
         return bool(_get(maporl_cfg, "reward_feedback", default=False))
+
+    def _agentflow_max_steps(self) -> int:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        agentflow_cfg = _get(orchestra_cfg, "agentflow", default={}) or {}
+        return int(_get(agentflow_cfg, "max_steps", default=3))
+
+    def _agentflow_enabled_tools(self) -> list[str]:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        agentflow_cfg = _get(orchestra_cfg, "agentflow", default={}) or {}
+        tools = _to_python(_get(agentflow_cfg, "enabled_tools", default=["base_generator"]))
+        if not tools:
+            return ["base_generator"]
+        return [str(tool) for tool in tools]
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         final_output = outputs[-1]
@@ -623,9 +836,20 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             field["prompts"] = prompts
             field["responses"] = responses
             field["response_mask"] = response_mask
+            if output.reward_score is not None:
+                field["rm_scores"] = _padded_rm_scores(response_mask, float(output.reward_score), len(response_ids))
+            if "rollout_log_probs" in field:
+                field["rollout_log_probs"] = _pad_or_trim_1d(
+                    field["rollout_log_probs"],
+                    self.rollout_config.response_length,
+                    pad_value=0.0,
+                    dtype=torch.float32,
+                )
             field["agent_name"] = output.extra_fields.get("trajweave_agent_name", field.get("agent_name"))
             field["role"] = output.extra_fields.get("trajweave_role", field["agent_name"])
             field["policy_group"] = output.extra_fields.get("policy_group", field.get("policy_group", field["agent_name"]))
+            field["worker_group"] = output.extra_fields.get("worker_group", field["policy_group"])
+            field["worker_group_model_path"] = output.extra_fields.get("worker_group_model_path") or ""
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
             field["turn_id"] = index
@@ -636,6 +860,13 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                 "correctness",
                 "consensus_reached",
                 "finished_round",
+                "agentflow_stage",
+                "tool_name",
+                "sub_goal",
+                "tool_result",
+                "verifier_decision",
+                "memory_snapshot",
+                "step_id",
             ):
                 if mas_field in output.extra_fields:
                     field[mas_field] = output.extra_fields[mas_field]
@@ -680,8 +911,42 @@ def _get(config: Any, key: str, default: Any = None) -> Any:
         return getattr(config, key, default)
 
 
+def _padded_rm_scores(response_mask: torch.Tensor, reward_score: float, response_len: int) -> torch.Tensor:
+    rm_scores = torch.zeros_like(response_mask, dtype=torch.float32)
+    if rm_scores.numel() == 0:
+        return rm_scores
+    valid_indices = torch.nonzero(response_mask, as_tuple=False).flatten()
+    if valid_indices.numel() > 0:
+        reward_index = int(valid_indices[-1].item())
+    else:
+        reward_index = max(0, min(response_len, rm_scores.numel()) - 1)
+    rm_scores[reward_index] = reward_score
+    return rm_scores
+
+
+def _pad_or_trim_1d(
+    values: torch.Tensor,
+    target_len: int,
+    *,
+    pad_value: float | int,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    output = values.to(dtype=dtype) if dtype is not None else values
+    if output.size(0) > target_len:
+        return output[:target_len]
+    if output.size(0) == target_len:
+        return output
+    pad = torch.full(
+        (target_len - output.size(0),),
+        pad_value,
+        dtype=output.dtype,
+        device=output.device,
+    )
+    return torch.cat([output, pad], dim=0)
+
+
 def _validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
-    if recipe and recipe not in {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math"}:
+    if recipe and recipe not in {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math", "agentflow_planner_tool"}:
         raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
     if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:
         raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
@@ -705,6 +970,13 @@ def _batch_item(value: Any, index: int) -> Any:
 
 
 def _to_python(value: Any) -> Any:
+    try:
+        from omegaconf import DictConfig, ListConfig, OmegaConf
+
+        if isinstance(value, (DictConfig, ListConfig)):
+            return OmegaConf.to_container(value, resolve=True)
+    except Exception:
+        pass
     if isinstance(value, NonTensorData):
         return _to_python(value.data)
     if isinstance(value, NonTensorStack):

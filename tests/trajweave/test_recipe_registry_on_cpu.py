@@ -13,3 +13,11 @@ def test_recipe_registry_exposes_maporl_namespace():
     assert recipe.name == "maporl.debate_math.full_verl_tiny"
     assert recipe.family == "maporl"
     assert recipe.runtime_recipe == "maporl_debate_math"
+
+
+def test_recipe_registry_exposes_agentflow_namespace():
+    recipe = resolve_recipe("agentflow_planner_tool")
+
+    assert recipe.name == "agentflow.flow_grpo.planner_tool"
+    assert recipe.family == "agentflow"
+    assert recipe.runtime_recipe == "agentflow_planner_tool"

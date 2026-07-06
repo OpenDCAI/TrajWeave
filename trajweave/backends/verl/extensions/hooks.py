@@ -201,6 +201,8 @@ class MAPoRLFullPPOHooks(PPOExtensionHooks):
         return (
             "agent_id",
             "policy_group",
+            "worker_group",
+            "worker_group_model_path",
             "traj_uid",
             "turn_id",
             "round_id",
@@ -266,12 +268,89 @@ class MAPoRLFullPPOHooks(PPOExtensionHooks):
         return output
 
 
+@dataclass(frozen=True)
+class AgentFlowPlannerGRPOHooks(PPOExtensionHooks):
+    name: str = "agentflow_planner_grpo"
+
+    def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
+        return (
+            "agent_id",
+            "traj_uid",
+            "turn_id",
+            "agentflow_stage",
+            "tool_name",
+            "sub_goal",
+            "tool_result",
+            "verifier_decision",
+            "step_id",
+        )
+
+    def tq_select_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...] | None = None,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
+        if stage == "advantage":
+            fields.extend(self.batch_schema_fields(stage))
+        return tuple(dict.fromkeys(fields))
+
+    def compute_advantage(
+        self,
+        data: Any,
+        *,
+        adv_estimator: Any,
+        gamma: float = 1.0,
+        lam: float = 1.0,
+        num_repeat: int = 1,
+        norm_adv_by_std_in_grpo: bool = True,
+        config: Any = None,
+        fallback: Any = None,
+        batch_keys: list[str] | None = None,
+    ) -> Any:
+        if fallback is None:
+            raise ValueError("AgentFlowPlannerGRPOHooks requires a fallback advantage implementation.")
+        return fallback(
+            data,
+            batch_keys=batch_keys,
+            adv_estimator=adv_estimator,
+            gamma=gamma,
+            lam=lam,
+            num_repeat=num_repeat,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+        )
+
+    def compute_extra_metrics(self, data: Any, metrics: dict[str, Any], stage: str) -> dict[str, Any]:
+        if stage != "advantage":
+            return {}
+        non_tensors = getattr(data, "non_tensor_batch", {})
+        decisions = non_tensors.get("verifier_decision")
+        stages = non_tensors.get("agentflow_stage")
+        output: dict[str, Any] = {}
+        if decisions is not None:
+            values = [str(value) for value in decisions]
+            if values:
+                output["trajweave/agentflow/verifier_stop_rate"] = values.count("STOP") / len(values)
+        if stages is not None:
+            planner_turns = [str(value) for value in stages].count("planner_next_step")
+            output["trajweave/agentflow/planner_turns"] = planner_turns
+        return output
+
+
 def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     trajweave = _config_get(config, "trajweave", {}) or {}
     credit_allocator = _config_get(trajweave, "credit_allocator", None)
     recipe = _config_get(trajweave, "recipe", None)
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
+    if (
+        credit_allocator == "agentflow_planner_only_grpo"
+        or recipe == "agentflow_planner_tool"
+        or "trajweave_agentflow_planner_grpo" in extension_names
+    ):
+        return AgentFlowPlannerGRPOHooks()
     if (
         credit_allocator in {"maporl_ppo_score_rule", "maporl_full_ppo"}
         or recipe in {"maporl_debate_math", "maporl.debate_math.full_verl_tiny"}

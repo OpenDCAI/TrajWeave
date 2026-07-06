@@ -30,6 +30,7 @@ Examples:
 drmas.math.verl_tiny
 drmas.search.verl_tiny
 maporl.debate_math.full_verl_tiny
+agentflow.flow_grpo.planner_tool
 ```
 
 Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new examples should live under algorithm folders:
@@ -37,6 +38,7 @@ Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supporte
 ```text
 examples/trajweave/configs/drmas/
 examples/trajweave/configs/maporl/
+examples/trajweave/configs/agentflow/
 ```
 
 ## DrMAS First Slice
@@ -173,6 +175,48 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 The tiny E2E currently validates shared physical policy training with logical `agent_id` and `model_id` metadata. Physical heterogeneous multi-model worker groups, adapter routing, and paper-scale LLM validation are still separate backend milestones.
 
+## AgentFlow Planner-Tool Slice
+
+```mermaid
+flowchart LR
+    A[MathTask] --> B[AgentFlowPlannerToolOrchestra]
+    B --> C[Planner]
+    C --> D[Executor Command]
+    D --> E[Tool Result]
+    E --> F[Verifier Decision]
+    F -->|CONTINUE| C
+    F -->|STOP| G[Final Answer]
+    G --> H[FlowGRPOPlannerOnlyCreditAssigner]
+    H --> I[Planner TrainingSample Only]
+    I --> J[AgentFlowPlannerGRPOHooks]
+    J --> K[VERL GRPO]
+```
+
+The AgentFlow slice separates inference participation from training ownership:
+
+1. Planner is the only trainable agent in this first slice.
+2. Executor, tool, and verifier are protocol modules that are recorded in the trajectory but not updated.
+3. The shared memory works like a blackboard: each tool action appends `tool_name`, `sub_goal`, `command`, and `result`.
+4. The verifier emits `STOP` or `CONTINUE`; this controls whether the next planner step runs.
+5. `FlowGRPOPlannerOnlyCreditAssigner` assigns the final outcome reward only to `planner_next_step` turns.
+6. `AgentFlowPlannerGRPOHooks` preserves planner/tool metadata through VERL TransferQueue and delegates GRPO advantage computation to the normal VERL path.
+
+Run the smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/agentflow/flow_grpo_smoke.yaml
+```
+
+Run the VERL tiny training entry:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/agentflow/flow_grpo_verl_tiny.yaml
+```
+
+The current validation includes the default 1-step tiny run plus a separate strict 3-step run that exercises AgentFlow rollout, TransferQueue fields, GRPO advantage calculation, and actor update.
+
 ## VERL Runtime Hook Boundary
 
 TrajWeave keeps paper-specific MASRL logic outside `verl/`, but it can add small upstream-style VERL extension points and compatibility fixes when the backend needs them. Runtime integration is split into two layers:
@@ -202,6 +246,7 @@ flowchart TD
 | `PPOExtensionHooks` | Default fallback. | Standard VERL fields and prompt-level grouping. |
 | `AgentWiseGRPOHooks` | DrMAS. | Requires `agent_id`, `traj_uid`, and `turn_id`; builds agent-wise GRPO groups for DrMAS-style normalization. |
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
+| `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
 
 The runtime patch files should stay thin: they install compatibility shims, select hook objects, and avoid copying trainer logic. New MASRL algorithms should add or compose hooks first; edit `verl/` only for stable extension points or general backend fixes that are useful beyond one paper.
 
@@ -228,6 +273,10 @@ Current examples:
 | `doctor_mas_search_smoke.yaml` | Deterministic Search rollout and DrMAS credit check. |
 | `doctor_mas_math_tiny_train.yaml` | Tiny torch policy update loop. |
 | `doctor_mas_math_verl_export.yaml` | Optional DataProto export and VERL trainer dry-run command generation. |
+| `maporl/debate_math_smoke.yaml` | MAPoRL deterministic debate/consensus smoke. |
+| `maporl/debate_math_verl_tiny.yaml` | MAPoRL full PPO tiny VERL launch. |
+| `agentflow/flow_grpo_smoke.yaml` | AgentFlow planner-tool smoke with planner-only credit. |
+| `agentflow/flow_grpo_verl_tiny.yaml` | AgentFlow planner-only GRPO tiny VERL launch. |
 | `doctor_mas_math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
 | `doctor_mas_math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |

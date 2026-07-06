@@ -4,6 +4,7 @@ from omegaconf import OmegaConf
 
 from trajweave.backends.verl.extensions.hooks import (
     AgentWiseGRPOHooks,
+    AgentFlowPlannerGRPOHooks,
     MAPoRLFullPPOHooks,
     PPOExtensionHooks,
     extension_hooks_for_config,
@@ -78,3 +79,33 @@ def test_extension_hooks_for_config_selects_maporl_full_ppo():
     assert "round_id" in fields
     assert "raw_score" in fields
     assert "policy_group" in fields
+    assert "worker_group" in fields
+
+
+def test_extension_hooks_for_config_selects_agentflow_planner_grpo():
+    hooks = extension_hooks_for_config({"trajweave": {"credit_allocator": "agentflow_planner_only_grpo"}})
+
+    assert isinstance(hooks, AgentFlowPlannerGRPOHooks)
+    fields = hooks.tq_select_fields("advantage", default_fields=("uid", "rm_scores"), config={})
+    assert "agentflow_stage" in fields
+    assert "tool_name" in fields
+    assert "verifier_decision" in fields
+    assert "step_id" in fields
+
+
+def test_agentflow_hook_delegates_advantage_to_fallback():
+    calls = []
+
+    def fallback(data, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    result = AgentFlowPlannerGRPOHooks().compute_advantage(
+        "batch",
+        adv_estimator=AdvantageEstimator.GRPO,
+        fallback=fallback,
+        batch_keys=["responses"],
+    )
+
+    assert result == {"ok": True}
+    assert calls[0]["batch_keys"] == ["responses"]
