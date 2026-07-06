@@ -32,3 +32,24 @@ def test_drmas_native_math_config_prepares_agent_wise_verl_launch():
     assert "+agent.orchestra.math.max_loop_num=2" in command
     assert "+trajweave.agent_loop_backend=synthetic_tq" in command
     assert "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager" in command_text
+
+
+def test_drmas_native_config_rejects_native_verl_tq_backend():
+    try:
+        run_from_config(
+            {
+                "recipe": "drmas_native_math",
+                "mode": "verl_train",
+                "prepare": {"tiny_verl_assets": {"enabled": False}},
+                "drmas_native": {
+                    "agent_ids": ["Solver Agent", "Verifier Agent"],
+                    "model_ids": ["shared", "shared"],
+                    "agent_loop_backend": "verl_tq",
+                },
+                "verl": {"enabled": True, "execute": False},
+            }
+        )
+    except ValueError as exc:
+        assert "not verl_tq" in str(exc)
+    else:
+        raise AssertionError("DrMAS native should reject native verl_tq.")

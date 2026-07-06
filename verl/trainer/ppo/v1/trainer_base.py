@@ -67,6 +67,7 @@ from verl.trainer.ppo.utils import (
     need_teacher_policy,
 )
 from verl.trainer.ppo.v1.replay_buffer import ReplayBuffer
+from verl.trainer.ppo.v1.extension_hooks import get_ppo_v1_extension_hooks, pop_tq_field_as_object_array
 from verl.trainer.ppo.v1.utils import compute_advantage_for_multi_trajectories
 from verl.utils import hf_processor, hf_tokenizer
 from verl.utils import tensordict_utils as tu
@@ -152,7 +153,7 @@ class PPOTrainer(ABC):
             critic_cfg.engine.max_token_len_per_gpu = critic_cfg.ppo_infer_max_token_len_per_gpu
             worker_cfg = TrainingWorkerConfig(
                 model_type="value_model",
-                model_config=critic_cfg.model_config,
+                model_config=getattr(critic_cfg, "model_config", None) or critic_cfg.model,
                 engine_config=critic_cfg.engine,
                 optimizer_config=critic_cfg.optim,
                 checkpoint_config=critic_cfg.checkpoint,
@@ -1221,6 +1222,12 @@ class PPOTrainer(ABC):
     def _compute_values(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
         """Compute the values of the batch."""
         # 1. compute value
+        batch.extra_info.update(
+            {
+                "compute_loss": False,
+                "temperature": self.config.actor_rollout_ref.rollout.temperature,
+            }
+        )
         output = self.critic_wg.infer_batch(batch)
         # TODO: DataProtoFuture support KVBatchMeta
         ray.get(output.futures)
@@ -1236,13 +1243,19 @@ class PPOTrainer(ABC):
 
     def _compute_advantage(self, batch: KVBatchMeta, metrics: dict) -> KVBatchMeta:
         """Compute the advantage of the batch."""
-        fields = ["uid", "response_mask", "rm_scores", "rollout_log_probs", "old_log_probs", "ref_log_prob", "values"]
+        extension_hooks = get_ppo_v1_extension_hooks(self.config)
+        default_fields = ("uid", "response_mask", "rm_scores", "rollout_log_probs", "old_log_probs", "ref_log_prob", "values")
+        fields = list(extension_hooks.tq_select_fields("advantage", default_fields, config=self.config.algorithm))
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
 
         response_mask = data["response_mask"]
         data = DataProto(batch=data.to_padded_tensor())
         data.batch["token_level_scores"] = data.batch["rm_scores"]
-        data.non_tensor_batch["uid"] = np.array(data.batch.pop("uid").tolist(), dtype=object)
+        data.non_tensor_batch["uid"] = pop_tq_field_as_object_array(data, "uid")
+        for field in extension_hooks.batch_schema_fields("advantage", config=self.config.algorithm):
+            if field in data.batch:
+                data.non_tensor_batch[field] = pop_tq_field_as_object_array(data, field)
+        data = extension_hooks.prepare_dataproto(data, stage="advantage", config=self.config.algorithm)
 
         # 1. apply kl penalty to rewards
         if self.config.algorithm.use_kl_in_reward:
@@ -1266,7 +1279,7 @@ class PPOTrainer(ABC):
             metrics.update(is_metrics)
 
         # 3. compute advantages
-        data = compute_advantage_for_multi_trajectories(
+        data = extension_hooks.compute_advantage(
             data,
             batch_keys=batch.keys,
             adv_estimator=self.config.algorithm.adv_estimator,
@@ -1275,7 +1288,9 @@ class PPOTrainer(ABC):
             num_repeat=self.config.actor_rollout_ref.rollout.n,
             norm_adv_by_std_in_grpo=self.config.algorithm.get("norm_adv_by_std_in_grpo", True),
             config=self.config.algorithm,
+            fallback=compute_advantage_for_multi_trajectories,
         )
+        extension_hooks.update_metrics(data, metrics, stage="advantage", config=self.config.algorithm)
 
         # 4. write nested advantages and returns back to TransferQueue
         fields = ["advantages", "returns"]
@@ -1285,6 +1300,7 @@ class PPOTrainer(ABC):
             fields.append("response_mask")
             if "rollout_is_weights" in data.batch:
                 fields.append("rollout_is_weights")
+        fields = list(extension_hooks.output_fields("advantage", tuple(fields), data, config=self.config.algorithm))
 
         output = {}
         for field in fields:

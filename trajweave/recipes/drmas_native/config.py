@@ -40,8 +40,10 @@ DRMAS_NATIVE_SEARCH = DrMASNativeRecipeSpec(
 
 def recipe_spec(name: str) -> DrMASNativeRecipeSpec:
     aliases = {
+        "drmas.math.verl_tiny": DRMAS_NATIVE_MATH,
         "drmas_native_math": DRMAS_NATIVE_MATH,
         "doctor_mas_native_math": DRMAS_NATIVE_MATH,
+        "drmas.search.verl_tiny": DRMAS_NATIVE_SEARCH,
         "drmas_native_search": DRMAS_NATIVE_SEARCH,
         "doctor_mas_native_search": DRMAS_NATIVE_SEARCH,
     }
@@ -66,6 +68,8 @@ def build_drmas_native_launch_overrides(
 
     model_sharing = str(bool(native_cfg.get("model_sharing", len(set(model_ids)) == 1))).lower()
     agent_loop_backend = str(native_cfg.get("agent_loop_backend", native_cfg.get("rollout_backend", "hf_local_tq")))
+    if agent_loop_backend == "verl_tq":
+        raise ValueError("DrMAS native integration requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
     max_loop_num = native_cfg.get("max_loop_num", spec.default_max_loop_num)
     source_config = config_path or str(Path.cwd())
 

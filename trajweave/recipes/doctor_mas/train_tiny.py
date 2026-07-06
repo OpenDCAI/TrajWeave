@@ -12,6 +12,7 @@ from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.rollout.engine import RolloutEngine
+from trajweave.runtime import ExperimentTracker
 
 
 @dataclass
@@ -113,7 +114,7 @@ def evaluate(engine: RolloutEngine, backend: TrainableTinyMathPolicyBackend, tas
     return result.success_rate
 
 
-def run_training(config: TrainConfig) -> list[dict]:
+def run_training(config: TrainConfig, tracker: ExperimentTracker | None = None) -> list[dict]:
     import torch
 
     rng = random.Random(config.seed)
@@ -163,6 +164,8 @@ def run_training(config: TrainConfig) -> list[dict]:
                 **loss_metrics,
             }
             metrics_history.append(row)
+            if tracker is not None:
+                tracker.log_metrics(row, source="tiny_training", step=step)
             log_file.write(json.dumps(row, ensure_ascii=False) + "\n")
             log_file.flush()
             if should_eval:

@@ -11,6 +11,7 @@ def prepare_tiny_verl_assets(
     train_size: int = 2,
     val_size: int = 2,
     task_family: str = "math",
+    recipe_name: str | None = None,
     overwrite: bool = True,
 ) -> dict[str, str]:
     output_path = Path(output_dir)
@@ -22,9 +23,9 @@ def prepare_tiny_verl_assets(
     if overwrite or not (model_path / "config.json").exists():
         _write_tiny_model(model_path)
     if overwrite or not train_path.exists():
-        _write_jsonl(train_path, _rows(train_size, split="train", task_family=task_family))
+        _write_jsonl(train_path, _rows(train_size, split="train", task_family=task_family, recipe_name=recipe_name))
     if overwrite or not val_path.exists():
-        _write_jsonl(val_path, _rows(val_size, split="val", task_family=task_family))
+        _write_jsonl(val_path, _rows(val_size, split="val", task_family=task_family, recipe_name=recipe_name))
 
     return {
         "output_dir": str(output_path),
@@ -32,6 +33,7 @@ def prepare_tiny_verl_assets(
         "train_file": str(train_path),
         "val_file": str(val_path),
         "task_family": task_family,
+        "recipe_name": recipe_name or _default_recipe_name(task_family),
     }
 
 
@@ -114,7 +116,7 @@ def _write_tiny_model(model_path: Path) -> None:
     model.save_pretrained(model_path)
 
 
-def _math_rows(size: int, *, split: str) -> list[dict[str, Any]]:
+def _math_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
     seeds = [(1, 1), (1, 2), (2, 2), (2, 3), (3, 3), (3, 4)]
     rows = []
     for index in range(size):
@@ -134,14 +136,14 @@ def _math_rows(size: int, *, split: str) -> list[dict[str, Any]]:
                 "extra_info": {
                     "index": index,
                     "split": split,
-                    "trajweave_recipe": "doctor_mas_math",
+                    "trajweave_recipe": recipe_name or "doctor_mas_math",
                 },
             }
         )
     return rows
 
 
-def _search_rows(size: int, *, split: str) -> list[dict[str, Any]]:
+def _search_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
     seeds = [
         (
             "Which city is the capital of France?",
@@ -171,7 +173,7 @@ def _search_rows(size: int, *, split: str) -> list[dict[str, Any]]:
                 "extra_info": {
                     "index": index,
                     "split": split,
-                    "trajweave_recipe": "doctor_mas_search",
+                    "trajweave_recipe": recipe_name or "doctor_mas_search",
                     "search_query": query,
                 },
             }
@@ -179,12 +181,20 @@ def _search_rows(size: int, *, split: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _rows(size: int, *, split: str, task_family: str) -> list[dict[str, Any]]:
+def _rows(size: int, *, split: str, task_family: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
     if task_family == "math":
-        return _math_rows(size, split=split)
+        return _math_rows(size, split=split, recipe_name=recipe_name)
     if task_family == "search":
-        return _search_rows(size, split=split)
+        return _search_rows(size, split=split, recipe_name=recipe_name)
     raise ValueError(f"Unknown tiny VERL task_family: {task_family}")
+
+
+def _default_recipe_name(task_family: str) -> str:
+    if task_family == "math":
+        return "doctor_mas_math"
+    if task_family == "search":
+        return "doctor_mas_search"
+    return task_family
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:

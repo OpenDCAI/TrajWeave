@@ -39,6 +39,7 @@ dependencies = [
 test = ["pytest", "pre-commit", "py-spy", "pytest-asyncio", "pytest-rerunfailures"]
 gpu = ["liger-kernel", "flash-attn"]
 math = ["math-verify"]
+maporl = ["trl>=0.11,<1.0"]
 vllm = ["tensordict>=0.8.0,<=0.10.0,!=0.9.0", "vllm>=0.8.5,<=0.12.0"]
 sglang = ["tensordict>=0.8.0,<=0.10.0,!=0.9.0", "sglang[srt,openai]==0.5.8", "torch==2.9.1"]
 mcore = ["mbridge"]

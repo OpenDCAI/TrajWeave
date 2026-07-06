@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import os
+from pathlib import Path
 from typing import Any
 
-import numpy as np
 import ray
 import torch
 import transfer_queue as tq
-from tensordict import NonTensorData, NonTensorStack
 
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopMetrics,
@@ -18,54 +17,30 @@ from verl.experimental.agent_loop.agent_loop import (
     get_trajectory_info,
 )
 from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
-from verl.utils.chat_template import apply_chat_template
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
+
+from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
+from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
+from trajweave.backends.verl.runtime_config import (
+    TrajWeaveAgentLoopRuntimeConfig,
+    config_get as _get,
+    validate_agent_loop_backend as _validate_agent_loop_backend,
+)
+from trajweave.backends.verl.schema import (
+    MAS_EXTRA_FIELDS,
+    batch_item as _batch_item,
+    canonical_drmas_agent_id as _canonical_drmas_agent_id,
+    flatten_token_ids as _flatten_token_ids,
+    pad_or_trim_1d as _pad_or_trim_1d,
+    padded_rm_scores as _padded_rm_scores,
+    to_python as _to_python,
+)
+from trajweave.storage.jsonl import JsonlWriter
 
 logger = logging.getLogger(__name__)
 
 
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
-
-DRMAS_AGENT_IDS = {
-    "solver": "Solver Agent",
-    "verifier": "Verifier Agent",
-    "searcher": "Search Agent",
-    "search": "Search Agent",
-    "answer": "Answer Agent",
-}
-
-
-@dataclass(frozen=True)
-class TrajWeaveAgentLoopRuntimeConfig:
-    recipe: str | None = None
-    config_path: str | None = None
-    coordination_protocol: str | None = None
-    trajectory_schema: str | None = None
-    credit_allocator: str | None = None
-    agent_loop_backend: str = "verl_tq"
-
-    @classmethod
-    def from_verl_config(cls, config: Any) -> "TrajWeaveAgentLoopRuntimeConfig":
-        trajweave = _get(config, "trajweave", default={})
-        return cls(
-            recipe=_get(trajweave, "recipe"),
-            config_path=_get(trajweave, "config"),
-            coordination_protocol=_get(trajweave, "coordination_protocol"),
-            trajectory_schema=_get(trajweave, "trajectory_schema"),
-            credit_allocator=_get(trajweave, "credit_allocator"),
-            agent_loop_backend=str(_get(trajweave, "agent_loop_backend", "verl_tq")),
-        )
-
-    def as_overrides(self) -> dict[str, str]:
-        values = {
-            "trajweave.recipe": self.recipe,
-            "trajweave.config": self.config_path,
-            "trajweave.coordination_protocol": self.coordination_protocol,
-            "trajweave.trajectory_schema": self.trajectory_schema,
-            "trajweave.credit_allocator": self.credit_allocator,
-            "trajweave.agent_loop_backend": self.agent_loop_backend,
-        }
-        return {key: value for key, value in values.items() if value is not None}
 
 
 class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
@@ -84,16 +59,20 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
         return super().generate_sequences(prompts)
 
     def _validate_trajweave_runtime(self) -> None:
-        recipe = self.trajweave_runtime_config.recipe
-        if recipe and recipe not in {"doctor_mas_math", "doctor_mas_search"}:
-            raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
-        backend = self.trajweave_runtime_config.agent_loop_backend
-        if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:
-            raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
+        _validate_agent_loop_backend(
+            recipe=self.trajweave_runtime_config.recipe,
+            backend=self.trajweave_runtime_config.agent_loop_backend,
+        )
 
 
 @ray.remote
-class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
+class TrajWeaveSyntheticAgentLoopWorkerTQ(
+    AgentFlowEmitterMixin,
+    MAPoRLEmitterMixin,
+    DrMASEmitterMixin,
+    HFLocalGenerationMixin,
+    AgentLoopWorker,
+):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         tq.init()
@@ -129,7 +108,15 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
             for session_id in range(n):
                 use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-                if runtime.recipe == "doctor_mas_search" and use_hf_local:
+                if runtime.recipe == "agentflow_planner_tool" and use_hf_local:
+                    outputs = self._build_hf_agentflow_planner_tool_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "agentflow_planner_tool":
+                    outputs = self._build_agentflow_planner_tool_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "maporl_debate_math" and use_hf_local:
+                    outputs = self._build_hf_maporl_debate_math_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "maporl_debate_math":
+                    outputs = self._build_maporl_debate_math_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "doctor_mas_search" and use_hf_local:
                     outputs = self._build_hf_search_answer_outputs(prompt, session_id=session_id)
                 elif runtime.recipe == "doctor_mas_search":
                     outputs = self._build_search_answer_outputs(prompt, session_id=session_id)
@@ -143,275 +130,18 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
 
-    def _build_solver_verifier_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
-        raw_prompt = _to_python(prompt.get("raw_prompt", []))
-        reward_model = _to_python(prompt.get("reward_model", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "2"))
-        prompt_ids = self._encode_prompt(raw_prompt)
-        is_correct = session_id % 2 == 0
-        solver_answer = ground_truth if is_correct else "__wrong__"
-        solver_reward = 1.0 if is_correct else 0.0
-        solver_text = f" Final answer: {solver_answer}"
-        verifier_text = " APPROVED"
-        solver_ids = self._encode_text(solver_text)
-        verifier_ids = self._encode_text(verifier_text)
-        metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
-        return [
-            AgentLoopOutput(
-                prompt_ids=prompt_ids,
-                response_ids=solver_ids,
-                response_mask=[1] * len(solver_ids),
-                reward_score=None,
-                num_turns=1,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "solver",
-                    "trajweave_role": "solver",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + solver_ids,
-                response_ids=verifier_ids,
-                response_mask=[1] * len(verifier_ids),
-                reward_score=solver_reward,
-                num_turns=2,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "verifier",
-                    "trajweave_role": "verifier",
-                },
-            ),
-        ]
-
-    def _build_hf_solver_verifier_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
-        raw_prompt = _to_python(prompt.get("raw_prompt", []))
-        prompt_ids = self._encode_prompt(raw_prompt)
-        reward_model = _to_python(prompt.get("reward_model", {})) or {}
-        is_correct = session_id % 2 == 0
-        reward = 1.0 if is_correct else 0.0
-        solver_ids = self._generate_local_response_ids(prompt_ids)
-        verifier_ids = self._generate_local_response_ids(prompt_ids + solver_ids)
-        metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
-        return [
-            AgentLoopOutput(
-                prompt_ids=prompt_ids,
-                response_ids=solver_ids,
-                response_mask=[1] * len(solver_ids),
-                reward_score=None,
-                num_turns=1,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "solver",
-                    "trajweave_role": "solver",
-                    "ground_truth": str(reward_model.get("ground_truth", "")),
-                    "rollout_source": "hf_local_tq",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + solver_ids,
-                response_ids=verifier_ids,
-                response_mask=[1] * len(verifier_ids),
-                reward_score=reward,
-                num_turns=2,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "verifier",
-                    "trajweave_role": "verifier",
-                    "rollout_source": "hf_local_tq",
-                },
-            ),
-        ]
-
-    def _build_search_answer_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
-        raw_prompt = _to_python(prompt.get("raw_prompt", []))
-        reward_model = _to_python(prompt.get("reward_model", {})) or {}
-        extra_info = _to_python(prompt.get("extra_info", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "Paris"))
-        search_query = str(extra_info.get("search_query", ground_truth))
-        prompt_ids = self._encode_prompt(raw_prompt)
-        is_correct = session_id % 2 == 0
-        answer_text = ground_truth if is_correct else "__wrong__"
-        reward = 1.0 if is_correct else 0.0
-        verifier_ids = self._encode_text(" SEARCH: evidence is missing.")
-        searcher_ids = self._encode_text(f" SEARCH: {search_query}")
-        answer_ids = self._encode_text(f" Final answer: {answer_text}")
-        metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=1.0, compute_score=0.0, num_preempted=-1)
-        return [
-            AgentLoopOutput(
-                prompt_ids=prompt_ids,
-                response_ids=verifier_ids,
-                response_mask=[1] * len(verifier_ids),
-                reward_score=None,
-                num_turns=1,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "verifier",
-                    "trajweave_role": "verifier",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + verifier_ids,
-                response_ids=searcher_ids,
-                response_mask=[1] * len(searcher_ids),
-                reward_score=None,
-                num_turns=2,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "searcher",
-                    "trajweave_role": "searcher",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + verifier_ids + searcher_ids,
-                response_ids=answer_ids,
-                response_mask=[1] * len(answer_ids),
-                reward_score=reward,
-                num_turns=3,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "answer",
-                    "trajweave_role": "answer",
-                },
-            ),
-        ]
-
-    def _build_hf_search_answer_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
-        raw_prompt = _to_python(prompt.get("raw_prompt", []))
-        prompt_ids = self._encode_prompt(raw_prompt)
-        is_correct = session_id % 2 == 0
-        reward = 1.0 if is_correct else 0.0
-        verifier_ids = self._generate_local_response_ids(prompt_ids)
-        searcher_ids = self._generate_local_response_ids(prompt_ids + verifier_ids)
-        answer_ids = self._generate_local_response_ids(prompt_ids + verifier_ids + searcher_ids)
-        metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=1.0, compute_score=0.0, num_preempted=-1)
-        return [
-            AgentLoopOutput(
-                prompt_ids=prompt_ids,
-                response_ids=verifier_ids,
-                response_mask=[1] * len(verifier_ids),
-                reward_score=None,
-                num_turns=1,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "verifier",
-                    "trajweave_role": "verifier",
-                    "rollout_source": "hf_local_tq",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + verifier_ids,
-                response_ids=searcher_ids,
-                response_mask=[1] * len(searcher_ids),
-                reward_score=None,
-                num_turns=2,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "searcher",
-                    "trajweave_role": "searcher",
-                    "rollout_source": "hf_local_tq",
-                },
-            ),
-            AgentLoopOutput(
-                prompt_ids=prompt_ids + verifier_ids + searcher_ids,
-                response_ids=answer_ids,
-                response_mask=[1] * len(answer_ids),
-                reward_score=reward,
-                num_turns=3,
-                metrics=metrics,
-                extra_fields={
-                    "turn_scores": [],
-                    "tool_rewards": [],
-                    "trajweave_agent_name": "answer",
-                    "trajweave_role": "answer",
-                    "rollout_source": "hf_local_tq",
-                },
-            ),
-        ]
-
-    def _encode_prompt(self, raw_prompt: Any) -> list[int]:
-        try:
-            token_ids = apply_chat_template(
-                self.tokenizer,
-                raw_prompt,
-                add_generation_prompt=True,
-                tokenize=True,
-                **self.config.data.get("apply_chat_template_kwargs", {}),
-            )
-        except Exception:
-            token_ids = self._encode_text(str(raw_prompt))
-        token_ids = _flatten_token_ids(token_ids)
-        return token_ids[-self.rollout_config.prompt_length :]
-
-    def _encode_text(self, text: str) -> list[int]:
-        try:
-            token_ids = self.tokenizer.encode(text, add_special_tokens=False)
-        except TypeError:
-            token_ids = self.tokenizer.encode(text)
-        token_ids = _flatten_token_ids(token_ids)
-        if not token_ids:
-            token_ids = [self.tokenizer.eos_token_id or self.tokenizer.pad_token_id or 0]
-        return token_ids[: self.rollout_config.response_length]
-
-    def _generate_local_response_ids(self, prompt_ids: list[int]) -> list[int]:
-        model = self._local_model()
-        device = next(model.parameters()).device
-        input_ids = torch.tensor([prompt_ids[-self.rollout_config.prompt_length :]], dtype=torch.long, device=device)
-        attention_mask = torch.ones_like(input_ids)
-        with torch.no_grad():
-            sequences = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=self.rollout_config.response_length,
-                do_sample=False,
-                pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id or 0,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
-        response_ids = sequences[0, input_ids.shape[-1] :].detach().cpu().tolist()
-        if not response_ids:
-            response_ids = [self.tokenizer.eos_token_id or self.tokenizer.pad_token_id or 0]
-        return [int(token_id) for token_id in response_ids[: self.rollout_config.response_length]]
-
-    def _local_model(self):
-        if hasattr(self, "_trajweave_local_model"):
-            return self._trajweave_local_model
-        from transformers import AutoModelForCausalLM
-
-        model = AutoModelForCausalLM.from_pretrained(
-            self.model_config.local_path,
-            config=self.model_config.hf_config,
-            trust_remote_code=self.model_config.trust_remote_code,
-        )
-        model.eval()
-        self._trajweave_local_model = model
-        return self._trajweave_local_model
-
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
+        runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
         final_output = outputs[-1]
         if final_output.reward_score is not None:
             for output in outputs[:-1]:
-                output.reward_score = final_output.reward_score
-                output.extra_fields["reward_extra_info"] = final_output.extra_fields.get("reward_extra_info", {})
+                if output.reward_score is None:
+                    output.reward_score = final_output.reward_score
+                output.extra_fields.setdefault("reward_extra_info", final_output.extra_fields.get("reward_extra_info", {}))
 
         uid, session_id = str(_to_python(kwargs["uid"])), int(kwargs["session_id"])
         keys, fields, tags = [], [], []
+        online_turn_rows: list[dict[str, Any]] = []
         for index, output in enumerate(outputs):
             prompt_ids = output.prompt_ids[-self.rollout_config.prompt_length :]
             response_ids = output.response_ids[: self.rollout_config.response_length]
@@ -443,16 +173,32 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             field["prompts"] = prompts
             field["responses"] = responses
             field["response_mask"] = response_mask
+            if output.reward_score is not None:
+                field["rm_scores"] = _padded_rm_scores(response_mask, float(output.reward_score), len(response_ids))
+            if "rollout_log_probs" in field:
+                field["rollout_log_probs"] = _pad_or_trim_1d(
+                    field["rollout_log_probs"],
+                    self.rollout_config.response_length,
+                    pad_value=0.0,
+                    dtype=torch.float32,
+                )
             field["agent_name"] = output.extra_fields.get("trajweave_agent_name", field.get("agent_name"))
             field["role"] = output.extra_fields.get("trajweave_role", field["agent_name"])
+            field["policy_group"] = output.extra_fields.get("policy_group", field.get("policy_group", field["agent_name"]))
+            field["worker_group"] = output.extra_fields.get("worker_group", field["policy_group"])
+            field["worker_group_model_path"] = output.extra_fields.get("worker_group_model_path") or ""
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
             field["turn_id"] = index
+            for mas_field in MAS_EXTRA_FIELDS:
+                if mas_field in output.extra_fields:
+                    field[mas_field] = output.extra_fields[mas_field]
             field["session_id"] = session_id
             field["loss_mask"] = field["response_mask"]
             field["input_ids"] = input_ids
             field["attention_mask"] = attention_mask
             field["position_ids"] = position_ids
+            field["temperature"] = float(_get(self.rollout_config, "temperature", 1.0))
             field["multi_modal_inputs"] = multi_modal_inputs
             fields.append(field)
             keys.append(f"{uid}_{session_id}_{index}")
@@ -468,6 +214,55 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                     "max_global_steps": field["extra_fields"].get("max_global_steps"),
                 }
             )
+            online_turn_rows.append(
+                {
+                    "recipe": runtime.recipe,
+                    "uid": uid,
+                    "session_id": session_id,
+                    "turn_id": index,
+                    "validate": validate,
+                    "agent_name": _to_python(field["agent_name"]),
+                    "role": _to_python(field["role"]),
+                    "policy_group": _to_python(field["policy_group"]),
+                    "worker_group": _to_python(field["worker_group"]),
+                    "agent_id": _to_python(field["agent_id"]),
+                    "traj_uid": _to_python(field["traj_uid"]),
+                    "reward_score": _to_python(output.reward_score),
+                    "prompt_len": prompt_len,
+                    "response_len": response_len,
+                    "global_steps": _to_python(kwargs["global_steps"]),
+                    "metadata": {
+                        key: _to_python(field[key])
+                        for key in MAS_EXTRA_FIELDS
+                        if key in field
+                    },
+                }
+            )
+            for trace_idx, trace_event in enumerate(output.extra_fields.get("agentflow_trace", [])):
+                trace_event = _to_python(trace_event)
+                online_turn_rows.append(
+                    {
+                        "recipe": runtime.recipe,
+                        "uid": uid,
+                        "session_id": session_id,
+                        "turn_id": f"{index}.{trace_idx + 1}",
+                        "validate": validate,
+                        "agent_name": trace_event.get("agent_name"),
+                        "role": trace_event.get("role"),
+                        "policy_group": trace_event.get("policy_group"),
+                        "worker_group": trace_event.get("policy_group"),
+                        "agent_id": trace_event.get("agent_id"),
+                        "traj_uid": _to_python(field["traj_uid"]),
+                        "reward_score": _to_python(output.reward_score),
+                        "prompt_len": 0,
+                        "response_len": 0,
+                        "global_steps": _to_python(kwargs["global_steps"]),
+                        "metadata": {
+                            "trace_only": True,
+                            **trace_event,
+                        },
+                    }
+                )
 
         await tq.async_kv_batch_put(
             keys=keys,
@@ -475,58 +270,12 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             tags=tags,
             partition_id="train" if not validate else "val",
         )
+        self._write_online_turns(runtime, online_turn_rows)
 
-
-def _get(config: Any, key: str, default: Any = None) -> Any:
-    if config is None:
-        return default
-    if isinstance(config, dict):
-        return config.get(key, default)
-    try:
-        return config.get(key, default)
-    except (AttributeError, TypeError):
-        return getattr(config, key, default)
-
-
-def _batch_item(value: Any, index: int) -> Any:
-    if isinstance(value, torch.Tensor):
-        return value[index]
-    if isinstance(value, NonTensorStack):
-        return value[index].data
-    if isinstance(value, NonTensorData):
-        return value.data
-    if isinstance(value, (list, tuple)) and len(value) > index:
-        return value[index]
-    return value
-
-
-def _to_python(value: Any) -> Any:
-    if isinstance(value, NonTensorData):
-        return _to_python(value.data)
-    if isinstance(value, NonTensorStack):
-        return [_to_python(item.data if hasattr(item, "data") else item) for item in value]
-    if isinstance(value, dict):
-        return {key: _to_python(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return tuple(_to_python(item) for item in value)
-    if isinstance(value, list):
-        return [_to_python(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if hasattr(value, "tolist"):
-        return value.tolist()
-    if hasattr(value, "item"):
-        return value.item()
-    return value
-
-
-def _canonical_drmas_agent_id(agent_name: Any) -> str:
-    name = str(_to_python(agent_name))
-    return DRMAS_AGENT_IDS.get(name, name)
-
-
-def _flatten_token_ids(token_ids: Any) -> list[int]:
-    token_ids = _to_python(token_ids)
-    if isinstance(token_ids, list) and token_ids and isinstance(token_ids[0], list):
-        token_ids = token_ids[0]
-    return [int(token_id) for token_id in token_ids]
+    def _write_online_turns(self, runtime: TrajWeaveAgentLoopRuntimeConfig, rows: list[dict[str, Any]]) -> None:
+        if not rows or not runtime.capture_online_turns or not runtime.run_dir or not runtime.run_id:
+            return
+        path = Path(str(runtime.run_dir)) / "trajectories" / "online_turns" / f"worker-{os.getpid()}.jsonl"
+        writer = JsonlWriter(path)
+        for row in rows:
+            writer.write({"run_id": runtime.run_id, **row})
