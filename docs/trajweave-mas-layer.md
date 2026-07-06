@@ -16,6 +16,29 @@ TrajWeave keeps VERL as the training backend and adds a separate MAS layer for m
 | `trajweave.recipes` | Compose modules into runnable paper recipes. | Shared abstractions that belong in core modules. |
 | `trajweave.cli` / `trajweave.runner` | Load YAML and run one configured recipe. | Recipe internals or VERL trainer implementation. |
 
+## Recipe Namespaces
+
+Every paper recipe is registered through `trajweave.recipes.registry`. New recipes should use a dotted namespace:
+
+```text
+<paper_or_algorithm>.<scenario>.<backend_or_size>
+```
+
+Examples:
+
+```text
+drmas.math.verl_tiny
+drmas.search.verl_tiny
+maporl.debate_math.verl_tiny
+```
+
+Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new examples should live under algorithm folders:
+
+```text
+examples/trajweave/configs/drmas/
+examples/trajweave/configs/maporl/
+```
+
 ## DrMAS First Slice
 
 ```mermaid
@@ -106,6 +129,47 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config examples/trajweave/configs/doctor_mas_search_smoke.yaml
 ```
 
+## MAPoRL Debate Math Slice
+
+```mermaid
+flowchart LR
+    A[MathTask] --> B[MAPoRLDebateOrchestra]
+    B --> C[Agent 0]
+    B --> D[Agent 1]
+    C --> E[Shared Debate Context]
+    D --> E
+    E --> F[Consensus Aggregation]
+    F --> G[MathEnvironment.evaluate]
+    G --> H[MAPoRLScoreBonusCreditAssigner]
+    H --> I[TrainingSample]
+    I --> J[VERL single-model launch]
+```
+
+The first MAPoRL slice is intentionally a v1 single-model approximation:
+
+1. Multiple solver agents run a fixed fully connected debate protocol.
+2. Each agent sees previous messages from the shared context.
+3. Consensus can stop the debate early.
+4. The environment computes final task success.
+5. `MAPoRLScoreBonusCreditAssigner` applies final success plus correct-turn and consensus bonuses.
+6. The VERL launch path uses one shared policy and the `trajweave_maporl_single_model` extension name.
+
+Run the smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/maporl/debate_math_smoke.yaml
+```
+
+Prepare the VERL tiny launch:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
+```
+
+This slice does not yet reproduce MAPoRL's heterogeneous multi-model trainer, per-turn value heads, adapter routing, or custom PPOv2 update schedule.
+
 ## YAML Launch Path
 
 Every new recipe should have a YAML config under `examples/trajweave/configs/`. The intended user path is:
@@ -131,6 +195,10 @@ Current examples:
 | `doctor_mas_math_verl_export.yaml` | Optional DataProto export and VERL trainer dry-run command generation. |
 | `doctor_mas_math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
 | `doctor_mas_math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
+| `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |
+| `drmas/search_verl_tiny.yaml` | Namespaced DrMAS Search VERL tiny dry-run config. |
+| `maporl/debate_math_smoke.yaml` | MAPoRL v1 debate rollout and score/bonus credit smoke. |
+| `maporl/debate_math_verl_tiny.yaml` | MAPoRL v1 single-model VERL tiny dry-run config. |
 
 The VERL path currently exposes three integration boundaries:
 

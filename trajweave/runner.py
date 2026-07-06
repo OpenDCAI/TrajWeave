@@ -21,6 +21,8 @@ from trajweave.recipes.doctor_mas.search_smoke import (
 )
 from trajweave.recipes.doctor_mas.train_tiny import TrainConfig, run_training
 from trajweave.recipes.drmas_native import build_drmas_native_launch_overrides, recipe_spec
+from trajweave.recipes.maporl import build_maporl_launch_overrides, run_debate_math_smoke
+from trajweave.recipes.registry import resolve_recipe
 from trajweave.rollout.engine import RolloutEngine, RolloutResult
 
 
@@ -42,18 +44,32 @@ def run_from_config_path(path: str | Path) -> dict[str, Any]:
 
 def run_from_config(config: dict[str, Any], config_path: str | None = None) -> dict[str, Any]:
     recipe = _recipe_name(config)
+    recipe_definition = resolve_recipe(recipe)
     mode = _mode(config)
     prepared_assets = _maybe_prepare_assets(config)
-    if _is_drmas_native_recipe(recipe):
+    if recipe_definition.family == "drmas_native":
         output: dict[str, Any] = {
             "config_path": config_path,
             "recipe": recipe,
+            "canonical_recipe": recipe_definition.name,
             "mode": mode,
             "drmas_native": _drmas_native_summary(config, recipe),
         }
         if prepared_assets:
             output["prepared_assets"] = prepared_assets
         _maybe_prepare_drmas_native_verl_launch(config, output, config_path=config_path)
+        return output
+    if recipe_definition.family == "maporl" and mode == "verl_train":
+        output = {
+            "config_path": config_path,
+            "recipe": recipe,
+            "canonical_recipe": recipe_definition.name,
+            "mode": mode,
+            "maporl": _maporl_summary(config),
+        }
+        if prepared_assets:
+            output["prepared_assets"] = prepared_assets
+        _maybe_prepare_maporl_verl_launch(config, output, config_path=config_path)
         return output
     if mode == "train_tiny":
         result = _run_tiny_training(config, config_path=config_path)
@@ -88,6 +104,8 @@ def _mode(config: dict[str, Any]) -> str:
 
 
 def _run_rollout_recipe(config: dict[str, Any], recipe: str):
+    recipe_definition = resolve_recipe(recipe)
+    runtime_recipe = recipe_definition.runtime_recipe
     rollout_cfg = config.get("rollout", {})
     team_cfg = config.get("team", {})
     backend_cfg = config.get("backend", {})
@@ -96,7 +114,7 @@ def _run_rollout_recipe(config: dict[str, Any], recipe: str):
     backend_type = str(backend_cfg.get("type", "rule"))
     device = str(backend_cfg.get("device", "cpu"))
 
-    if recipe == "doctor_mas_math":
+    if runtime_recipe == "doctor_mas_math":
         if backend_type in {"rule", "tiny-torch"}:
             return run_smoke(
                 backend=backend_type,
@@ -105,22 +123,45 @@ def _run_rollout_recipe(config: dict[str, Any], recipe: str):
                 max_turns=max_turns,
             )
         engine = _build_custom_engine(
-            recipe=recipe,
+            recipe=runtime_recipe,
             team=default_team(max_turns=max_turns),
             backend_cfg=backend_cfg,
         )
         result = engine.run(default_math_tasks(), rollouts_per_task=rollouts_per_task)
         return _summary_from_result(result), result
-    if recipe == "doctor_mas_search":
+    if runtime_recipe == "doctor_mas_search":
         if backend_type == "rule":
             return run_search_smoke(rollouts_per_task=rollouts_per_task, max_turns=max_turns)
         engine = _build_custom_engine(
-            recipe=recipe,
+            recipe=runtime_recipe,
             team=default_search_team(max_turns=max_turns),
             backend_cfg=backend_cfg,
         )
         result = engine.run(default_search_tasks(), rollouts_per_task=rollouts_per_task)
         return _summary_from_result(result), result
+    if runtime_recipe == "maporl_debate_math":
+        maporl_cfg = config.get("maporl", {})
+        protocol_cfg = config.get("protocol", {})
+        credit_cfg = config.get("credit", {})
+        agent_count = int(config.get("maporl", {}).get("agent_count", team_cfg.get("agent_count", 2)))
+        consensus_threshold = int(
+            protocol_cfg.get(
+                "consensus_threshold",
+                maporl_cfg.get("consensus_threshold", agent_count),
+            )
+        )
+        return run_debate_math_smoke(
+            backend=backend_type,
+            device=device,
+            agent_count=agent_count,
+            rollouts_per_task=rollouts_per_task,
+            max_turns=max_turns,
+            consensus_threshold=consensus_threshold,
+            early_stop=bool(protocol_cfg.get("early_stop", maporl_cfg.get("early_stop", True))),
+            correct_turn_bonus=float(credit_cfg.get("correct_turn_bonus", maporl_cfg.get("correct_turn_bonus", 0.25))),
+            consensus_bonus=float(credit_cfg.get("consensus_bonus", maporl_cfg.get("consensus_bonus", 0.25))),
+            baseline_scope=str(credit_cfg.get("baseline_scope", maporl_cfg.get("baseline_scope", "policy_group"))),
+        )
     raise ValueError(f"Unknown recipe: {recipe}")
 
 
@@ -287,8 +328,38 @@ def _maybe_prepare_drmas_native_verl_launch(
     output["verl_launch"] = launcher.run()
 
 
+def _maybe_prepare_maporl_verl_launch(
+    config: dict[str, Any],
+    output: dict[str, Any],
+    *,
+    config_path: str | None,
+) -> None:
+    verl_cfg = config.get("verl", {})
+    if not verl_cfg.get("enabled", True):
+        output["verl_launch"] = {"status": "disabled"}
+        return
+    from trajweave.backends.verl.launcher import VerlTrainerLaunchConfig, VerlTrainerLauncher
+
+    overrides = build_maporl_launch_overrides(config, config_path=config_path)
+    launch_config = VerlTrainerLaunchConfig(
+        python=str(verl_cfg.get("python", VerlTrainerLaunchConfig.python)),
+        module=str(verl_cfg.get("module", "trajweave.backends.verl.main_ppo")),
+        overrides=overrides,
+        env=dict(verl_cfg.get("env", {})),
+        cwd=verl_cfg.get("cwd"),
+        execute=bool(verl_cfg.get("execute", False)),
+        stdout_path=verl_cfg.get("stdout_path"),
+        stderr_path=verl_cfg.get("stderr_path"),
+    )
+    launcher = VerlTrainerLauncher(launch_config)
+    command_file = verl_cfg.get("command_file")
+    if command_file:
+        output["verl_command_file"] = str(launcher.write_command_file(command_file))
+    output["verl_launch"] = launcher.run()
+
+
 def _is_drmas_native_recipe(recipe: str) -> bool:
-    return recipe in {"drmas_native_math", "doctor_mas_native_math", "drmas_native_search", "doctor_mas_native_search"}
+    return resolve_recipe(recipe).family == "drmas_native"
 
 
 def _drmas_native_summary(config: dict[str, Any], recipe: str) -> dict[str, Any]:
@@ -301,6 +372,23 @@ def _drmas_native_summary(config: dict[str, Any], recipe: str) -> dict[str, Any]
         "orchestra_type": spec.orchestra_type,
         "coordination_protocol": spec.coordination_protocol,
         "group_by_agent_id": True,
+    }
+
+
+def _maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
+    maporl_cfg = config.get("maporl", {})
+    team_cfg = config.get("team", {})
+    protocol_cfg = config.get("protocol", {})
+    agent_count = int(maporl_cfg.get("agent_count", team_cfg.get("agent_count", 2)))
+    return {
+        "task": "math",
+        "runtime_recipe": "maporl_debate_math",
+        "agent_ids": list(maporl_cfg.get("agent_ids", [f"agent_{idx}" for idx in range(agent_count)])),
+        "coordination_protocol": "debate_consensus",
+        "communication_graph": protocol_cfg.get("communication_graph", "fully_connected"),
+        "aggregation": protocol_cfg.get("aggregation", "consensus"),
+        "credit_allocator": "maporl_score_bonus",
+        "single_model_only": True,
     }
 
 

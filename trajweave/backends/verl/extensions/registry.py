@@ -26,6 +26,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
 
     credit_allocator = _get(trajweave, "credit_allocator", default=None)
     recipe = _get(trajweave, "recipe", default=None)
+    if credit_allocator == "maporl_score_bonus" or recipe == "maporl_debate_math":
+        return ("trajweave_maporl_single_model",)
     if credit_allocator == "drmas_agent_wise_grpo" or recipe in {"doctor_mas_math", "doctor_mas_search"}:
         return ("drmas_agent_wise_grpo",)
     return ()
@@ -47,10 +49,12 @@ def _normalize_names(value: Any) -> tuple[str, ...]:
 
 def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.drmas import apply_drmas_agent_wise_grpo_patch
+    from trajweave.backends.verl.extensions.maporl import apply_maporl_single_model_patch
     from trajweave.backends.verl.extensions.nested_compat import apply_tq_nested_compat_patch
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
+        "trajweave_maporl_single_model": apply_maporl_single_model_patch,
         "tq_nested_compat": apply_tq_nested_compat_patch,
     }
 

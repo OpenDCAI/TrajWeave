@@ -108,7 +108,7 @@ Implemented boundaries:
 - `trajweave.credit`: global reward broadcast and DrMAS agent-wise GRPO normalization.
 - `trajweave.backends`: rule, tiny torch, optional HF Transformers, and VERL adapters.
 - `trajweave.backends.verl`: optional `TrainingSample` -> VERL `DataProto` bridge, trainer launch adapter, and AgentLoopManager bridge.
-- `trajweave.recipes.doctor_mas`: composition layer for the runnable recipe.
+- `trajweave.recipes`: namespaced paper recipes and the recipe registry.
 
 Run from a YAML config:
 
@@ -122,6 +122,27 @@ Run the DrMAS Search smoke:
 ```bash
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config examples/trajweave/configs/doctor_mas_search_smoke.yaml
+```
+
+Prepare the namespaced DrMAS VERL tiny launch:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/drmas/math_verl_tiny.yaml
+```
+
+Run the MAPoRL debate smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/maporl/debate_math_smoke.yaml
+```
+
+Prepare the MAPoRL v1 VERL tiny launch:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config examples/trajweave/configs/maporl/debate_math_verl_tiny.yaml
 ```
 
 Run the legacy direct Math smoke:
@@ -219,6 +240,22 @@ Required fields for each paper recipe:
 | Known limits      | Not yet connected to a real search API, real LLM policy, or VERL GPU training run. |
 
 中文说明：Search 场景现在已经不是空白了，已经有 Verifier / Searcher / Answer 三 Agent 的固定协议和本地工具环境。它验证的是 DrMAS Search 的数据结构和 credit 链路；还没验证真实检索器、真实 LLM 和分布式训练。
+
+### MAPoRL-style Debate Math
+
+| Item              | Description                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| Paper             | MAPoRL-style multi-agent collaborative post-training direction.             |
+| Contribution      | Algorithmic recipe for multi-agent debate, consensus, and trajectory-level reward shaping. |
+| MAS pattern       | Multiple solver agents answer across rounds, share previous messages, and stop on consensus. |
+| TrajWeave mapping | `MAPoRLDebateOrchestra` + math env + `MAPoRLScoreBonusCreditAssigner`.     |
+| Training path     | `MultiAgentTrajectory` -> score/bonus shaped rewards -> agent-wise samples -> VERL single-model launch. |
+| Inference path    | Task -> debate agents -> fully connected message history -> consensus final answer. |
+| Current status    | `smoke`: deterministic debate rollout and namespaced VERL dry-run are supported. |
+| Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/maporl/debate_math_smoke.yaml`. |
+| Known limits      | This is v1 single-model/shared-policy integration; heterogeneous models, per-turn value heads, adapter routing, and exact MAPoRL PPOv2 parity are not implemented yet. |
+
+中文说明：MAPoRL 当前接入的是第一阶段版本，用来验证 TrajWeave 能表达 debate、共识提前停止和 score/bonus reward shaping。它不是原仓库完整异构多模型 PPOv2 复刻；下一步需要在 VERL 后端继续补 adapter/value-head 路由和 per-turn/per-agent loss mask。
 
 ## Repository Layout
 

@@ -1,0 +1,24 @@
+recipe: maporl_debate_math
+mode: smoke
+
+maporl:
+  agent_count: 2
+  consensus_threshold: 2
+
+backend:
+  type: rule
+  device: cpu
+
+team:
+  agent_count: 2
+  max_turns: 2
+
+protocol:
+  type: debate
+  communication_graph: fully_connected
+  aggregation: consensus
+  early_stop: true
+  consensus_threshold: 2
+
+rollout:
+  rollouts_per_task: 1

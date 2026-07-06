@@ -21,6 +21,8 @@ from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
 from verl.utils.chat_template import apply_chat_template
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 
+from trajweave.credit.maporl import shape_maporl_reward
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,12 +86,10 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
         return super().generate_sequences(prompts)
 
     def _validate_trajweave_runtime(self) -> None:
-        recipe = self.trajweave_runtime_config.recipe
-        if recipe and recipe not in {"doctor_mas_math", "doctor_mas_search"}:
-            raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
-        backend = self.trajweave_runtime_config.agent_loop_backend
-        if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:
-            raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
+        _validate_agent_loop_backend(
+            recipe=self.trajweave_runtime_config.recipe,
+            backend=self.trajweave_runtime_config.agent_loop_backend,
+        )
 
 
 @ray.remote
@@ -129,7 +129,11 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
             for session_id in range(n):
                 use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-                if runtime.recipe == "doctor_mas_search" and use_hf_local:
+                if runtime.recipe == "maporl_debate_math" and use_hf_local:
+                    outputs = self._build_hf_maporl_debate_math_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "maporl_debate_math":
+                    outputs = self._build_maporl_debate_math_outputs(prompt, session_id=session_id)
+                elif runtime.recipe == "doctor_mas_search" and use_hf_local:
                     outputs = self._build_hf_search_answer_outputs(prompt, session_id=session_id)
                 elif runtime.recipe == "doctor_mas_search":
                     outputs = self._build_search_answer_outputs(prompt, session_id=session_id)
@@ -186,6 +190,146 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
                 },
             ),
         ]
+
+    def _build_maporl_debate_math_outputs(
+        self,
+        prompt: dict[str, Any],
+        *,
+        session_id: int = 0,
+    ) -> list[AgentLoopOutput]:
+        raw_prompt = _to_python(prompt.get("raw_prompt", []))
+        reward_model = _to_python(prompt.get("reward_model", {})) or {}
+        ground_truth = str(reward_model.get("ground_truth", "2"))
+        prompt_ids = self._encode_prompt(raw_prompt)
+        is_correct = session_id % 2 == 0
+        reward = 1.0 if is_correct else 0.0
+        agent_ids = self._maporl_agent_ids()
+        max_rounds = self._maporl_max_rounds()
+        consensus_threshold = self._maporl_consensus_threshold(default=len(agent_ids))
+        early_stop = self._maporl_early_stop()
+        correct_turn_bonus, consensus_bonus = self._maporl_bonus_config()
+        consensus_answer = ground_truth if is_correct else "__wrong__"
+        consensus_reached = bool(is_correct)
+        outputs: list[AgentLoopOutput] = []
+        running_prompt_ids = list(prompt_ids)
+        metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
+        for round_id in range(max_rounds):
+            round_answer = ground_truth if is_correct else "__wrong__"
+            for agent_index, agent_id in enumerate(agent_ids):
+                text = f" Agent {agent_id} round {round_id}. Final answer: {round_answer}"
+                response_ids = self._encode_text(text)
+                shaped_reward, reward_metadata = shape_maporl_reward(
+                    reward,
+                    agent_answer=round_answer,
+                    consensus_answer=consensus_answer,
+                    consensus_reached=consensus_reached,
+                    correct_turn_bonus=correct_turn_bonus,
+                    consensus_bonus=consensus_bonus,
+                )
+                outputs.append(
+                    AgentLoopOutput(
+                        prompt_ids=list(running_prompt_ids),
+                        response_ids=response_ids,
+                        response_mask=[1] * len(response_ids),
+                        reward_score=shaped_reward,
+                        num_turns=round_id + 1,
+                        metrics=metrics,
+                        extra_fields={
+                            "turn_scores": [],
+                            "tool_rewards": [],
+                            "trajweave_agent_name": agent_id,
+                            "trajweave_role": "solver",
+                            "agent_id": "shared",
+                            "policy_group": "shared",
+                            "agent_answer": round_answer,
+                            "consensus_answer": consensus_answer,
+                            "consensus_reached": consensus_reached,
+                            "communication_graph": "fully_connected",
+                            "aggregation": "consensus",
+                            "reward_extra_info": reward_metadata,
+                            "round_id": round_id,
+                            "agent_index": agent_index,
+                            "consensus_threshold": consensus_threshold,
+                        },
+                    )
+                )
+                running_prompt_ids = running_prompt_ids + response_ids
+            if consensus_reached and early_stop:
+                break
+
+        if outputs:
+            outputs[-1].extra_fields["final_consensus_turn"] = True
+        return outputs
+
+    def _build_hf_maporl_debate_math_outputs(
+        self,
+        prompt: dict[str, Any],
+        *,
+        session_id: int = 0,
+    ) -> list[AgentLoopOutput]:
+        raw_prompt = _to_python(prompt.get("raw_prompt", []))
+        prompt_ids = self._encode_prompt(raw_prompt)
+        is_correct = session_id % 2 == 0
+        reward = 1.0 if is_correct else 0.0
+        agent_ids = self._maporl_agent_ids()
+        max_rounds = self._maporl_max_rounds()
+        consensus_threshold = self._maporl_consensus_threshold(default=len(agent_ids))
+        early_stop = self._maporl_early_stop()
+        correct_turn_bonus, consensus_bonus = self._maporl_bonus_config()
+        reward_model = _to_python(prompt.get("reward_model", {})) or {}
+        ground_truth = str(reward_model.get("ground_truth", "2"))
+        round_answer = ground_truth if is_correct else "__wrong__"
+        consensus_answer = ground_truth if is_correct else "__wrong__"
+        consensus_reached = bool(is_correct)
+        outputs: list[AgentLoopOutput] = []
+        running_prompt_ids = list(prompt_ids)
+        metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=0.0, compute_score=0.0, num_preempted=-1)
+        for round_id in range(max_rounds):
+            for agent_index, agent_id in enumerate(agent_ids):
+                response_ids = self._generate_local_response_ids(running_prompt_ids)
+                shaped_reward, reward_metadata = shape_maporl_reward(
+                    reward,
+                    agent_answer=round_answer,
+                    consensus_answer=consensus_answer,
+                    consensus_reached=consensus_reached,
+                    correct_turn_bonus=correct_turn_bonus,
+                    consensus_bonus=consensus_bonus,
+                )
+                outputs.append(
+                    AgentLoopOutput(
+                        prompt_ids=list(running_prompt_ids),
+                        response_ids=response_ids,
+                        response_mask=[1] * len(response_ids),
+                        reward_score=shaped_reward,
+                        num_turns=round_id + 1,
+                        metrics=metrics,
+                        extra_fields={
+                            "turn_scores": [],
+                            "tool_rewards": [],
+                            "trajweave_agent_name": agent_id,
+                            "trajweave_role": "solver",
+                            "agent_id": "shared",
+                            "policy_group": "shared",
+                            "agent_answer": round_answer,
+                            "consensus_answer": consensus_answer,
+                            "consensus_reached": consensus_reached,
+                            "communication_graph": "fully_connected",
+                            "aggregation": "consensus",
+                            "reward_extra_info": reward_metadata,
+                            "round_id": round_id,
+                            "agent_index": agent_index,
+                            "consensus_threshold": consensus_threshold,
+                            "rollout_source": "hf_local_tq",
+                        },
+                    )
+                )
+                running_prompt_ids = running_prompt_ids + response_ids
+            if consensus_reached and early_stop:
+                break
+
+        if outputs:
+            outputs[-1].extra_fields["final_consensus_turn"] = True
+        return outputs
 
     def _build_hf_solver_verifier_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
         raw_prompt = _to_python(prompt.get("raw_prompt", []))
@@ -403,12 +547,48 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
         self._trajweave_local_model = model
         return self._trajweave_local_model
 
+    def _maporl_agent_ids(self) -> list[str]:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        ids = _get(agent_cfg, "agent_ids", default=None)
+        ids = _to_python(ids)
+        if ids:
+            return [str(item) for item in ids]
+        return ["agent_0", "agent_1"]
+
+    def _maporl_max_rounds(self) -> int:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
+        return int(_get(maporl_cfg, "max_rounds", default=2))
+
+    def _maporl_consensus_threshold(self, *, default: int) -> int:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
+        return int(_get(maporl_cfg, "consensus_threshold", default=default))
+
+    def _maporl_early_stop(self) -> bool:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
+        return bool(_get(maporl_cfg, "early_stop", default=True))
+
+    def _maporl_bonus_config(self) -> tuple[float, float]:
+        agent_cfg = _get(self.config, "agent", default={}) or {}
+        orchestra_cfg = _get(agent_cfg, "orchestra", default={}) or {}
+        maporl_cfg = _get(orchestra_cfg, "maporl", default={}) or {}
+        return (
+            float(_get(maporl_cfg, "correct_turn_bonus", default=0.25)),
+            float(_get(maporl_cfg, "consensus_bonus", default=0.25)),
+        )
+
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         final_output = outputs[-1]
         if final_output.reward_score is not None:
             for output in outputs[:-1]:
-                output.reward_score = final_output.reward_score
-                output.extra_fields["reward_extra_info"] = final_output.extra_fields.get("reward_extra_info", {})
+                if output.reward_score is None:
+                    output.reward_score = final_output.reward_score
+                output.extra_fields.setdefault("reward_extra_info", final_output.extra_fields.get("reward_extra_info", {}))
 
         uid, session_id = str(_to_python(kwargs["uid"])), int(kwargs["session_id"])
         keys, fields, tags = [], [], []
@@ -445,6 +625,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(AgentLoopWorker):
             field["response_mask"] = response_mask
             field["agent_name"] = output.extra_fields.get("trajweave_agent_name", field.get("agent_name"))
             field["role"] = output.extra_fields.get("trajweave_role", field["agent_name"])
+            field["policy_group"] = output.extra_fields.get("policy_group", field.get("policy_group", field["agent_name"]))
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
             field["turn_id"] = index
@@ -486,6 +667,18 @@ def _get(config: Any, key: str, default: Any = None) -> Any:
         return config.get(key, default)
     except (AttributeError, TypeError):
         return getattr(config, key, default)
+
+
+def _validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
+    if recipe and recipe not in {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math"}:
+        raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
+    if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:
+        raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
+    if recipe and backend == "verl_tq":
+        raise ValueError(
+            "TrajWeave MASRL recipes require agent_loop_backend in {'synthetic_tq', 'hf_local_tq'}; "
+            "VERL native verl_tq does not emit agent_id/traj_uid/turn_id metadata required by agent-wise credit."
+        )
 
 
 def _batch_item(value: Any, index: int) -> Any:

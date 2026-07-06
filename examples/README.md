@@ -13,6 +13,10 @@ trajweave/configs/doctor_mas_math_tiny_train.yaml
 trajweave/configs/doctor_mas_math_verl_export.yaml
 trajweave/configs/doctor_mas_math_verl_agent_loop_dryrun.yaml
 trajweave/configs/doctor_mas_math_hf_gpu_smoke.yaml
+trajweave/configs/drmas/math_verl_tiny.yaml
+trajweave/configs/drmas/search_verl_tiny.yaml
+trajweave/configs/maporl/debate_math_smoke.yaml
+trajweave/configs/maporl/debate_math_verl_tiny.yaml
 ```
 
 Run a config with:
