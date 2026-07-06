@@ -8,7 +8,7 @@ TrajWeave is an early-stage Multi-Agent LLM Reinforcement Learning framework bui
 
 The goal is not to maintain a full VERL mirror. TrajWeave keeps the core distributed RL runtime from VERL, then adds a MASRL layer for training systems made of multiple LLM agents, such as solver, verifier, planner, executor, critic, searcher, and tool-using agents.
 
-> Current status: first configurable TrajWeave MAS slice. The VERL backend is retained, DrMAS-style Math and Search recipes run through TrajWeave trajectory collection and agent-wise credit assignment, and YAML configs can launch smoke rollouts, tiny torch training, VERL `DataProto` export, VERL trainer dry-run scripts, and a custom VERL `AgentLoopManager` import bridge.
+> Current status: first configurable TrajWeave MAS slice. The VERL backend is retained, DrMAS-style Math and Search recipes run through TrajWeave trajectory collection and agent-wise credit assignment, YAML configs can launch smoke rollouts, tiny torch training, VERL `DataProto` export, trainer dry-run scripts, and tiny 1-step VERL training through the TrajWeave AgentLoop bridge. Runtime VERL customization is funneled through `PPOExtensionHooks` instead of scattering paper logic across trainer patches.
 
 ## Why TrajWeave
 
@@ -88,6 +88,7 @@ TrajWeave adds a MASRL layer above the retained backend:
 | `MultiAgentTrajectory`   | Step-level agent turns, tool calls, rewards, final outcome.   |
 | `CreditAssigner`         | Converts global/per-agent rewards into training samples.      |
 | `BackendAdapter`         | Bridges MASRL samples into VERL `DataProto` training batches. |
+| `PPOExtensionHooks`      | Declares VERL-side batch fields, advantage groups, and algorithm hooks. |
 | YAML runner              | Starts a recipe from one config file instead of ad-hoc scripts. |
 
 The first implementation should keep these interfaces small and concrete. Generality should come from real recipes, not from speculative abstraction.
@@ -217,13 +218,13 @@ Required fields for each paper recipe:
 | Contribution      | Algorithmic recipe centered on agent-wise reward statistics and advantage.  |
 | MAS pattern       | Solver produces an answer, verifier approves or asks for refinement.        |
 | TrajWeave mapping | `SolverVerifierOrchestra` + math env + `DoctorMASCreditAssigner`.          |
-| Training path     | `MultiAgentTrajectory` -> agent-wise GRPO advantage -> tiny torch policy / VERL export. |
+| Training path     | `MultiAgentTrajectory` -> agent-wise GRPO advantage -> tiny torch policy / VERL tiny trainer. |
 | Inference path    | Task -> orchestrator -> solver/verifier turns -> final answer.              |
-| Current status    | `tiny-train`: random held-out tiny policy eval reached 1.000 success rate; VERL AgentLoopManager bridge import is validated. |
+| Current status    | `tiny-train` and 1-step VERL tiny GRPO smoke pass; DrMAS advantage now flows through `AgentWiseGRPOHooks`. |
 | Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/doctor_mas_math_tiny_train.yaml`. |
-| Known limits      | VERL RayPPO/GRPO real LLM training is not yet validated end-to-end on GPU; the custom AgentLoopManager currently delegates to VERL TransferQueue workers instead of emitting native TrajWeave multi-agent turns into TransferQueue. |
+| Known limits      | This is still a tiny-model smoke, not full Qwen/Llama DrMAS paper-scale training; Search native VERL training and large distributed runs remain to be validated. |
 
-中文说明：当前 DrMAS Math 不是完整论文全量复现，而是先把 DrMAS 最关键的 agent-wise credit assignment 复刻成 TrajWeave recipe。已经验证 Solver-Verifier 多 Agent 轨迹可以进入奖励计算、按 agent 分组归因，并驱动 tiny torch policy 真实更新。VERL 侧目前已有 `DataProto` export、trainer launch adapter 和 `TrajWeaveAgentLoopManager` 动态加载入口；下一步需要实现 TrajWeave 原生 TransferQueue worker，并在 GPU 环境把真实小 LLM 的 RayPPO/GRPO 训练跑通。
+中文说明：当前 DrMAS Math 不是完整论文全量复现，而是先把 DrMAS 最关键的 agent-wise credit assignment 复刻成 TrajWeave recipe。已经验证 Solver-Verifier 多 Agent 轨迹可以进入奖励计算、按 agent 分组归因，并驱动 tiny torch policy 和 tiny VERL 1-step GRPO 真实更新。VERL 侧目前已有 `DataProto` export、trainer launch adapter、`TrajWeaveAgentLoopManager` 动态加载入口，以及 `AgentWiseGRPOHooks` 这一层稳定扩展点。
 
 ### DrMAS-style Search-Answer
 
@@ -249,9 +250,9 @@ Required fields for each paper recipe:
 | Contribution      | Algorithmic recipe for multi-agent debate, consensus, and trajectory-level reward shaping. |
 | MAS pattern       | Multiple solver agents answer across rounds, share previous messages, and stop on consensus. |
 | TrajWeave mapping | `MAPoRLDebateOrchestra` + math env + `MAPoRLScoreBonusCreditAssigner`.     |
-| Training path     | `MultiAgentTrajectory` -> score/bonus shaped rewards -> agent-wise samples -> VERL single-model launch. |
+| Training path     | `MultiAgentTrajectory` -> score/bonus shaped rewards -> shared-policy samples -> VERL single-model tiny trainer. |
 | Inference path    | Task -> debate agents -> fully connected message history -> consensus final answer. |
-| Current status    | `smoke`: deterministic debate rollout and namespaced VERL dry-run are supported. |
+| Current status    | deterministic debate smoke and 1-step VERL tiny smoke pass; MAPoRL reward shaping enters the VERL batch. |
 | Run command       | `PYTHONPATH=. python3 -m trajweave.cli.run --config examples/trajweave/configs/maporl/debate_math_smoke.yaml`. |
 | Known limits      | This is v1 single-model/shared-policy integration; heterogeneous models, per-turn value heads, adapter routing, and exact MAPoRL PPOv2 parity are not implemented yet. |
 

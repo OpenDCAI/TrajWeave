@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
 import numpy as np
 import torch
 
+from trajweave.backends.verl.extensions.hooks import AgentWiseGRPOHooks, extension_hooks_for_config
 from verl.workers.engine_workers import ActorRolloutRefWorker
 
 
@@ -43,6 +43,8 @@ def _patch_core_grpo() -> None:
     if getattr(core_algos.compute_grpo_outcome_advantage, "_trajweave_drmas_patch", False):
         return
 
+    hooks = AgentWiseGRPOHooks()
+
     def compute_grpo_outcome_advantage(
         token_level_rewards: torch.Tensor,
         response_mask: torch.Tensor,
@@ -53,53 +55,15 @@ def _patch_core_grpo() -> None:
         config: Any = None,
         group_by_agent_id: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        scores = token_level_rewards.sum(dim=-1)
-        id2score: dict[Any, list[torch.Tensor]] = defaultdict(list)
-        id2mean: dict[Any, torch.Tensor] = {}
-        id2std: dict[Any, torch.Tensor] = {}
-        traj_accumulator: dict[tuple[Any, Any], list[torch.Tensor]] = defaultdict(list)
-        traj2avg: dict[tuple[Any, Any], torch.Tensor] = {}
-
-        with torch.no_grad():
-            bsz = scores.shape[0]
-            if traj_index is None:
-                traj_index = np.array([str(i) for i in range(bsz)], dtype=object)
-
-            for i in range(bsz):
-                traj_accumulator[(index[i], traj_index[i])].append(scores[i])
-
-            for key, reward_list in traj_accumulator.items():
-                group_id, traj_id = key
-                if group_by_agent_id:
-                    id2score[group_id].extend(reward_list)
-                else:
-                    avg_score = torch.stack(reward_list).mean()
-                    traj2avg[(group_id, traj_id)] = avg_score
-                    id2score[group_id].append(avg_score)
-
-            if not group_by_agent_id:
-                for i in range(bsz):
-                    scores[i] = traj2avg[(index[i], traj_index[i])]
-
-            for group_id, group_scores in id2score.items():
-                if len(group_scores) == 1:
-                    id2mean[group_id] = scores.new_tensor(0.0)
-                    id2std[group_id] = scores.new_tensor(1.0)
-                elif len(group_scores) > 1:
-                    scores_tensor = torch.stack(group_scores)
-                    id2mean[group_id] = torch.mean(scores_tensor)
-                    id2std[group_id] = torch.std(scores_tensor)
-                else:
-                    raise ValueError(f"no score in prompt index: {group_id}")
-
-            for i in range(bsz):
-                if norm_adv_by_std_in_grpo:
-                    scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
-                else:
-                    scores[i] = scores[i] - id2mean[index[i]]
-            scores = scores.unsqueeze(-1) * response_mask
-
-        return scores, scores
+        return hooks.compute_grpo_outcome_advantage(
+            token_level_rewards=token_level_rewards,
+            response_mask=response_mask,
+            index=index,
+            traj_index=traj_index,
+            epsilon=epsilon,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            group_by_agent_id=group_by_agent_id,
+        )
 
     compute_grpo_outcome_advantage._trajweave_drmas_patch = True  # type: ignore[attr-defined]
     core_algos.compute_grpo_outcome_advantage = compute_grpo_outcome_advantage
@@ -113,6 +77,7 @@ def _patch_ray_compute_advantage() -> None:
         return
 
     original_compute_advantage = ray_trainer.compute_advantage
+    hooks = AgentWiseGRPOHooks()
 
     def compute_advantage(
         data,
@@ -134,24 +99,16 @@ def _patch_ray_compute_advantage() -> None:
                 config=config,
             )
 
-        if "response_mask" not in data.batch.keys():
-            data.batch["response_mask"] = ray_trainer.compute_response_mask(data)
-
-        group_by_agent_id = bool(_config_get(config, "group_by_agent_id", False))
-        group_index = _drmas_grpo_group_index(data, group_by_agent_id)
-        traj_index = data.non_tensor_batch.get("traj_uid")
-        advantages, returns = core_algos.compute_grpo_outcome_advantage(
-            token_level_rewards=data.batch["token_level_rewards"],
-            response_mask=data.batch["response_mask"],
-            index=group_index,
-            traj_index=traj_index,
+        return hooks.compute_advantage(
+            data,
+            adv_estimator=adv_estimator,
+            gamma=gamma,
+            lam=lam,
+            num_repeat=num_repeat,
             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
             config=config,
-            group_by_agent_id=group_by_agent_id,
+            fallback=original_compute_advantage,
         )
-        data.batch["advantages"] = advantages
-        data.batch["returns"] = returns
-        return data
 
     compute_advantage._trajweave_drmas_patch = True  # type: ignore[attr-defined]
     ray_trainer.compute_advantage = compute_advantage
@@ -388,18 +345,17 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
         self.resource_pool_manager = tb.ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=self.mapping)
 
     def patched_compute_advantage(self, batch, metrics: dict):
-        fields = ["uid", "response_mask", "rm_scores", "rollout_log_probs", "old_log_probs", "ref_log_prob", "values"]
-        if self.config.algorithm.get("group_by_agent_id", False):
-            fields.extend(["agent_id", "traj_uid"])
+        hooks = extension_hooks_for_config(self.config)
+        fields = list(hooks.tq_select_fields("advantage", config=self.config.algorithm))
         data = tb.tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
 
         response_mask = data["response_mask"]
         data = tb.DataProto(batch=_tensordict_to_padded_tensor_compat(data))
         data.batch["token_level_scores"] = data.batch["rm_scores"]
         data.non_tensor_batch["uid"] = _pop_tq_field_as_object_array(data, "uid")
-        if self.config.algorithm.get("group_by_agent_id", False):
-            data.non_tensor_batch["agent_id"] = _pop_tq_field_as_object_array(data, "agent_id")
-            data.non_tensor_batch["traj_uid"] = _pop_tq_field_as_object_array(data, "traj_uid")
+        for field in hooks.batch_schema_fields("advantage"):
+            if field in data.batch:
+                data.non_tensor_batch[field] = _pop_tq_field_as_object_array(data, field)
 
         if self.config.algorithm.use_kl_in_reward:
             data, kl_metrics = tb.apply_kl_penalty(
@@ -449,20 +405,6 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
     tb.PPOTrainer._init_resource_pool_mgr = patched_init_resource_pool_mgr
     tb.PPOTrainer._compute_advantage = patched_compute_advantage
     tb.PPOTrainer._trajweave_drmas_patch = True
-
-
-def _drmas_grpo_group_index(data, group_by_agent_id: bool) -> np.ndarray:
-    if not group_by_agent_id:
-        return data.non_tensor_batch["uid"]
-    if "agent_id" not in data.non_tensor_batch:
-        raise KeyError("algorithm.group_by_agent_id=True requires non_tensor_batch['agent_id'].")
-    return np.array(
-        [
-            f"{uid}_{agent_id}"
-            for uid, agent_id in zip(data.non_tensor_batch["uid"], data.non_tensor_batch["agent_id"], strict=True)
-        ],
-        dtype=object,
-    )
 
 
 def _is_trajweave_self_managed_tq(config: Any) -> bool:
