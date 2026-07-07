@@ -262,7 +262,34 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             tags=tags,
             partition_id="train" if not validate else "val",
         )
+        self._attach_worker_group_stats(online_turn_rows)
         self._write_online_turns(runtime, online_turn_rows)
+
+    def _attach_worker_group_stats(self, rows: list[dict[str, Any]]) -> None:
+        stats: dict[str, dict[str, float]] = {}
+        for row in rows:
+            metadata = row.get("metadata", {})
+            if metadata.get("trace_only"):
+                continue
+            group_id = str(row.get("worker_group", ""))
+            if not group_id:
+                continue
+            group_stats = stats.setdefault(group_id, {"count": 0.0, "reward_sum": 0.0, "response_len_sum": 0.0})
+            group_stats["count"] += 1
+            reward_score = row.get("reward_score")
+            if reward_score is not None:
+                group_stats["reward_sum"] += float(reward_score)
+            group_stats["response_len_sum"] += float(row.get("response_len") or 0)
+
+        for group_stats in stats.values():
+            count = max(group_stats["count"], 1.0)
+            group_stats["reward_mean"] = group_stats["reward_sum"] / count
+            group_stats["response_len_mean"] = group_stats["response_len_sum"] / count
+
+        for row in rows:
+            group_id = str(row.get("worker_group", ""))
+            if group_id in stats:
+                row.setdefault("metadata", {})["worker_group_batch_stats"] = dict(stats[group_id])
 
     def _write_online_turns(self, runtime: TrajWeaveAgentLoopRuntimeConfig, rows: list[dict[str, Any]]) -> None:
         if not rows or not runtime.capture_online_turns or not runtime.run_dir or not runtime.run_id:

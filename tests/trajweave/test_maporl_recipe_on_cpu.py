@@ -145,8 +145,18 @@ def test_maporl_verl_config_enables_multi_actor_trainer_for_trainable_groups():
                 "agent_loop_backend": "synthetic_tq",
                 "multi_actor_training": True,
                 "worker_groups": {
-                    "model_a": {"model_path": "/models/model-a", "trainable": True, "gpus": 1},
-                    "model_b": {"model_path": "/models/model-b", "trainable": True, "gpus": 1},
+                    "model_a": {
+                        "model_path": "/models/model-a",
+                        "tokenizer_path": "/models/shared-tokenizer",
+                        "trainable": True,
+                        "gpus": 1,
+                    },
+                    "model_b": {
+                        "model_path": "/models/model-b",
+                        "tokenizer_path": "/models/shared-tokenizer",
+                        "trainable": True,
+                        "gpus": 1,
+                    },
                 },
             },
             "verl": {
@@ -160,10 +170,19 @@ def test_maporl_verl_config_enables_multi_actor_trainer_for_trainable_groups():
     command = result["verl_launch"]["command"]
     assert "trainer.v1.trainer_mode=sync" not in command
     assert "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync" in command
+    assert "+trajweave.multi_actor.tokenizer_mode=shared" in command
     assert "+trajweave.multi_actor.enabled=true" in command
     assert "+trajweave.multi_actor.routing_field=worker_group" in command
+    assert (
+        "+agent.worker_groups=[{id:\"model_a\",trainable:true,model_path:\"/models/model-a\","
+        "tokenizer_path:\"/models/shared-tokenizer\",gpus:1},{id:\"model_b\",trainable:true,"
+        "model_path:\"/models/model-b\",tokenizer_path:\"/models/shared-tokenizer\",gpus:1}]"
+        in command
+    )
     assert result["maporl"]["native_multi_actor_training"] is True
     assert result["maporl"]["training_backend"] == "verl_v1_multi_actor_wg"
+    assert result["maporl"]["tokenizer_mode"] == "shared"
+    assert result["maporl"]["multi_actor_validation_status"] == "passed"
 
 
 def test_maporl_verl_config_uses_safe_worker_group_list_override_for_special_ids():
@@ -219,3 +238,102 @@ def test_maporl_verl_config_rejects_native_verl_tq_backend():
         assert "not verl_tq" in str(exc)
     else:
         raise AssertionError("MAPoRL full PPO should reject native verl_tq.")
+
+
+def test_maporl_multi_actor_requires_two_trainable_worker_groups():
+    try:
+        run_from_config(
+            {
+                "recipe": "maporl.debate_math.full_verl_tiny",
+                "mode": "verl_train",
+                "prepare": {"tiny_verl_assets": {"enabled": False}},
+                "maporl": {
+                    "agent_count": 2,
+                    "agent_ids": ["agent_0", "agent_1"],
+                    "model_ids": ["model_a", "model_b"],
+                    "agent_loop_backend": "synthetic_tq",
+                    "multi_actor_training": True,
+                    "worker_groups": {
+                        "model_a": {
+                            "model_path": "/models/model-a",
+                            "tokenizer_path": "/models/shared-tokenizer",
+                            "trainable": True,
+                        },
+                        "model_b": {
+                            "model_path": "/models/model-b",
+                            "tokenizer_path": "/models/shared-tokenizer",
+                            "trainable": False,
+                        },
+                    },
+                },
+                "verl": {"enabled": True, "execute": False},
+            }
+        )
+    except ValueError as exc:
+        assert "at least two trainable worker groups" in str(exc)
+    else:
+        raise AssertionError("MAPoRL multi_actor_training should require two trainable groups.")
+
+
+def test_maporl_multi_actor_requires_explicit_model_and_tokenizer_paths():
+    try:
+        run_from_config(
+            {
+                "recipe": "maporl.debate_math.full_verl_tiny",
+                "mode": "verl_train",
+                "prepare": {"tiny_verl_assets": {"enabled": False}},
+                "maporl": {
+                    "agent_count": 2,
+                    "agent_ids": ["agent_0", "agent_1"],
+                    "model_ids": ["model_a", "model_b"],
+                    "agent_loop_backend": "synthetic_tq",
+                    "multi_actor_training": True,
+                    "worker_groups": {
+                        "model_a": {"model_path": "/models/model-a", "trainable": True},
+                        "model_b": {"tokenizer_path": "/models/shared-tokenizer", "trainable": True},
+                    },
+                },
+                "verl": {"enabled": True, "execute": False},
+            }
+        )
+    except ValueError as exc:
+        message = str(exc)
+        assert "model_a.tokenizer_path" in message
+        assert "model_b.model_path" in message
+    else:
+        raise AssertionError("MAPoRL multi_actor_training should require explicit model/tokenizer paths.")
+
+
+def test_maporl_multi_actor_rejects_different_tokenizers_for_stable_path():
+    try:
+        run_from_config(
+            {
+                "recipe": "maporl.debate_math.full_verl_tiny",
+                "mode": "verl_train",
+                "prepare": {"tiny_verl_assets": {"enabled": False}},
+                "maporl": {
+                    "agent_count": 2,
+                    "agent_ids": ["agent_0", "agent_1"],
+                    "model_ids": ["model_a", "model_b"],
+                    "agent_loop_backend": "synthetic_tq",
+                    "multi_actor_training": True,
+                    "worker_groups": {
+                        "model_a": {
+                            "model_path": "/models/model-a",
+                            "tokenizer_path": "/models/tokenizer-a",
+                            "trainable": True,
+                        },
+                        "model_b": {
+                            "model_path": "/models/model-b",
+                            "tokenizer_path": "/models/tokenizer-b",
+                            "trainable": True,
+                        },
+                    },
+                },
+                "verl": {"enabled": True, "execute": False},
+            }
+        )
+    except ValueError as exc:
+        assert "identical tokenizer_path" in str(exc)
+    else:
+        raise AssertionError("MAPoRL stable multi_actor_training should reject different tokenizers.")

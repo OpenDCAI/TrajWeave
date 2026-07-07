@@ -29,6 +29,12 @@ def build_maporl_launch_overrides(
         group_id for group_id, group in worker_groups.items() if bool(group.get("trainable", True))
     )
     multi_actor_training = bool(maporl_cfg.get("multi_actor_training", len(trainable_worker_groups) > 1))
+    multi_actor_validation = validate_maporl_multi_actor_config(
+        maporl_cfg,
+        worker_groups=worker_groups,
+        model_ids=model_ids,
+        multi_actor_training=multi_actor_training,
+    )
     max_rounds = int(maporl_cfg.get("max_rounds", team_cfg.get("max_turns", 2)))
     consensus_threshold = int(
         protocol_cfg.get("consensus_threshold", maporl_cfg.get("consensus_threshold", len(agent_ids)))
@@ -98,6 +104,7 @@ def build_maporl_launch_overrides(
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
         f"+trajweave.multi_actor.enabled={str(multi_actor_training).lower()}",
         "+trajweave.multi_actor.routing_field=worker_group",
+        f"+trajweave.multi_actor.tokenizer_mode={multi_actor_validation['tokenizer_mode']}",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
     if worker_groups:
@@ -178,3 +185,69 @@ def _set_override(overrides: tuple[str, ...], key: str, value: str) -> tuple[str
     if not replaced:
         output.append(value)
     return tuple(output)
+
+
+def validate_maporl_multi_actor_config(
+    maporl_cfg: dict[str, Any],
+    *,
+    worker_groups: dict[str, dict[str, Any]],
+    model_ids: tuple[str, ...],
+    multi_actor_training: bool,
+) -> dict[str, Any]:
+    """Validate the stable MAPoRL multi-worker-group contract.
+
+    P0 intentionally supports same-tokenizer multi actor training only. Different
+    tokenizer vocabularies require a separate encoding/critic/ref boundary.
+    """
+
+    tokenizer_mode = str(maporl_cfg.get("tokenizer_mode", "shared"))
+    trainable_worker_groups = tuple(
+        group_id for group_id, group in worker_groups.items() if bool(group.get("trainable", True))
+    )
+    if not multi_actor_training:
+        return {
+            "status": "disabled",
+            "tokenizer_mode": tokenizer_mode,
+            "trainable_worker_groups": trainable_worker_groups,
+        }
+
+    if tokenizer_mode != "shared":
+        raise ValueError(
+            "MAPoRL multi_actor_training currently supports tokenizer_mode=shared only. "
+            "Different-tokenizer worker groups are out of scope for this stable path."
+        )
+    if len(trainable_worker_groups) < 2:
+        raise ValueError("MAPoRL multi_actor_training requires at least two trainable worker groups.")
+
+    missing_groups = [model_id for model_id in dict.fromkeys(model_ids) if model_id not in worker_groups]
+    if missing_groups:
+        raise ValueError(f"MAPoRL model_ids missing worker_groups entries: {missing_groups}.")
+
+    missing_fields: list[str] = []
+    tokenizer_paths: list[str] = []
+    for group_id in trainable_worker_groups:
+        group = worker_groups[group_id]
+        if not group.get("model_path"):
+            missing_fields.append(f"{group_id}.model_path")
+        if not group.get("tokenizer_path"):
+            missing_fields.append(f"{group_id}.tokenizer_path")
+        else:
+            tokenizer_paths.append(str(group["tokenizer_path"]))
+    if missing_fields:
+        raise ValueError(
+            "MAPoRL multi_actor_training requires explicit model_path and tokenizer_path for every "
+            f"trainable worker group; missing: {missing_fields}."
+        )
+
+    if len(set(tokenizer_paths)) != 1:
+        raise ValueError(
+            "MAPoRL stable multi_actor_training requires identical tokenizer_path across trainable worker groups. "
+            f"Got tokenizer paths: {sorted(set(tokenizer_paths))}."
+        )
+
+    return {
+        "status": "passed",
+        "tokenizer_mode": tokenizer_mode,
+        "trainable_worker_groups": trainable_worker_groups,
+        "shared_tokenizer_path": tokenizer_paths[0],
+    }

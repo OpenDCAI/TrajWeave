@@ -89,10 +89,32 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
             raise ValueError("MAPoRL multi-actor trainer requires at least one trainable worker group.")
 
     def _validate_multi_actor_specs(self) -> None:
-        tokenizers = {
-            group.tokenizer_path or group.model_path or str(self.config.actor_rollout_ref.model.path)
-            for group in self.maporl_worker_group_specs.values()
-        }
+        tokenizer_mode = str(OmegaConf.select(self.config, "trajweave.multi_actor.tokenizer_mode") or "shared")
+        if tokenizer_mode != "shared":
+            raise ValueError(
+                "MAPoRL multi-actor trainer currently supports trajweave.multi_actor.tokenizer_mode=shared only."
+            )
+
+        missing_fields: list[str] = []
+        tokenizers = set()
+        for group_id in self.maporl_trainable_group_ids:
+            group = self.maporl_worker_group_specs[group_id]
+            if not group.model_path:
+                missing_fields.append(f"{group_id}.model_path")
+            if not group.tokenizer_path:
+                missing_fields.append(f"{group_id}.tokenizer_path")
+            else:
+                tokenizers.add(group.tokenizer_path)
+        if missing_fields:
+            raise ValueError(
+                "MAPoRL multi-actor trainer requires explicit model_path and tokenizer_path for every "
+                f"trainable worker group; missing: {missing_fields}."
+            )
+        if len(tokenizers) != 1:
+            raise ValueError(
+                "MAPoRL stable multi-actor trainer requires identical tokenizer_path across trainable worker groups. "
+                f"Got tokenizer paths: {sorted(tokenizers)}."
+            )
         if self.use_critic and len(tokenizers) > 1:
             raise ValueError(
                 "MAPoRL multi-actor with shared critic requires identical tokenizer_path across worker groups. "
@@ -264,11 +286,26 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
 
         updated_groups = []
         grouped_metrics = {}
-        for routed in self._route_batch(batch):
+        routed_batches = self._route_batch(batch)
+        routed_counts = {routed.group_id: _batch_len(routed.batch) for routed in routed_batches}
+        for group_id, sample_count in routed_counts.items():
+            metrics[f"trajweave/maporl/actor_groups/{_safe_metric_name(group_id)}/samples"] = sample_count
+
+        missing_trainable_groups = [
+            group_id for group_id in self.maporl_trainable_group_ids if routed_counts.get(group_id, 0) == 0
+        ]
+        if missing_trainable_groups:
+            logger.warning(
+                "MAPoRL batch has no samples for trainable worker groups: %s",
+                missing_trainable_groups,
+            )
+        metrics["trajweave/maporl/actor_groups/missing_trainable"] = len(missing_trainable_groups)
+
+        for routed in routed_batches:
             if routed.group_id not in self.maporl_trainable_group_ids:
                 continue
             routed.batch.extra_info.update(batch.extra_info)
-            routed.batch.extra_info["global_batch_size"] = len(routed.batch)
+            routed.batch.extra_info["global_batch_size"] = _batch_len(routed.batch)
             routed.batch.extra_info["mini_batch_size"] = None
             routed.batch.extra_info["num_mini_batch"] = 1
             output = self._actor_wg(routed.group_id).update_actor(routed.batch)
@@ -278,10 +315,13 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
             reduced = reduce_metrics(output)
             grouped_metrics.update(reduced)
             updated_groups.append(routed.group_id)
+            grouped_metrics[f"trajweave/maporl/actor_groups/{_safe_metric_name(routed.group_id)}/updated"] = 1
 
         metrics.update(grouped_metrics)
         metrics["trajweave/maporl/actor_groups/updated"] = len(updated_groups)
         metrics["trajweave/maporl/actor_groups/total"] = len(self.actor_rollout_wgs)
+        if not updated_groups:
+            raise RuntimeError("MAPoRL multi-actor update did not update any trainable worker group.")
         return batch
 
     def _save_checkpoint(self):
@@ -312,6 +352,13 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
 
     def _route_batch(self, batch):
         routed = split_tq_batch_by_field(batch, field="worker_group")
+        routed_key_count = sum(_batch_len(item.batch) for item in routed)
+        total_key_count = _batch_len(batch)
+        if routed_key_count != total_key_count:
+            raise ValueError(
+                "MAPoRL worker_group routing lost batch keys: "
+                f"routed {routed_key_count}, expected {total_key_count}."
+            )
         for item in routed:
             if item.group_id not in self.actor_rollout_wgs:
                 known = ", ".join(sorted(self.actor_rollout_wgs))
@@ -366,3 +413,13 @@ def _actor_rollout_ref_config_for_group(config: Any, group: WorkerGroupConfig) -
 
 def _safe_path_name(value: str) -> str:
     return safe_worker_role_key(value).removeprefix("maporl_actor_")
+
+
+def _safe_metric_name(value: str) -> str:
+    return _safe_path_name(value)
+
+
+def _batch_len(batch: Any) -> int:
+    if hasattr(batch, "keys"):
+        return len(batch.keys)
+    return len(batch)

@@ -5,6 +5,7 @@ from typing import Any
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
 from trajweave.recipes.maporl import build_maporl_launch_overrides, run_debate_math_smoke
+from trajweave.recipes.maporl.config import validate_maporl_multi_actor_config
 
 
 class MAPoRLRecipePlugin:
@@ -112,6 +113,12 @@ def maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
     worker_groups = maporl_worker_groups_summary(maporl_cfg, model_ids=model_ids)
     trainable_groups = [group_id for group_id, group in worker_groups.items() if group.get("trainable", True)]
     native_multi_actor_training = bool(maporl_cfg.get("multi_actor_training", len(trainable_groups) > 1))
+    validation = validate_maporl_multi_actor_config(
+        maporl_cfg,
+        worker_groups=worker_groups,
+        model_ids=tuple(str(model_id) for model_id in model_ids),
+        multi_actor_training=native_multi_actor_training,
+    )
     return {
         "task": "math",
         "runtime_recipe": "maporl_debate_math",
@@ -126,6 +133,10 @@ def maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
         "trainable_worker_groups": trainable_groups,
         "native_multi_actor_training": native_multi_actor_training,
         "training_backend": "verl_v1_multi_actor_wg" if native_multi_actor_training else "verl_v1_single_actor_wg",
+        "tokenizer_mode": validation["tokenizer_mode"],
+        "multi_actor_validation_status": validation["status"],
+        "multi_actor_validation": validation,
+        "routing_field": "worker_group",
         "policy_separation": bool(maporl_cfg.get("policy_separation", True)),
         "collaboration_separation": bool(maporl_cfg.get("collaboration_separation", True)),
         "reward_feedback": bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False))),

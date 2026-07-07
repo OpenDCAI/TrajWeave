@@ -16,7 +16,7 @@ TrajWeave 现在有四条可运行的 MAS 路径：
 | --------------------- | --------------------------------------------- | -------------------------------------------------- |
 | DrMAS Math            | solver -> verifier loop                       | smoke、tiny train、VERL tiny train 已验证          |
 | DrMAS Search          | verifier -> searcher -> answer                | smoke、VERL tiny train 已验证                      |
-| MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、0.5B 双卡 multi-actor 已验证     |
+| MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、同 tokenizer 0.5B 双卡 multi-actor 已验证 |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | smoke、VERL tiny train 已验证                      |
 
 最新的 TrajWeave runtime 会把一次训练 run 持久化到统一目录：
@@ -251,7 +251,7 @@ configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
-`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。它是当前验证独立 MAPoRL actor worker groups 双卡训练的主要入口。
+`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。这条 P0 稳定路径要求所有 trainable worker group 使用同一个 `tokenizer_path`，训练后必须能在 metrics 里看到两个 group 的 sample/update 指标，并在 checkpoint 里看到 `actors/qwen05b_a/` 和 `actors/qwen05b_b/`。
 
 ## 9. MAS 数据流 GIF
 
@@ -420,9 +420,9 @@ git diff --check
 | VERL 路径   | MAPoRL emitter 加 MAPoRL extension hooks                    |
 | 推理流      | question -> agent_0 and agent_1 debate -> consensus answer  |
 | 训练流      | debate score -> per-turn MAPoRL fields -> route by `worker_group` -> each actor worker group computes logprob and PPO update |
-| 当前状态    | smoke、VERL tiny train、0.5B 双卡 multi-actor train 已验证  |
+| 当前状态    | smoke、VERL tiny train、同 tokenizer 0.5B 双卡 multi-actor train 已验证 |
 | 主要配置    | `maporl/debate_math_smoke.yaml`, `maporl/debate_math_verl_tiny.yaml`, `maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` |
-| 已知限制    | 使用 shared critic 时，multi-actor path 目前要求 tokenizer path 兼容；checkpoint resume 和 per-group critic 还没有实现。 |
+| 已知限制    | 当前 P0 稳定路径要求所有 trainable worker group 使用完全相同的 tokenizer path；checkpoint resume、异构 tokenizer 和 per-group critic 还没有实现。 |
 
 ### AgentFlow PlannerTool
 
