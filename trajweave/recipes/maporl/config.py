@@ -25,6 +25,10 @@ def build_maporl_launch_overrides(
     if len(agent_ids) != len(model_ids):
         raise ValueError("maporl.model_ids must have the same length as maporl.agent_ids.")
     worker_groups = _normalize_worker_groups(maporl_cfg, model_ids=model_ids)
+    trainable_worker_groups = tuple(
+        group_id for group_id, group in worker_groups.items() if bool(group.get("trainable", True))
+    )
+    multi_actor_training = bool(maporl_cfg.get("multi_actor_training", len(trainable_worker_groups) > 1))
     max_rounds = int(maporl_cfg.get("max_rounds", team_cfg.get("max_turns", 2)))
     consensus_threshold = int(
         protocol_cfg.get("consensus_threshold", maporl_cfg.get("consensus_threshold", len(agent_ids)))
@@ -55,6 +59,14 @@ def build_maporl_launch_overrides(
         raise ValueError("MAPoRL full PPO requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
     source_config = config_path or str(Path.cwd())
 
+    base_overrides = tuple(str(item) for item in verl_cfg.get("overrides", []))
+    if multi_actor_training:
+        base_overrides = _set_override(
+            base_overrides,
+            "trainer.v1.trainer_mode",
+            "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync",
+        )
+
     required = [
         "algorithm.adv_estimator=gae",
         "++algorithm.group_by_agent_id=false",
@@ -84,11 +96,13 @@ def build_maporl_launch_overrides(
         "+trajweave.credit_allocator=maporl_ppo_score_rule",
         "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]",
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
+        f"+trajweave.multi_actor.enabled={str(multi_actor_training).lower()}",
+        "+trajweave.multi_actor.routing_field=worker_group",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
     if worker_groups:
         required.append(f"+agent.worker_groups={_hydra_dict_list(tuple(worker_groups.items()))}")
-    return tuple(str(item) for item in verl_cfg.get("overrides", [])) + tuple(required)
+    return base_overrides + tuple(required)
 
 
 def _hydra_list(values: tuple[str, ...]) -> str:
@@ -148,3 +162,19 @@ def _normalize_worker_groups(maporl_cfg: dict[str, Any], *, model_ids: tuple[str
         group.setdefault("trainable", False)
         groups[str(group_id)] = group
     return groups
+
+
+def _set_override(overrides: tuple[str, ...], key: str, value: str) -> tuple[str, ...]:
+    output = []
+    replaced = False
+    for item in overrides:
+        item_key = item.split("=", 1)[0].lstrip("+")
+        if item_key == key:
+            if not replaced:
+                output.append(value)
+                replaced = True
+            continue
+        output.append(item)
+    if not replaced:
+        output.append(value)
+    return tuple(output)

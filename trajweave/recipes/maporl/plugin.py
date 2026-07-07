@@ -111,6 +111,7 @@ def maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
     model_ids = list(maporl_cfg.get("model_ids", ["shared"] * agent_count))
     worker_groups = maporl_worker_groups_summary(maporl_cfg, model_ids=model_ids)
     trainable_groups = [group_id for group_id, group in worker_groups.items() if group.get("trainable", True)]
+    native_multi_actor_training = bool(maporl_cfg.get("multi_actor_training", len(trainable_groups) > 1))
     return {
         "task": "math",
         "runtime_recipe": "maporl_debate_math",
@@ -123,8 +124,8 @@ def maporl_summary(config: dict[str, Any]) -> dict[str, Any]:
         "credit_allocator": "maporl_ppo_score_rule",
         "single_model_only": len(set(model_ids)) == 1,
         "trainable_worker_groups": trainable_groups,
-        "native_multi_actor_training": False,
-        "training_backend": "verl_v1_single_actor_wg",
+        "native_multi_actor_training": native_multi_actor_training,
+        "training_backend": "verl_v1_multi_actor_wg" if native_multi_actor_training else "verl_v1_single_actor_wg",
         "policy_separation": bool(maporl_cfg.get("policy_separation", True)),
         "collaboration_separation": bool(maporl_cfg.get("collaboration_separation", True)),
         "reward_feedback": bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False))),

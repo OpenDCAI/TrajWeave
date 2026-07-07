@@ -16,7 +16,7 @@ TrajWeave currently has four runnable MAS paths:
 | -------------------- | ------------------------------------------------ | ------------------------------------------- |
 | DrMAS Math            | solver -> verifier loop                          | smoke, tiny train, VERL tiny train verified |
 | DrMAS Search          | verifier -> searcher -> answer                   | smoke, VERL tiny train verified             |
-| MAPoRL Debate Math    | multiple solver agents debate until consensus    | smoke, VERL tiny train verified             |
+| MAPoRL Debate Math    | multiple solver agents debate until consensus    | smoke, VERL tiny, 0.5B two-GPU multi-actor verified |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier          | smoke, VERL tiny train verified             |
 
 The latest TrajWeave runtime can persist one training run into a unified run directory:
@@ -137,6 +137,7 @@ trajweave/
     verl/extensions/common/      Shared hook and nested TransferQueue compatibility.
     verl/extensions/drmas/       DrMAS agent-wise GRPO runtime patch.
     verl/extensions/maporl/      MAPoRL PPO runtime patch.
+    verl/trainers/               TrajWeave-registered VERL V1 trainers.
     verl/extensions/agentflow/   AgentFlow planner-only GRPO runtime patch.
   storage/                       RunStore, ArtifactStore, trajectory JSONL helpers.
   metrics/                       MetricEvent, MetricRegistry, metrics JSONL sink, VERL metric parser.
@@ -181,12 +182,13 @@ Do not assume one paper equals one environment. For example, DrMAS can run on Ma
 
 ## 7. VERL Bridge Boundaries
 
-TrajWeave has two paths into VERL:
+TrajWeave has three paths into VERL:
 
 | Path             | Purpose                                      | Main files                                      |
 | ---------------- | -------------------------------------------- | ----------------------------------------------- |
 | Offline export   | Convert offline `TrainingSample` to DataProto | `backends/verl/dataproto.py`, `backends/verl/export.py` |
 | Online training  | Let VERL call TrajWeave AgentLoop at rollout time | `backends/verl/main_ppo.py`, `agent_loop.py`, `runtime_config.py`, `emitters/registry.py`, `extensions/` |
+| Trainer extension | Register TrajWeave-owned VERL V1 trainers without editing `verl/` | `backends/verl/trainers/` |
 
 Use this rule before editing:
 
@@ -241,12 +243,15 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
-The 0.5B and heterogeneous worker-group configs are experimental resource checks, not README baseline checks:
+0.5B resource checks:
 
 ```text
 configs/maporl/debate_math_qwen05b_2gpu.yaml
+configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
+
+`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` uses two trainable MAPoRL worker groups and the TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`. It is the current entrypoint for validating independent MAPoRL actor worker groups on two GPUs.
 
 ## 9. MAS Data Flow GIFs
 
@@ -412,10 +417,10 @@ Every integrated MASRL paper must be documented here. Include what the paper con
 | Credit            | `MAPoRLPPOScoreRuleCreditAssigner`                           |
 | VERL path         | MAPoRL emitter plus MAPoRL extension hooks                   |
 | Inference flow    | question -> agent_0 and agent_1 debate -> consensus answer   |
-| Training flow     | debate score -> per-turn MAPoRL fields -> VERL PPO update    |
-| Current status    | smoke and VERL tiny train verified                           |
-| Main configs      | `maporl/debate_math_smoke.yaml`, `maporl/debate_math_verl_tiny.yaml` |
-| Known limits      | Heterogeneous physical worker groups are experimental.        |
+| Training flow     | debate score -> per-turn MAPoRL fields -> route by `worker_group` -> each actor worker group computes logprob and PPO update |
+| Current status    | smoke, VERL tiny train, and 0.5B two-GPU multi-actor train verified |
+| Main configs      | `maporl/debate_math_smoke.yaml`, `maporl/debate_math_verl_tiny.yaml`, `maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` |
+| Known limits      | Multi-actor path currently requires compatible tokenizer paths when using a shared critic; checkpoint resume and per-group critic are not implemented yet. |
 
 ### AgentFlow PlannerTool
 
