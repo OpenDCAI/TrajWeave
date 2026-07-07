@@ -19,6 +19,22 @@ TrajWeave 现在有四条可运行的 MAS 路径：
 | MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、同 tokenizer 0.5B 双卡 multi-actor 已验证 |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | smoke、VERL tiny train 已验证                      |
 
+最新 MAPoRL P0 验收记录：
+
+| 项目           | 结果                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| 分支和 PR      | `lz-dev` 已推送，PR `OpenDCAI/TrajWeave#22`                          |
+| commit         | `3fbca39 feat: harden MAPoRL multi-worker training`                  |
+| 配置入口       | `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml`           |
+| 训练后端       | `verl_v1_multi_actor_wg`                                             |
+| tokenizer 边界 | 当前 P0 只支持 `tokenizer_mode=shared`，异构 tokenizer 会配置时报错 |
+| 真实训练 run   | `outputs/trajweave/runs/20260707-180851-maporl-debate-math-full-verl-tiny-7e0f3fe8` |
+| 训练结果       | `verl_returncode=0`，`multi_actor_validation_status=passed`          |
+| 多 WG 指标     | `qwen05b_a/samples=6`，`qwen05b_b/samples=6`，两个 group 都 `updated=1` |
+| checkpoint     | `outputs/maporl_debate_math_multi_actor_qwen05b_2gpu/checkpoints/global_step_1/actors/qwen05b_a/` 和 `qwen05b_b/` |
+
+这个验收说明：当前 MAPoRL 已经不是单 actor 玩具路径，而是可以通过同一个 YAML 启动两个 trainable worker groups，并在 TrajWeave 的 metrics、online trajectory 和 checkpoint 中分别审计两个 actor group。
+
 最新的 TrajWeave runtime 会把一次训练 run 持久化到统一目录：
 
 ```text
@@ -252,6 +268,25 @@ configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
 `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。这条 P0 稳定路径要求所有 trainable worker group 使用同一个 `tokenizer_path`，训练后必须能在 metrics 里看到两个 group 的 sample/update 指标，并在 checkpoint 里看到 `actors/qwen05b_a/` 和 `actors/qwen05b_b/`。
+
+MAPoRL 0.5B 双卡验收时的关键检查项：
+
+```text
+summary.json:
+  training_backend: verl_v1_multi_actor_wg
+  multi_actor_validation_status: passed
+  tokenizer_mode: shared
+
+metrics:
+  trajweave/maporl/actor_groups/qwen05b_a/samples = 6
+  trajweave/maporl/actor_groups/qwen05b_b/samples = 6
+  trajweave/maporl/actor_groups/qwen05b_a/updated = 1
+  trajweave/maporl/actor_groups/qwen05b_b/updated = 1
+  trajweave/maporl/actor_groups/missing_trainable = 0
+
+online_turns:
+  每条 agent turn 必须带 worker_group、agent_id、traj_uid 和 worker_group_batch_stats。
+```
 
 ## 9. MAS 数据流 GIF
 
