@@ -9,6 +9,7 @@ import ray
 from omegaconf import DictConfig, OmegaConf
 
 from trajweave.backends.verl.extensions import apply_verl_runtime_extensions
+from trajweave.backends.verl.trainers import register_trajweave_trainers
 from verl.trainer.main_ppo import run_ppo
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
 from verl.utils.config import validate_config
@@ -52,6 +53,7 @@ class TrajWeaveTaskRunnerV1:
         if applied:
             logger.info("Applied TrajWeave VERL runtime extensions: %s", ", ".join(applied))
 
+        register_trajweave_trainers()
         trainer_cls = get_trainer_cls(config.trainer.v1.trainer_mode)
         config.transfer_queue.enable = True
         pprint(OmegaConf.to_container(config, resolve=True))

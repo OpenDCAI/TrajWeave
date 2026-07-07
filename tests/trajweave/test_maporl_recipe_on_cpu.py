@@ -132,6 +132,40 @@ def test_maporl_verl_config_keeps_multi_policy_metadata():
     assert result["maporl"]["native_multi_actor_training"] is False
 
 
+def test_maporl_verl_config_enables_multi_actor_trainer_for_trainable_groups():
+    result = run_from_config(
+        {
+            "recipe": "maporl.debate_math.full_verl_tiny",
+            "mode": "verl_train",
+            "prepare": {"tiny_verl_assets": {"enabled": False}},
+            "maporl": {
+                "agent_count": 2,
+                "agent_ids": ["agent_0", "agent_1"],
+                "model_ids": ["model_a", "model_b"],
+                "agent_loop_backend": "synthetic_tq",
+                "multi_actor_training": True,
+                "worker_groups": {
+                    "model_a": {"model_path": "/models/model-a", "trainable": True, "gpus": 1},
+                    "model_b": {"model_path": "/models/model-b", "trainable": True, "gpus": 1},
+                },
+            },
+            "verl": {
+                "enabled": True,
+                "execute": False,
+                "overrides": ["trainer.use_v1=true", "trainer.v1.trainer_mode=sync"],
+            },
+        }
+    )
+
+    command = result["verl_launch"]["command"]
+    assert "trainer.v1.trainer_mode=sync" not in command
+    assert "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync" in command
+    assert "+trajweave.multi_actor.enabled=true" in command
+    assert "+trajweave.multi_actor.routing_field=worker_group" in command
+    assert result["maporl"]["native_multi_actor_training"] is True
+    assert result["maporl"]["training_backend"] == "verl_v1_multi_actor_wg"
+
+
 def test_maporl_verl_config_uses_safe_worker_group_list_override_for_special_ids():
     result = run_from_config(
         {
