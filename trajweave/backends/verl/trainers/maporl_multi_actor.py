@@ -12,6 +12,7 @@ from omegaconf import OmegaConf, open_dict
 from trajweave.backends.verl.extensions.drmas.agent_wise_grpo import TrajWeaveActorRolloutRefWorker
 from trajweave.backends.verl.routing import safe_worker_role_key, split_tq_batch_by_field
 from trajweave.backends.verl.schema import to_python
+from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
 from verl import DataProto
 from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup, ResourcePoolManager, create_colocated_worker_cls
 from verl.trainer.ppo.core_algos import agg_loss
@@ -90,13 +91,14 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
 
     def _validate_multi_actor_specs(self) -> None:
         tokenizer_mode = str(OmegaConf.select(self.config, "trajweave.multi_actor.tokenizer_mode") or "shared")
-        if tokenizer_mode != "shared":
+        if tokenizer_mode not in {"shared", "compatible"}:
             raise ValueError(
-                "MAPoRL multi-actor trainer currently supports trajweave.multi_actor.tokenizer_mode=shared only."
+                "MAPoRL multi-actor trainer supports trajweave.multi_actor.tokenizer_mode in "
+                "{'shared', 'compatible'}."
             )
 
         missing_fields: list[str] = []
-        tokenizers = set()
+        tokenizer_paths: list[str] = []
         for group_id in self.maporl_trainable_group_ids:
             group = self.maporl_worker_group_specs[group_id]
             if not group.model_path:
@@ -104,22 +106,20 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
             if not group.tokenizer_path:
                 missing_fields.append(f"{group_id}.tokenizer_path")
             else:
-                tokenizers.add(group.tokenizer_path)
+                tokenizer_paths.append(group.tokenizer_path)
         if missing_fields:
             raise ValueError(
                 "MAPoRL multi-actor trainer requires explicit model_path and tokenizer_path for every "
                 f"trainable worker group; missing: {missing_fields}."
             )
-        if len(tokenizers) != 1:
+        unique_tokenizers = sorted(set(tokenizer_paths))
+        if tokenizer_mode == "shared" and len(unique_tokenizers) != 1:
             raise ValueError(
-                "MAPoRL stable multi-actor trainer requires identical tokenizer_path across trainable worker groups. "
-                f"Got tokenizer paths: {sorted(tokenizers)}."
+                "MAPoRL shared-tokenizer multi-actor trainer requires identical tokenizer_path across "
+                f"trainable worker groups. Got tokenizer paths: {unique_tokenizers}."
             )
-        if self.use_critic and len(tokenizers) > 1:
-            raise ValueError(
-                "MAPoRL multi-actor with shared critic requires identical tokenizer_path across worker groups. "
-                "Disable critic or use compatible tokenizer paths before enabling different-tokenizer training."
-            )
+        if tokenizer_mode == "compatible":
+            assert_compatible_tokenizers(unique_tokenizers)
         if self.use_reference_policy and not self.config.actor_rollout_ref.model.get("lora_adapter_path"):
             raise ValueError(
                 "MAPoRL multi-actor currently supports reference policy only when ref is inside actor. "

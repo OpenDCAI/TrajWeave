@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
+
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
@@ -194,13 +196,15 @@ def validate_maporl_multi_actor_config(
     model_ids: tuple[str, ...],
     multi_actor_training: bool,
 ) -> dict[str, Any]:
-    """Validate the stable MAPoRL multi-worker-group contract.
-
-    P0 intentionally supports same-tokenizer multi actor training only. Different
-    tokenizer vocabularies require a separate encoding/critic/ref boundary.
-    """
+    """Validate the MAPoRL multi-worker-group contract."""
 
     tokenizer_mode = str(maporl_cfg.get("tokenizer_mode", "shared"))
+    allowed_tokenizer_modes = {"shared", "compatible"}
+    if tokenizer_mode not in allowed_tokenizer_modes:
+        raise ValueError(
+            "MAPoRL multi_actor_training supports tokenizer_mode in "
+            f"{sorted(allowed_tokenizer_modes)}; got {tokenizer_mode!r}."
+        )
     trainable_worker_groups = tuple(
         group_id for group_id, group in worker_groups.items() if bool(group.get("trainable", True))
     )
@@ -211,11 +215,6 @@ def validate_maporl_multi_actor_config(
             "trainable_worker_groups": trainable_worker_groups,
         }
 
-    if tokenizer_mode != "shared":
-        raise ValueError(
-            "MAPoRL multi_actor_training currently supports tokenizer_mode=shared only. "
-            "Different-tokenizer worker groups are out of scope for this stable path."
-        )
     if len(trainable_worker_groups) < 2:
         raise ValueError("MAPoRL multi_actor_training requires at least two trainable worker groups.")
 
@@ -239,15 +238,23 @@ def validate_maporl_multi_actor_config(
             f"trainable worker group; missing: {missing_fields}."
         )
 
-    if len(set(tokenizer_paths)) != 1:
-        raise ValueError(
-            "MAPoRL stable multi_actor_training requires identical tokenizer_path across trainable worker groups. "
-            f"Got tokenizer paths: {sorted(set(tokenizer_paths))}."
-        )
-
-    return {
+    unique_tokenizer_paths = sorted(set(tokenizer_paths))
+    result = {
         "status": "passed",
         "tokenizer_mode": tokenizer_mode,
         "trainable_worker_groups": trainable_worker_groups,
-        "shared_tokenizer_path": tokenizer_paths[0],
     }
+    if tokenizer_mode == "shared":
+        if len(unique_tokenizer_paths) != 1:
+            raise ValueError(
+                "MAPoRL shared-tokenizer multi_actor_training requires identical tokenizer_path across "
+                f"trainable worker groups. Got tokenizer paths: {unique_tokenizer_paths}."
+            )
+        result["shared_tokenizer_path"] = unique_tokenizer_paths[0]
+        return result
+
+    fingerprints = assert_compatible_tokenizers(unique_tokenizer_paths)
+    if fingerprints:
+        result["compatible_tokenizer_digest"] = next(iter(fingerprints.values())).digest
+        result["compatible_tokenizer_paths"] = unique_tokenizer_paths
+    return result

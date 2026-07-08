@@ -16,7 +16,7 @@ TrajWeave 现在有四条可运行的 MAS 路径：
 | --------------------- | --------------------------------------------- | -------------------------------------------------- |
 | DrMAS Math            | solver -> verifier loop                       | smoke、tiny train、VERL tiny train 已验证          |
 | DrMAS Search          | verifier -> searcher -> answer                | smoke、VERL tiny train 已验证                      |
-| MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、同 tokenizer 0.5B 双卡 multi-actor 已验证 |
+| MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、同 tokenizer 0.5B 双卡、兼容 tokenizer Qwen0.5B+1.5B 双卡 multi-actor 已验证 |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | smoke、VERL tiny train 已验证                      |
 
 最新 MAPoRL P0 验收记录：
@@ -34,6 +34,8 @@ TrajWeave 现在有四条可运行的 MAS 路径：
 | checkpoint     | `outputs/maporl_debate_math_multi_actor_qwen05b_2gpu/checkpoints/global_step_1/actors/qwen05b_a/` 和 `qwen05b_b/` |
 
 这个验收说明：当前 MAPoRL 已经不是单 actor 玩具路径，而是可以通过同一个 YAML 启动两个 trainable worker groups，并在 TrajWeave 的 metrics、online trajectory 和 checkpoint 中分别审计两个 actor group。
+
+MAPoRL P1 增加了 `tokenizer_mode=compatible`：它允许两个 worker group 使用不同模型路径和不同 tokenizer 路径，但会先对 tokenizer vocab 和关键 special token id 做 fingerprint 校验。只有 fingerprint 一致时，才允许共享 token-id batch 和 shared critic。这个模式用于 Qwen2.5-0.5B + Qwen2.5-1.5B 这类“模型异构、tokenizer 兼容”的训练验证。
 
 最新的 TrajWeave runtime 会把一次训练 run 持久化到统一目录：
 
@@ -259,15 +261,18 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
-0.5B 资源验证配置：
+资源验证配置：
 
 ```text
 configs/maporl/debate_math_qwen05b_2gpu.yaml
 configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
+configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
 `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。这条 P0 稳定路径要求所有 trainable worker group 使用同一个 `tokenizer_path`，训练后必须能在 metrics 里看到两个 group 的 sample/update 指标，并在 checkpoint 里看到 `actors/qwen05b_a/` 和 `actors/qwen05b_b/`。
+
+`configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml` 用于 P1 异构模型验证。它启动 `qwen05b` 和 `qwen15b` 两个 trainable worker groups，使用 `tokenizer_mode=compatible`，启动前会校验两个 tokenizer 的 vocab fingerprint 是否一致。当前这个模式仍然不支持真正不同词表的 tokenizer；如果 fingerprint 不一致，应该新建 per-worker-tokenizer batch boundary 和 per-group critic 后再打开。
 
 MAPoRL 0.5B 双卡验收时的关键检查项：
 

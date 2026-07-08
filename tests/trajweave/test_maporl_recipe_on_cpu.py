@@ -185,6 +185,55 @@ def test_maporl_verl_config_enables_multi_actor_trainer_for_trainable_groups():
     assert result["maporl"]["multi_actor_validation_status"] == "passed"
 
 
+def test_maporl_verl_config_allows_compatible_tokenizer_paths(monkeypatch):
+    from trajweave.recipes.maporl import config as maporl_config
+
+    monkeypatch.setattr(
+        maporl_config,
+        "assert_compatible_tokenizers",
+        lambda paths: {path: type("Fingerprint", (), {"digest": "same-digest"})() for path in paths},
+    )
+
+    result = run_from_config(
+        {
+            "recipe": "maporl.debate_math.full_verl_tiny",
+            "mode": "verl_train",
+            "prepare": {"tiny_verl_assets": {"enabled": False}},
+            "maporl": {
+                "agent_count": 2,
+                "agent_ids": ["agent_0", "agent_1"],
+                "model_ids": ["model_a", "model_b"],
+                "agent_loop_backend": "synthetic_tq",
+                "tokenizer_mode": "compatible",
+                "multi_actor_training": True,
+                "worker_groups": {
+                    "model_a": {
+                        "model_path": "/models/model-a",
+                        "tokenizer_path": "/models/tokenizer-a",
+                        "trainable": True,
+                    },
+                    "model_b": {
+                        "model_path": "/models/model-b",
+                        "tokenizer_path": "/models/tokenizer-b",
+                        "trainable": True,
+                    },
+                },
+            },
+            "verl": {"enabled": True, "execute": False},
+        }
+    )
+
+    command = result["verl_launch"]["command"]
+    assert "+trajweave.multi_actor.tokenizer_mode=compatible" in command
+    assert result["maporl"]["native_multi_actor_training"] is True
+    assert result["maporl"]["tokenizer_mode"] == "compatible"
+    assert result["maporl"]["multi_actor_validation_status"] == "passed"
+    assert result["maporl"]["multi_actor_validation"]["compatible_tokenizer_paths"] == [
+        "/models/tokenizer-a",
+        "/models/tokenizer-b",
+    ]
+
+
 def test_maporl_verl_config_uses_safe_worker_group_list_override_for_special_ids():
     result = run_from_config(
         {
@@ -316,6 +365,7 @@ def test_maporl_multi_actor_rejects_different_tokenizers_for_stable_path():
                     "agent_ids": ["agent_0", "agent_1"],
                     "model_ids": ["model_a", "model_b"],
                     "agent_loop_backend": "synthetic_tq",
+                    "tokenizer_mode": "shared",
                     "multi_actor_training": True,
                     "worker_groups": {
                         "model_a": {
