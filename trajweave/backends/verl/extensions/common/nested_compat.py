@@ -42,7 +42,7 @@ def _patch_nested_to_padded_tensor() -> None:
 
     def patched_to_padded_tensor(input, padding, output_size=None, *args, **kwargs):
         try:
-            return original_to_padded_tensor(input, padding, output_size=output_size, *args, **kwargs)
+            return original_to_padded_tensor(input, padding, output_size, *args, **kwargs)
         except NotImplementedError:
             if not getattr(input, "is_nested", False):
                 raise
@@ -72,8 +72,8 @@ def _patch_worker_losses() -> None:
 
         pad_mode = tu.get_non_tensor_data(data=data, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         response_mask_source = data["response_mask"]
-        use_nested_response_loss = (
-            pad_mode == DatasetPadMode.NO_PADDING and getattr(model_output["log_probs"], "is_nested", False)
+        use_nested_response_loss = pad_mode == DatasetPadMode.NO_PADDING and getattr(
+            model_output["log_probs"], "is_nested", False
         )
         use_flat_response_loss = (
             pad_mode == DatasetPadMode.NO_PADDING
@@ -242,7 +242,7 @@ def _patch_fsdp_response_outputs() -> None:
             else:
                 entropy = torch.utils.checkpoint.checkpoint(ti.verl_F.entropy_from_logits, logits)
 
-        for row, (seq_len, resp_len) in enumerate(zip(seq_lengths.tolist(), response_lens.tolist())):
+        for row, (seq_len, resp_len) in enumerate(zip(seq_lengths.tolist(), response_lens.tolist(), strict=False)):
             start = seq_len - resp_len - 1
             end = seq_len - 1
             log_prob_pieces.append(
@@ -380,7 +380,7 @@ def _nested_to_padded_tensor_with_size(
     padded = torch.full(output_size, padding, dtype=values.dtype, device=values.device)
     starts = offsets[:-1].tolist()
     lengths = offsets.diff().tolist()
-    for row, (start, length) in enumerate(zip(starts, lengths)):
+    for row, (start, length) in enumerate(zip(starts, lengths, strict=False)):
         padded[row, :length] = values[start : start + length]
     return padded
 

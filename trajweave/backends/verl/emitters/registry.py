@@ -49,10 +49,21 @@ def build_recipe_outputs(
     use_hf_local: bool,
     prompt: dict[str, Any],
     session_id: int,
+    validate: bool = False,
 ) -> list[Any]:
     route = EMITTER_ROUTES.get(recipe or "doctor_mas_math")
     if route is None:
         known = ", ".join(sorted(EMITTER_ROUTES))
         raise ValueError(f"Unsupported TrajWeave emitter recipe: {recipe!r}. Known recipes: {known}.")
-    method = getattr(worker, route.method_name(use_hf_local=use_hf_local))
+    if use_hf_local:
+        from trajweave.backends.verl.workflow_runtime import build_hf_workflow_outputs
+
+        return build_hf_workflow_outputs(
+            worker,
+            recipe=route.recipe,
+            prompt=prompt,
+            session_id=session_id,
+            validate=validate,
+        )
+    method = getattr(worker, route.synthetic_method)
     return method(prompt, session_id=session_id)

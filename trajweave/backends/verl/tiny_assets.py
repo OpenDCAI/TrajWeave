@@ -89,10 +89,7 @@ def _write_tiny_model(model_path: Path) -> None:
         model_max_length=128,
     )
     fast_tokenizer.chat_template = (
-        "{% for message in messages %}"
-        "{{ message['role'] }}: {{ message['content'] }}\n"
-        "{% endfor %}"
-        "assistant:"
+        "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}assistant:"
     )
 
     config = Qwen2Config(
@@ -117,18 +114,31 @@ def _write_tiny_model(model_path: Path) -> None:
 
 
 def _math_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
-    seeds = [(1, 1), (1, 2), (2, 2), (2, 3), (3, 3), (3, 4)]
+    # 前两题刻意处于 0.5B 模型的能力边界，真实采样可产生组内 reward 差异。
+    seeds = [
+        (73, "*", 24),
+        (43, "*", 27),
+        (29, "*", 47),
+        (48, "*", 32),
+        (137, "+", 286),
+        (1001, "-", 497),
+    ]
     rows = []
     for index in range(size):
-        left, right = seeds[index % len(seeds)]
-        answer = str(left + right)
+        left, operator, right = seeds[index % len(seeds)]
+        if operator == "+":
+            answer = str(left + right)
+        elif operator == "-":
+            answer = str(left - right)
+        else:
+            answer = str(left * right)
         rows.append(
             {
                 "data_source": "trajweave_tiny_math",
                 "prompt": [
                     {
                         "role": "user",
-                        "content": f"What is {left} + {right}? Answer only.",
+                        "content": f"What is {left} {operator} {right}? Answer only.",
                     }
                 ],
                 "ability": "math",
@@ -149,16 +159,24 @@ def _search_rows(size: int, *, split: str, recipe_name: str | None = None) -> li
             "Which city is the capital of France?",
             "Paris",
             "capital France",
+            [
+                {"title": "France", "text": "France is a country in Europe. Its capital city is Paris."},
+                {"title": "Germany", "text": "Germany's capital city is Berlin."},
+            ],
         ),
         (
             "Who created the Python programming language?",
             "Guido van Rossum",
             "Python programming language creator",
+            [
+                {"title": "Python", "text": "Python was created by Guido van Rossum and first released in 1991."},
+                {"title": "Java", "text": "Java was originally developed by James Gosling."},
+            ],
         ),
     ]
     rows = []
     for index in range(size):
-        question, answer, query = seeds[index % len(seeds)]
+        question, answer, query, documents = seeds[index % len(seeds)]
         rows.append(
             {
                 "data_source": "trajweave_tiny_search",
@@ -175,6 +193,7 @@ def _search_rows(size: int, *, split: str, recipe_name: str | None = None) -> li
                     "split": split,
                     "trajweave_recipe": recipe_name or "doctor_mas_search",
                     "search_query": query,
+                    "documents": documents,
                 },
             }
         )

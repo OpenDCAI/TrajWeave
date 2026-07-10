@@ -16,7 +16,8 @@ class RoutedBatch:
 def split_batch_by_group_values(batch: Any, group_values: list[str]) -> list[RoutedBatch]:
     if len(group_values) != len(batch.keys):
         raise ValueError(
-            f"worker_group value count must match batch keys, got {len(group_values)} values for {len(batch.keys)} keys."
+            "worker_group value count must match batch keys, "
+            f"got {len(group_values)} values for {len(batch.keys)} keys."
         )
 
     grouped_keys: OrderedDict[str, list[str]] = OrderedDict()

@@ -26,6 +26,11 @@ def normalize_answer(text: str) -> str:
     return " ".join(text.split())
 
 
+def _final_answer_candidate(text: str) -> str:
+    matches = re.findall(r"final\s*answer\s*[:=]\s*([^\r\n]*)", text, flags=re.IGNORECASE)
+    return matches[-1] if matches else text
+
+
 class SearchAnswerEnvironment:
     name = "search_answer"
 
@@ -42,10 +47,10 @@ class SearchAnswerEnvironment:
             if score > best_score:
                 best_doc = doc
                 best_score = score
-        return f"Evidence: {best_doc.title}. {best_doc.text}\nAnswer hint: {task.answer}"
+        return f"Evidence: {best_doc.title}. {best_doc.text}"
 
     def evaluate(self, task: SearchTask, final_answer: str) -> tuple[float, bool]:
         expected = normalize_answer(task.answer)
-        predicted = normalize_answer(final_answer)
-        success = expected in predicted
+        predicted = normalize_answer(_final_answer_candidate(final_answer))
+        success = bool(expected) and predicted == expected
         return (1.0 if success else 0.0), success

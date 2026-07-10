@@ -1,5 +1,8 @@
-recipe: doctor_mas_search
-mode: smoke
+recipe: drmas.search.verl_tiny
+mode: verl_train
+
+drmas_native:
+  agent_loop_backend: hf_local_tq
 
 prepare:
   tiny_verl_assets:
@@ -49,9 +52,9 @@ verl:
     - trainer.experiment_name=drmas_search_qwen05b_2gpu
     - trainer.nnodes=1
     - trainer.n_gpus_per_node=2
-    - trainer.total_epochs=1
-    - trainer.total_training_steps=1
-    - trainer.save_freq=-1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=2
     - trainer.test_freq=-1
     - trainer.val_before_train=false
     - trainer.logger=[console]
@@ -77,12 +80,13 @@ verl:
     - actor_rollout_ref.rollout.val_kwargs.n=2
     - actor_rollout_ref.rollout.prompt_length=96
     - actor_rollout_ref.rollout.response_length=32
+    - actor_rollout_ref.rollout.temperature=1.2
+    - actor_rollout_ref.rollout.top_p=0.95
     - actor_rollout_ref.rollout.tensor_model_parallel_size=1
     - actor_rollout_ref.rollout.calculate_log_probs=false
     - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
     - actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=128
     - actor_rollout_ref.rollout.agent.num_workers=1
-    - +actor_rollout_ref.rollout.agent.agent_loop_manager_class=trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager
     - actor_rollout_ref.actor.ppo_mini_batch_size=2
     - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
     - actor_rollout_ref.actor.ppo_max_token_len_per_gpu=128
@@ -90,18 +94,8 @@ verl:
     - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
     - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
     - actor_rollout_ref.actor.optim.lr=1e-6
-    - algorithm.adv_estimator=grpo
-    - ++algorithm.group_by_agent_id=true
-    - algorithm.norm_adv_by_std_in_grpo=true
     - algorithm.use_kl_in_reward=false
     - critic.enable=false
     - reward.num_workers=1
     - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
     - ray_kwargs.ray_init.num_cpus=12
-    - +trajweave.recipe=doctor_mas_search
-    - +trajweave.config=configs/drmas/search_qwen05b_2gpu.yaml
-    - +trajweave.coordination_protocol=search_answer
-    - +trajweave.trajectory_schema=multi_agent_turn_v1
-    - +trajweave.credit_allocator=doctor_mas_agent_wise
-    - +trajweave.verl_extensions=[drmas_agent_wise_grpo]
-    - +trajweave.agent_loop_backend=hf_local_tq

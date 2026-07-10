@@ -19,7 +19,7 @@ prepare:
 
 verl:
   enabled: true
-  execute: false
+  execute: true
   command_file: outputs/drmas_native_math_tiny/run_verl_ppo.sh
   stdout_path: outputs/drmas_native_math_tiny/verl_stdout.log
   stderr_path: outputs/drmas_native_math_tiny/verl_stderr.log
@@ -39,9 +39,9 @@ verl:
     - trainer.experiment_name=drmas_native_math_tiny
     - trainer.nnodes=1
     - trainer.n_gpus_per_node=1
-    - trainer.total_epochs=1
-    - trainer.total_training_steps=1
-    - trainer.save_freq=-1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=2
     - trainer.test_freq=-1
     - trainer.val_before_train=false
     - trainer.logger=[console]

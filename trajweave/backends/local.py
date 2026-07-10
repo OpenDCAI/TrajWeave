@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from trajweave.backends.policy import PolicyRequest, PolicyResponse, StableByteTokenizer
 
-
 _FINAL_RE = re.compile(r"final\s*answer\s*[:=]\s*(-?\d+)", re.IGNORECASE)
 
 
@@ -39,6 +38,8 @@ class RuleBasedMathPolicyBackend:
         if request.agent.role.lower() == "solver":
             answer = _parse_arithmetic(request.observation)
             text = f"Reasoning: compute the expression. Final answer: {answer if answer is not None else 0}"
+        elif request.agent.role.lower() == "planner":
+            text = "Context: solve the arithmetic task\nSub-Goal: compute the expression\nTool Name: base_generator"
         elif request.agent.role.lower() == "verifier":
             predicted = extract_final_int(request.team_context)
             expected = request.metadata.get("answer")

@@ -1,8 +1,14 @@
 import pytest
+
+from trajweave.backends.policy import PolicyResponse
 from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.credit.doctor_mas import DoctorMASCreditAssigner
+from trajweave.envs.math import MathTask
+from trajweave.orchestration.base import is_approved_response
+from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.doctor_mas import run_smoke
+from trajweave.recipes.doctor_mas.math_smoke import default_team
 
 
 def test_doctor_mas_recipe_collects_solver_verifier_turns():
@@ -12,6 +18,45 @@ def test_doctor_mas_recipe_collects_solver_verifier_turns():
     assert summary.success_rate == 1.0
     assert {sample.agent_name for sample in result.samples} == {"solver", "verifier"}
     assert all(sample.metadata["credit"] == "doctor_mas_agent_wise_grpo" for sample in result.samples)
+
+
+class _NotApprovedMathBackend:
+    def generate(self, request):
+        text = "Final answer: 2" if request.agent.role == "solver" else "NOT APPROVED: the answer needs another pass."
+        return PolicyResponse(text=text, token_ids=[1], logprobs=[0.0])
+
+
+def test_solver_verifier_does_not_treat_not_approved_as_approval():
+    task = MathTask(task_id="not_approved", question="1 + 1", answer=2)
+
+    trajectory = SolverVerifierOrchestra().run(
+        episode_id="episode",
+        rollout_group="group",
+        task=task,
+        team=default_team(max_turns=2),
+        observation=task.question,
+        policy_backend=_NotApprovedMathBackend(),
+    )
+
+    assert [turn.agent_name for turn in trajectory.turns] == ["solver", "verifier", "solver"]
+    assert trajectory.turns[1].metadata["approved"] is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "NOT APPROVED",
+        "The result is APPROVED",
+        "APPROVED? No, revise it.",
+    ],
+)
+def test_approval_parser_rejects_non_protocol_text(response):
+    assert is_approved_response(response) is False
+
+
+@pytest.mark.parametrize("response", ["APPROVED", "approved: sufficient evidence"])
+def test_approval_parser_accepts_protocol_decisions(response):
+    assert is_approved_response(response) is True
 
 
 def test_doctor_mas_agent_wise_advantage_groups_do_not_mix_agents():

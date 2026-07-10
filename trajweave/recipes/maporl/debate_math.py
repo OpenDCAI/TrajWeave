@@ -29,10 +29,7 @@ def default_debate_team(
         AgentSpec(name=agent_id, role="solver", policy_group=model_id, trainable=True)
         for agent_id, model_id in zip(agent_ids, model_ids, strict=True)
     )
-    policy_groups = tuple(
-        PolicyGroupSpec(name=model_id, backend="local")
-        for model_id in dict.fromkeys(model_ids)
-    )
+    policy_groups = tuple(PolicyGroupSpec(name=model_id, backend="local") for model_id in dict.fromkeys(model_ids))
     return TeamSpec(
         name="maporl_debate_math",
         agents=agents,

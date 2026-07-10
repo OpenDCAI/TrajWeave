@@ -6,6 +6,15 @@ from typing import Any
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
+def validate_agentflow_trainable_agent(value: object) -> str:
+    trainable_agent = str(value)
+    if trainable_agent != "planner":
+        raise ValueError(
+            f"AgentFlow planner-tool supports only agentflow.trainable_agent='planner'; got {trainable_agent!r}."
+        )
+    return trainable_agent
+
+
 def build_agentflow_launch_overrides(
     config: dict[str, Any],
     *,
@@ -18,7 +27,7 @@ def build_agentflow_launch_overrides(
 
     max_steps = int(agentflow_cfg.get("max_steps", team_cfg.get("max_turns", 3)))
     enabled_tools = tuple(agentflow_cfg.get("enabled_tools", ["base_generator", "python_stub"]))
-    trainable_agent = str(agentflow_cfg.get("trainable_agent", "planner"))
+    trainable_agent = validate_agentflow_trainable_agent(agentflow_cfg.get("trainable_agent", "planner"))
     agent_loop_backend = str(agentflow_cfg.get("agent_loop_backend", "hf_local_tq"))
     if agent_loop_backend == "verl_tq":
         raise ValueError("AgentFlow planner-tool training requires synthetic_tq or hf_local_tq, not verl_tq.")
@@ -40,6 +49,7 @@ def build_agentflow_launch_overrides(
         "+trajweave.credit_allocator=agentflow_planner_only_grpo",
         "+trajweave.verl_extensions=[trajweave_agentflow_planner_grpo]",
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
+        "+trajweave.turn_padding_multiple=4",
         f"+actor_rollout_ref.rollout.agent.agent_loop_manager_class={TRAJWEAVE_AGENT_LOOP_MANAGER_FQN}",
     ]
     return tuple(str(item) for item in verl_cfg.get("overrides", [])) + tuple(required)

@@ -9,5 +9,4 @@ from trajweave.core.trajectory import MultiAgentTrajectory, TrainingSample
 class CreditAssigner(Protocol):
     name: str
 
-    def assign(self, trajectories: list[MultiAgentTrajectory], team: TeamSpec) -> list[TrainingSample]:
-        ...
+    def assign(self, trajectories: list[MultiAgentTrajectory], team: TeamSpec) -> list[TrainingSample]: ...

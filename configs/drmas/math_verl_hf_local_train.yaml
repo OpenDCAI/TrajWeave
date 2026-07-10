@@ -102,3 +102,4 @@ verl:
     - +trajweave.credit_allocator=doctor_mas_agent_wise
     - +trajweave.verl_extensions=[drmas_agent_wise_grpo]
     - +trajweave.agent_loop_backend=hf_local_tq
+    - +trajweave.turn_padding_multiple=2

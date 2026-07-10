@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -20,6 +21,11 @@ class TeamContext:
         return "\n".join(f'The output of "{agent_name}": {text}' for agent_name, text in self.entries)
 
 
+def is_approved_response(text: str, approval_keyword: str = "APPROVED") -> bool:
+    pattern = rf"\s*{re.escape(approval_keyword)}(?:\s*:\s*.*)?\s*"
+    return re.fullmatch(pattern, text, flags=re.IGNORECASE | re.DOTALL) is not None
+
+
 class Orchestra(Protocol):
     def run(
         self,
@@ -31,5 +37,4 @@ class Orchestra(Protocol):
         observation: str,
         policy_backend: PolicyBackend,
         environment: Any | None = None,
-    ) -> MultiAgentTrajectory:
-        ...
+    ) -> MultiAgentTrajectory: ...

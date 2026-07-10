@@ -5,6 +5,7 @@ from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.credit.agentflow import FlowGRPOPlannerOnlyCreditAssigner
 from trajweave.envs.math import SolverVerifierMathEnvironment
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
+from trajweave.recipes.agentflow.config import validate_agentflow_trainable_agent
 from trajweave.recipes.doctor_mas.math_smoke import default_math_tasks
 from trajweave.rollout.engine import RolloutEngine, RolloutResult
 
@@ -46,7 +47,9 @@ def run_planner_tool_smoke(
     device: str = "cpu",
     rollouts_per_task: int = 1,
     max_steps: int = 3,
+    trainable_agent: str = "planner",
 ) -> tuple[object, RolloutResult]:
+    validate_agentflow_trainable_agent(trainable_agent)
     if backend == "tiny-torch":
         policy_backend = TinyTorchPolicyBackend(device=device)
     elif backend == "rule":

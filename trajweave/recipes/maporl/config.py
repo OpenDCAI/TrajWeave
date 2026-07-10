@@ -3,9 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from trajweave.backends.verl.runtime_config import normalize_hf_local_dtype
 from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
 
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
+
+
+def resolve_maporl_credit_settings(config: dict[str, Any]) -> dict[str, Any]:
+    maporl_cfg = config.get("maporl", {}) or {}
+    credit_cfg = config.get("credit", {}) or {}
+    return {
+        "rule_horizon": str(credit_cfg.get("rule_horizon", maporl_cfg.get("rule_horizon", "discounted_sum"))),
+        "rule_agent_share": str(credit_cfg.get("rule_agent_share", maporl_cfg.get("rule_agent_share", "all"))),
+        "rule_discount": float(credit_cfg.get("rule_discount", maporl_cfg.get("rule_discount", 0.3))),
+        "alpha": tuple(
+            float(value) for value in credit_cfg.get("alpha", maporl_cfg.get("alpha", [0.0, 0.0, 0.0, 0.0]))
+        ),
+    }
 
 
 def build_maporl_launch_overrides(
@@ -16,14 +30,21 @@ def build_maporl_launch_overrides(
     maporl_cfg = config.get("maporl", {})
     team_cfg = config.get("team", {})
     protocol_cfg = config.get("protocol", {})
-    credit_cfg = config.get("credit", {}) or {}
     verl_cfg = config.get("verl", {})
+    credit_settings = resolve_maporl_credit_settings(config)
 
     agent_count = int(maporl_cfg.get("agent_count", team_cfg.get("agent_count", 2)))
     if agent_count < 2:
         raise ValueError("MAPoRL debate requires at least two agents.")
-    agent_ids = tuple(maporl_cfg.get("agent_ids", [f"agent_{idx}" for idx in range(agent_count)]))
-    model_ids = tuple(maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
+    default_agent_ids = [f"agent_{idx}" for idx in range(agent_count)]
+    agent_ids = tuple(str(value) for value in maporl_cfg.get("agent_ids", default_agent_ids))
+    if len(agent_ids) != agent_count:
+        raise ValueError(
+            f"maporl.agent_count={agent_count} does not match {len(agent_ids)} configured maporl.agent_ids."
+        )
+    if len(set(agent_ids)) != len(agent_ids):
+        raise ValueError("maporl.agent_ids must be unique.")
+    model_ids = tuple(str(value) for value in maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
     if len(agent_ids) != len(model_ids):
         raise ValueError("maporl.model_ids must have the same length as maporl.agent_ids.")
     worker_groups = _normalize_worker_groups(maporl_cfg, model_ids=model_ids)
@@ -38,15 +59,24 @@ def build_maporl_launch_overrides(
         multi_actor_training=multi_actor_training,
     )
     max_rounds = int(maporl_cfg.get("max_rounds", team_cfg.get("max_turns", 2)))
+    if max_rounds <= 0:
+        raise ValueError("MAPoRL max_rounds must be a positive integer.")
     consensus_threshold = int(
         protocol_cfg.get("consensus_threshold", maporl_cfg.get("consensus_threshold", len(agent_ids)))
     )
+    if not 1 <= consensus_threshold <= len(agent_ids):
+        raise ValueError(
+            "MAPoRL consensus_threshold must be between 1 and the number of agents; "
+            f"got threshold={consensus_threshold}, agents={len(agent_ids)}."
+        )
     early_stop = bool(protocol_cfg.get("early_stop", maporl_cfg.get("early_stop", True)))
     reward_feedback = bool(maporl_cfg.get("reward_feedback", protocol_cfg.get("reward_feedback", False)))
     criteria_percentage = float(
         maporl_cfg.get(
             "criteria_for_consensus_percentage",
-            protocol_cfg.get("criteria_for_consensus_percentage", (consensus_threshold - 1e-9) / max(len(agent_ids), 1)),
+            protocol_cfg.get(
+                "criteria_for_consensus_percentage", (consensus_threshold - 1e-9) / max(len(agent_ids), 1)
+            ),
         )
     )
     criteria_reward = float(
@@ -55,16 +85,24 @@ def build_maporl_launch_overrides(
             protocol_cfg.get("criteria_for_consensus_reward_threshold", 0.7),
         )
     )
+    if not 0.0 <= criteria_percentage <= 1.0:
+        raise ValueError("MAPoRL criteria_for_consensus_percentage must be between 0 and 1.")
+    if not 0.0 <= criteria_reward <= 1.0:
+        raise ValueError("MAPoRL criteria_for_consensus_reward_threshold must be between 0 and 1.")
     policy_separation = bool(maporl_cfg.get("policy_separation", True))
     collaboration_separation = bool(maporl_cfg.get("collaboration_separation", True))
     task_training = bool(maporl_cfg.get("task_training", False))
-    rule_horizon = str(maporl_cfg.get("rule_horizon", credit_cfg.get("rule_horizon", "discounted_sum")))
-    rule_agent_share = str(maporl_cfg.get("rule_agent_share", credit_cfg.get("rule_agent_share", "all")))
-    rule_discount = float(maporl_cfg.get("rule_discount", credit_cfg.get("rule_discount", 0.3)))
-    alpha = tuple(float(value) for value in maporl_cfg.get("alpha", credit_cfg.get("alpha", [0.0, 0.0, 0.0, 0.0])))
+    rule_horizon = credit_settings["rule_horizon"]
+    rule_agent_share = credit_settings["rule_agent_share"]
+    rule_discount = credit_settings["rule_discount"]
+    alpha = credit_settings["alpha"]
     agent_loop_backend = str(maporl_cfg.get("agent_loop_backend", maporl_cfg.get("rollout_backend", "hf_local_tq")))
     if agent_loop_backend == "verl_tq":
         raise ValueError("MAPoRL full PPO requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
+    hf_local_dtype = normalize_hf_local_dtype(maporl_cfg.get("hf_local_dtype", "fp32"))
+    hf_local_model_cache_size = int(maporl_cfg.get("hf_local_model_cache_size", 0))
+    if hf_local_model_cache_size < 0:
+        raise ValueError("MAPoRL hf_local_model_cache_size must be zero or a positive integer.")
     source_config = config_path or str(Path.cwd())
 
     base_overrides = tuple(str(item) for item in verl_cfg.get("overrides", []))
@@ -104,6 +142,9 @@ def build_maporl_launch_overrides(
         "+trajweave.credit_allocator=maporl_ppo_score_rule",
         "+trajweave.verl_extensions=[trajweave_maporl_full_ppo]",
         f"+trajweave.agent_loop_backend={agent_loop_backend}",
+        f"+trajweave.hf_local_dtype={hf_local_dtype}",
+        f"+trajweave.hf_local_model_cache_size={hf_local_model_cache_size}",
+        "+trajweave.turn_padding_multiple=2",
         f"+trajweave.multi_actor.enabled={str(multi_actor_training).lower()}",
         "+trajweave.multi_actor.routing_field=worker_group",
         f"+trajweave.multi_actor.tokenizer_mode={multi_actor_validation['tokenizer_mode']}",

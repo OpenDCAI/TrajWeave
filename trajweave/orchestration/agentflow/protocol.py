@@ -84,14 +84,15 @@ class AgentFlowPlannerToolOrchestra:
                 )
             )
             context_text, sub_goal, selected_tool = self._parse_planner_step(planner_response.text)
-            if selected_tool not in planner.tools:
-                selected_tool = self.tool_name
+            selected_tool = _resolve_allowed_tool(planner_response.text, selected_tool, planner.tools)
+            plan_valid = bool(sub_goal and selected_tool in planner.tools)
             planner_metadata = planner_response.metadata | {
                 "agentflow_stage": "planner_next_step",
                 "step_id": step_id,
                 "tool_name": selected_tool,
                 "sub_goal": sub_goal,
                 "context": context_text,
+                "plan_valid": plan_valid,
                 "memory_snapshot": memory.snapshot(),
             }
             trajectory.add_turn(
@@ -135,14 +136,15 @@ class AgentFlowPlannerToolOrchestra:
             )
             turn_id += 1
 
-            tool_result = self._execute_tool(task, selected_tool)
+            tool_result = self._execute_tool(task, selected_tool, plan_valid=plan_valid)
             memory.add_action(step_id, selected_tool, sub_goal, command, tool_result)
+            tool_agent_name = selected_tool or "invalid_tool"
             trajectory.add_turn(
                 self._frozen_turn(
                     episode_id=episode_id,
                     task_id=task.task_id,
                     turn_id=turn_id,
-                    agent_name=selected_tool,
+                    agent_name=tool_agent_name,
                     role="tool",
                     policy_group="tool",
                     observation=observation,
@@ -162,7 +164,10 @@ class AgentFlowPlannerToolOrchestra:
             verifier_prompt = self._verifier_prompt(observation, memory)
             verifier_text, verified = self._verify(task, memory)
             for turn in trajectory.turns:
-                if turn.metadata.get("agentflow_stage") == "planner_next_step" and turn.metadata.get("step_id") == step_id:
+                if (
+                    turn.metadata.get("agentflow_stage") == "planner_next_step"
+                    and turn.metadata.get("step_id") == step_id
+                ):
                     turn.metadata["verifier_decision"] = "STOP" if verified else "CONTINUE"
                     turn.metadata["tool_result"] = tool_result
             trajectory.add_turn(
@@ -202,11 +207,14 @@ class AgentFlowPlannerToolOrchestra:
 
     def _planner_prompt(self, observation: str, memory: AgentFlowMemory, step_id: int, max_steps: int) -> str:
         return (
-            "You are the Planner in AgentFlow. Choose one tool and one sub-goal.\n"
+            "You are the Planner in AgentFlow. Choose one allowed tool and one short sub-goal.\n"
             f"Question: {observation}\n"
             f"Memory:\n{memory.render()}\n"
             f"Current step: {step_id}/{max_steps}\n"
-            "Return: Context: ... Sub-Goal: ... Tool Name: base_generator"
+            "Output exactly these three short lines, with no explanation:\n"
+            f"Tool Name: {self.tool_name}\n"
+            "Sub-Goal: calculate the answer\n"
+            "Context: use the question and memory"
         )
 
     def _executor_prompt(self, observation: str, sub_goal: str, tool_name: str) -> str:
@@ -216,20 +224,23 @@ class AgentFlowPlannerToolOrchestra:
         return f"Question: {observation}\nMemory:\n{memory.render()}\nReturn STOP if enough, otherwise CONTINUE."
 
     def _parse_planner_step(self, text: str) -> tuple[str, str, str]:
-        context = _find_field(text, "Context") or "Use the available tool to solve the task."
-        sub_goal = _find_field(text, "Sub-Goal") or "Compute a candidate final answer."
-        tool_name = _find_field(text, "Tool Name") or self.tool_name
+        context = _find_field(text, "Context") or ""
+        sub_goal = _find_field(text, "Sub-Goal") or ""
+        tool_name = _find_field(text, "Tool Name") or ""
         return context.strip(), sub_goal.strip(), tool_name.strip()
 
     def _executor_command(self, observation: str, sub_goal: str, tool_name: str) -> str:
         del sub_goal
         return f'execution = tool.execute(query="{observation}", tool="{tool_name}")'
 
-    def _execute_tool(self, task: MathTask, tool_name: str) -> str:
-        del tool_name
+    def _execute_tool(self, task: MathTask, tool_name: str, *, plan_valid: bool) -> str:
+        if not plan_valid:
+            return "Tool error: invalid planner action"
+        if tool_name not in {"base_generator", "python_stub"}:
+            return f"Tool error: unsupported tool {tool_name}"
         answer = _parse_arithmetic(task.question)
         if answer is None:
-            answer = task.answer
+            return "Tool error: the selected tool could not solve this task"
         return f"Final answer: {answer}"
 
     def _verify(self, task: MathTask, memory: AgentFlowMemory) -> tuple[str, bool]:
@@ -282,6 +293,17 @@ def _find_field(text: str, field: str) -> str | None:
     pattern = rf"{re.escape(field)}\s*:\s*(.*?)(?=\n[A-Z][A-Za-z -]*\s*:|$)"
     match = re.search(pattern, text, flags=re.DOTALL)
     return match.group(1).strip() if match else None
+
+
+def _resolve_allowed_tool(text: str, parsed_tool: str, allowed_tools: tuple[str, ...]) -> str:
+    candidates = [parsed_tool] if parsed_tool else []
+    candidates.extend(line.strip() for line in text.splitlines()[:3])
+    for candidate in candidates:
+        normalized = re.sub(r"[^a-z0-9]+", "_", candidate.lower()).strip("_")
+        for tool in allowed_tools:
+            if normalized == re.sub(r"[^a-z0-9]+", "_", tool.lower()).strip("_"):
+                return tool
+    return parsed_tool.strip()
 
 
 def _parse_arithmetic(text: str) -> int | None:

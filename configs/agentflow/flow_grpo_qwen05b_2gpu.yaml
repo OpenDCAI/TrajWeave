@@ -49,9 +49,9 @@ verl:
     - trainer.experiment_name=agentflow_flow_grpo_qwen05b_2gpu
     - trainer.nnodes=1
     - trainer.n_gpus_per_node=2
-    - trainer.total_epochs=1
-    - trainer.total_training_steps=1
-    - trainer.save_freq=-1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=2
     - trainer.test_freq=-1
     - trainer.val_before_train=false
     - trainer.logger=[console]
@@ -77,6 +77,8 @@ verl:
     - actor_rollout_ref.rollout.val_kwargs.n=2
     - actor_rollout_ref.rollout.prompt_length=96
     - actor_rollout_ref.rollout.response_length=32
+    - actor_rollout_ref.rollout.temperature=1.2
+    - actor_rollout_ref.rollout.top_p=0.95
     - actor_rollout_ref.rollout.tensor_model_parallel_size=1
     - actor_rollout_ref.rollout.calculate_log_probs=false
     - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1

@@ -6,7 +6,7 @@ from trajweave.backends.policy import PolicyBackend, PolicyRequest
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.envs.search import SearchAnswerEnvironment, SearchTask
-from trajweave.orchestration.base import TeamContext
+from trajweave.orchestration.base import TeamContext, is_approved_response
 
 
 @dataclass
@@ -53,7 +53,7 @@ class SearchAnswerOrchestra:
                 )
             )
             context.append(verifier.name, verifier_response.text)
-            approved = self.approval_keyword in verifier_response.text.upper()
+            approved = is_approved_response(verifier_response.text, self.approval_keyword)
             trajectory.add_turn(
                 AgentTurn(
                     episode_id=episode_id,
@@ -149,7 +149,10 @@ class SearchAnswerOrchestra:
     def _build_prompt(self, role: str, observation: str, context: TeamContext) -> str:
         rendered = context.render()
         if role.lower() == "verifier":
-            return f"Question:\n{observation}\n\nTeam context:\n{rendered}\n\nDecide whether evidence is enough. Return APPROVED or SEARCH."
+            return (
+                f"Question:\n{observation}\n\nTeam context:\n{rendered}\n\n"
+                "Decide whether evidence is enough. Return APPROVED or SEARCH."
+            )
         if role.lower() == "searcher":
             return f"Question:\n{observation}\n\nTeam context:\n{rendered}\n\nWrite one search query."
         if role.lower() == "answer":

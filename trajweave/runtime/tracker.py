@@ -28,7 +28,9 @@ class ExperimentTracker:
         self.trajectories = TrajectoryStore(run_store.run_dir, run_store.run_id)
         self.artifacts = ArtifactStore(run_store.run_dir)
 
-    def log_event(self, event: str, message: str, payload: dict[str, Any] | None = None, *, level: str = "INFO") -> None:
+    def log_event(
+        self, event: str, message: str, payload: dict[str, Any] | None = None, *, level: str = "INFO"
+    ) -> None:
         self.logger.log(level, event, message, payload)
 
     def log_metric(
@@ -55,7 +57,7 @@ class ExperimentTracker:
 
     def log_metrics(self, metrics: dict[str, Any], *, source: str = "trajweave", step: int | None = None) -> None:
         for name, value in metrics.items():
-            if isinstance(value, (int, float, str, bool)) or value is None:
+            if isinstance(value, int | float | str | bool) or value is None:
                 self.log_metric(name, value, source=source, step=step)
 
     def log_rollout_result(self, result: RolloutResult, *, source: str = "rollout") -> None:
@@ -71,41 +73,72 @@ class ExperimentTracker:
     def log_samples(self, samples: list[TrainingSample]) -> None:
         self.trajectories.write_samples(samples)
 
-    def log_artifact(self, *, name: str, path: str | Path, kind: str, metadata: dict[str, Any] | None = None) -> None:
+    def log_artifact(
+        self,
+        *,
+        name: str,
+        path: str | Path,
+        kind: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         self.artifacts.register(name=name, path=path, kind=kind, metadata=metadata)
 
     def log_verl_result(self, result: dict[str, Any]) -> None:
         stdout_path = result.get("stdout_path")
         stderr_path = result.get("stderr_path")
+        archived_stdout: Path | None = None
         if stdout_path:
-            stdout_path = self._archive_log(
+            archived_stdout = self._archive_log(
                 source=Path(str(stdout_path)),
                 name="verl_stdout.log",
                 metadata={"stream": "stdout"},
             )
         if stderr_path:
-            stderr_path = self._archive_log(
+            self._archive_log(
                 source=Path(str(stderr_path)),
                 name="verl_stderr.log",
                 metadata={"stream": "stderr"},
             )
-        stdout_text = str(result.get("stdout") or "")
-        if stdout_path and Path(str(stdout_path)).exists():
-            stdout_text = Path(str(stdout_path)).read_text(encoding="utf-8", errors="replace")
-        if stdout_text:
-            for event in parse_verl_console_metrics(stdout_text, run_id=self.run_id):
+        if archived_stdout is not None:
+            with archived_stdout.open("r", encoding="utf-8", errors="replace") as stdout_file:
+                for line in stdout_file:
+                    for event in parse_verl_console_metrics(line, run_id=self.run_id):
+                        self.metrics.write(event)
+        else:
+            for event in parse_verl_console_metrics(str(result.get("stdout") or ""), run_id=self.run_id):
                 self.metrics.write(event)
         self.log_metric("returncode", result.get("returncode"), source="verl")
+        if result.get("returncode") == 0:
+            self._register_latest_checkpoint()
 
-    def _archive_log(self, *, source: Path, name: str, metadata: dict[str, Any]) -> Path:
+    def _archive_log(self, *, source: Path, name: str, metadata: dict[str, Any]) -> Path | None:
+        if not source.is_file():
+            return None
         target = self.run_dir / "logs" / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        if source.exists() and source.resolve() != target.resolve():
+        if source.resolve() != target.resolve():
             shutil.copy2(source, target)
-        elif not target.exists() and source.exists():
-            shutil.copy2(source, target)
-        self.log_artifact(name=name, path=target if target.exists() else source, kind="log", metadata=metadata)
-        return target if target.exists() else source
+        target.chmod(0o600)
+        self.log_artifact(name=name, path=target, kind="log", metadata=metadata)
+        return target
+
+    def _register_latest_checkpoint(self) -> None:
+        checkpoint_root = self.run_dir / "checkpoints"
+        marker = checkpoint_root / "latest_checkpointed_iteration.txt"
+        if not marker.is_file():
+            return
+        try:
+            step = int(marker.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return
+        checkpoint = checkpoint_root / f"global_step_{step}"
+        if checkpoint.is_dir():
+            self.log_artifact(
+                name="latest_checkpoint",
+                path=checkpoint,
+                kind="checkpoint",
+                metadata={"global_step": step},
+            )
 
     def write_summary(self, output: dict[str, Any]) -> dict[str, Any]:
         metric_summary = self.metric_aggregator.summarize()
@@ -117,7 +150,9 @@ class ExperimentTracker:
         if status == "completed":
             self.log_event("run_completed", "TrajWeave run completed.")
         elif status == "failed":
-            self.log_event("run_failed_finalized", "TrajWeave run finalized as failed.", {"error": error}, level="ERROR")
+            self.log_event(
+                "run_failed_finalized", "TrajWeave run finalized as failed.", {"error": error}, level="ERROR"
+            )
         self.log_artifact(name="events.jsonl", path=self.run_dir / "logs" / "events.jsonl", kind="log")
         self.log_artifact(name="console.log", path=self.run_dir / "logs" / "console.log", kind="log")
         self.metric_aggregator.summarize()

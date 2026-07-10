@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
-
 from trajweave.backends.verl.runtime_config import config_get
 from trajweave.backends.verl.schema import to_python
+from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
 class AgentFlowEmitterMixin:
@@ -22,7 +21,9 @@ class AgentFlowEmitterMixin:
         is_correct = session_id % 2 == 0
         reward = 1.0 if is_correct else 0.0
         max_steps = self._agentflow_max_steps()
-        metrics = AgentLoopMetrics(generate_sequences=0.0, tool_calls=float(max_steps), compute_score=0.0, num_preempted=-1)
+        metrics = AgentLoopMetrics(
+            generate_sequences=0.0, tool_calls=float(max_steps), compute_score=0.0, num_preempted=-1
+        )
         outputs: list[AgentLoopOutput] = []
         running_prompt_ids = list(prompt_ids)
         final_answer = ground_truth if is_correct else "__wrong__"
@@ -79,58 +80,14 @@ class AgentFlowEmitterMixin:
         *,
         session_id: int = 0,
     ) -> list[AgentLoopOutput]:
-        raw_prompt = to_python(prompt.get("raw_prompt", []))
-        prompt_ids = self._encode_prompt(raw_prompt)
-        reward_model = to_python(prompt.get("reward_model", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "2"))
-        is_correct = session_id % 2 == 0
-        reward = 1.0 if is_correct else 0.0
-        max_steps = self._agentflow_max_steps()
-        tool_name = self._agentflow_enabled_tools()[0]
-        metrics = AgentLoopMetrics(generate_sequences=1.0, tool_calls=float(max_steps), compute_score=0.0, num_preempted=-1)
-        outputs: list[AgentLoopOutput] = []
-        running_prompt_ids = list(prompt_ids)
-        for step_id in range(1, max_steps + 1):
-            response_ids = self._generate_local_response_ids(running_prompt_ids, policy_group="planner")
-            verifier_decision = "STOP" if is_correct or step_id == max_steps else "CONTINUE"
-            tool_result = f"Final answer: {ground_truth if is_correct else '__wrong__'}"
-            outputs.append(
-                AgentLoopOutput(
-                    prompt_ids=list(running_prompt_ids),
-                    response_ids=response_ids,
-                    response_mask=[1] * len(response_ids),
-                    reward_score=reward,
-                    num_turns=step_id,
-                    metrics=metrics,
-                    extra_fields={
-                        "turn_scores": [],
-                        "tool_rewards": [],
-                        "trajweave_agent_name": "planner",
-                        "trajweave_role": "planner",
-                        "agent_id": "planner",
-                        "policy_group": "planner",
-                        "agentflow_stage": "planner_next_step",
-                        "tool_name": tool_name,
-                        "sub_goal": "compute final answer",
-                        "tool_result": tool_result,
-                        "verifier_decision": verifier_decision,
-                        "memory_snapshot": f"step={step_id}; result={tool_result}",
-                        "step_id": step_id,
-                        "rollout_source": "hf_local_tq",
-                        "agentflow_trace": self._agentflow_trace(
-                            step_id=step_id,
-                            tool_name=tool_name,
-                            sub_goal="compute final answer",
-                            tool_result=tool_result,
-                            verifier_decision=verifier_decision,
-                        ),
-                    },
-                )
-            )
-            running_prompt_ids = running_prompt_ids + response_ids
-            if verifier_decision == "STOP":
-                break
-        return outputs
+        from trajweave.backends.verl.workflow_runtime import build_hf_workflow_outputs
+
+        return build_hf_workflow_outputs(
+            self,
+            recipe="agentflow_planner_tool",
+            prompt=prompt,
+            session_id=session_id,
+        )
 
     def _agentflow_max_steps(self) -> int:
         agentflow_cfg = self._agentflow_orchestra_config()

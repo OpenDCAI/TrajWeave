@@ -47,6 +47,7 @@ class TrajWeaveTaskRunnerV1:
 
     def run(self, config: DictConfig):
         import transfer_queue as tq
+
         from verl.trainer.ppo.v1 import get_trainer_cls
 
         applied = apply_verl_runtime_extensions(config)
@@ -88,9 +89,7 @@ def main(config):
     else:
         from verl.trainer.main_ppo_v0 import TaskRunner
 
-        logger.warning(
-            "Legacy trainer `main_ppo_v0.py` is deprecated; TrajWeave extensions are only tested on V1."
-        )
+        logger.warning("Legacy trainer `main_ppo_v0.py` is deprecated; TrajWeave extensions are only tested on V1.")
         run_ppo(config, task_runner_class=TaskRunner)
 
 

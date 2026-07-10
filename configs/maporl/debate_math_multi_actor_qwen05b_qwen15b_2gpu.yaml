@@ -1,11 +1,15 @@
 recipe: maporl.debate_math.full_verl_tiny
 mode: verl_train
 
+# 1.5B 全参 PPO 单组需要超过 24GB 显存；两张 P40 请使用 qwen05b Base + Instruct 配置。
+
 maporl:
   agent_count: 2
   agent_ids: ["agent_0", "agent_1"]
   model_ids: ["qwen05b", "qwen15b"]
-  agent_loop_backend: synthetic_tq
+  agent_loop_backend: hf_local_tq
+  hf_local_dtype: fp32
+  hf_local_model_cache_size: 1
   tokenizer_mode: compatible
   max_rounds: 2
   consensus_threshold: 2
@@ -80,9 +84,9 @@ verl:
     - trainer.experiment_name=maporl_debate_math_multi_actor_qwen05b_qwen15b_2gpu
     - trainer.nnodes=1
     - trainer.n_gpus_per_node=2
-    - trainer.total_epochs=1
-    - trainer.total_training_steps=1
-    - trainer.save_freq=1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=2
     - trainer.test_freq=-1
     - trainer.val_before_train=false
     - trainer.logger=[console]
@@ -108,6 +112,8 @@ verl:
     - actor_rollout_ref.rollout.val_kwargs.n=2
     - actor_rollout_ref.rollout.prompt_length=64
     - actor_rollout_ref.rollout.response_length=16
+    - actor_rollout_ref.rollout.temperature=1.2
+    - actor_rollout_ref.rollout.top_p=0.95
     - actor_rollout_ref.rollout.tensor_model_parallel_size=1
     - actor_rollout_ref.rollout.calculate_log_probs=false
     - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
@@ -118,6 +124,8 @@ verl:
     - actor_rollout_ref.actor.ppo_max_token_len_per_gpu=96
     - actor_rollout_ref.actor.use_torch_compile=false
     - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
+    - actor_rollout_ref.actor.fsdp_config.param_offload=false
+    - actor_rollout_ref.actor.fsdp_config.optimizer_offload=false
     - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
     - actor_rollout_ref.actor.optim.lr=1e-6
     - algorithm.use_kl_in_reward=false

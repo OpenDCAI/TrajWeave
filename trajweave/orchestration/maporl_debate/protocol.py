@@ -57,7 +57,9 @@ class MAPoRLDebateOrchestra:
                     agent_contexts[agent.name].append(
                         {
                             "role": "user",
-                            "content": self._build_peer_feedback(agent.name, observation, agent_contexts, team, round_id),
+                            "content": self._build_peer_feedback(
+                                agent.name, observation, agent_contexts, team, round_id
+                            ),
                         }
                     )
                 prompt = self._render_messages(agent_contexts[agent.name])
@@ -118,9 +120,9 @@ class MAPoRLDebateOrchestra:
 
             consensus_answer = self._consensus_answer(round_answers, round_scores)
             consensus_reached = consensus_answer is not None
+            finished_round = round_id if consensus_reached else -1
             if consensus_reached:
                 final_answer = f"Final answer: {consensus_answer}"
-                finished_round = round_id
                 for turn in trajectory.turns:
                     if turn.metadata.get("round_id") == round_id:
                         turn.metadata["consensus_reached"] = True
@@ -143,7 +145,7 @@ class MAPoRLDebateOrchestra:
         if consensus_answer is not None:
             trajectory.metadata["consensus_answer"] = consensus_answer
         for turn in trajectory.turns:
-            turn.metadata.setdefault("finished_round", finished_round)
+            turn.metadata["finished_round"] = finished_round
         return trajectory
 
     def _format_question(self, agent_name: str, observation: str) -> str:
@@ -210,7 +212,7 @@ class MAPoRLDebateOrchestra:
         answer, count = Counter(filtered).most_common(1)[0]
         majority_percentage = count / len(answers)
         threshold = self._consensus_percentage_threshold(len(answers))
-        if majority_percentage <= threshold:
+        if majority_percentage < threshold:
             return None
         majority_rewards = [reward for item, reward in zip(answers, rewards, strict=True) if item == answer]
         avg_reward = sum(majority_rewards) / len(majority_rewards) if majority_rewards else 0.0

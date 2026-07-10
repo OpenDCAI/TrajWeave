@@ -9,7 +9,6 @@ from trajweave.backends.local import extract_final_int
 from trajweave.backends.policy import PolicyRequest, PolicyResponse, StableByteTokenizer
 from trajweave.core.trajectory import TrainingSample
 
-
 _EXPR_RE = re.compile(r"(-?\d+)\s*([+\-*x])\s*(-?\d+)")
 
 
@@ -164,7 +163,11 @@ class TrainableTinyMathPolicyBackend:
         if not self.train_verifier:
             expected = _op_answer(*parsed) if parsed is not None else None
             approved = predicted is not None and expected is not None and predicted == expected
-            text = "APPROVED: rule verifier accepted the answer." if approved else "REVISE: rule verifier rejected the answer."
+            text = (
+                "APPROVED: rule verifier accepted the answer."
+                if approved
+                else "REVISE: rule verifier rejected the answer."
+            )
             token_ids = self.tokenizer.encode(text)
             return PolicyResponse(
                 text=text,

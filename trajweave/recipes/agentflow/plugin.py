@@ -5,6 +5,7 @@ from typing import Any
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
 from trajweave.recipes.agentflow import build_agentflow_launch_overrides, run_planner_tool_smoke
+from trajweave.recipes.agentflow.config import validate_agentflow_trainable_agent
 
 
 class AgentFlowRecipePlugin:
@@ -14,6 +15,8 @@ class AgentFlowRecipePlugin:
         return context.recipe_definition.family == "agentflow"
 
     def run(self, context: RunContext) -> dict:
+        agentflow_cfg = context.config.get("agentflow", {}) or {}
+        validate_agentflow_trainable_agent(agentflow_cfg.get("trainable_agent", "planner"))
         if context.mode == "verl_train":
             return self._run_verl_train(context)
         return self._run_smoke(context)
@@ -29,6 +32,7 @@ class AgentFlowRecipePlugin:
             device=str(backend_cfg.get("device", "cpu")),
             rollouts_per_task=int(rollout_cfg.get("rollouts_per_task", 2)),
             max_steps=int(agentflow_cfg.get("max_steps", team_cfg.get("max_turns", int(team_cfg.get("max_turns", 2))))),
+            trainable_agent=str(agentflow_cfg.get("trainable_agent", "planner")),
         )
         context.tracker.log_rollout_result(result, source="agentflow_planner_tool")
         output = {

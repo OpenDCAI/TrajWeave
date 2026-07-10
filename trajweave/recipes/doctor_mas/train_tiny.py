@@ -7,10 +7,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from trajweave.backends.trainable_tiny_math import TrainableTinyMathPolicyBackend
+from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.credit.doctor_mas import DoctorMASCreditAssigner
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
-from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.rollout.engine import RolloutEngine
 from trajweave.runtime import ExperimentTracker
 
@@ -77,7 +77,13 @@ def make_math_tasks(prefix: str, count: int, rng: random.Random) -> list[MathTas
             answer = left - right
         else:
             answer = left * right
-        tasks.append(MathTask(task_id=f"{prefix}_{idx}_{left}_{op}_{right}", question=f"What is {left} {op} {right}?", answer=answer))
+        tasks.append(
+            MathTask(
+                task_id=f"{prefix}_{idx}_{left}_{op}_{right}",
+                question=f"What is {left} {op} {right}?",
+                answer=answer,
+            )
+        )
     return tasks
 
 
@@ -100,7 +106,13 @@ def fixed_math_tasks(prefix: str) -> list[MathTask]:
             answer = left - right
         else:
             answer = left * right
-        tasks.append(MathTask(task_id=f"{prefix}_{idx}_{left}_{op}_{right}", question=f"What is {left} {op} {right}?", answer=answer))
+        tasks.append(
+            MathTask(
+                task_id=f"{prefix}_{idx}_{left}_{op}_{right}",
+                question=f"What is {left} {op} {right}?",
+                answer=answer,
+            )
+        )
     return tasks
 
 
@@ -177,7 +189,10 @@ def run_training(config: TrainConfig, tracker: ExperimentTracker | None = None) 
                     f"entropy={row.get('mean_entropy', 0.0):.3f}",
                 )
 
-    torch.save({"solver": backend.solver.state_dict(), "verifier": backend.verifier.state_dict()}, output_dir / "tiny_policy.pt")
+    torch.save(
+        {"solver": backend.solver.state_dict(), "verifier": backend.verifier.state_dict()},
+        output_dir / "tiny_policy.pt",
+    )
     return metrics_history
 
 

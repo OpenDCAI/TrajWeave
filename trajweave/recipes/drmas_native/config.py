@@ -25,7 +25,7 @@ DRMAS_NATIVE_MATH = DrMASNativeRecipeSpec(
     agent_ids=("Solver Agent", "Verifier Agent"),
     orchestra_type="math",
     coordination_protocol="solver_verifier_loop",
-    default_max_loop_num=3,
+    default_max_loop_num=2,
 )
 
 DRMAS_NATIVE_SEARCH = DrMASNativeRecipeSpec(
@@ -62,15 +62,38 @@ def build_drmas_native_launch_overrides(
     native_cfg = config.get("drmas_native", {})
     verl_cfg = config.get("verl", {})
     agent_ids = tuple(native_cfg.get("agent_ids", spec.agent_ids))
+    if agent_ids != spec.agent_ids:
+        raise ValueError(
+            f"DrMAS {spec.task} runtime uses fixed agent_ids={list(spec.agent_ids)!r}; got {list(agent_ids)!r}."
+        )
     model_ids = tuple(native_cfg.get("model_ids", native_cfg.get("models", ("default",) * len(agent_ids))))
     if len(model_ids) != len(agent_ids):
         raise ValueError("drmas_native.model_ids must have the same length as drmas_native.agent_ids.")
+    if len(set(model_ids)) != 1:
+        raise ValueError(
+            "TrajWeave DrMAS currently supports one shared actor worker group only; "
+            "heterogeneous drmas_native.model_ids are not implemented."
+        )
 
-    model_sharing = str(bool(native_cfg.get("model_sharing", len(set(model_ids)) == 1))).lower()
+    model_sharing_enabled = bool(native_cfg.get("model_sharing", True))
+    if not model_sharing_enabled:
+        raise ValueError("TrajWeave DrMAS shared actor runtime requires drmas_native.model_sharing=true.")
+    model_sharing = "true"
     agent_loop_backend = str(native_cfg.get("agent_loop_backend", native_cfg.get("rollout_backend", "hf_local_tq")))
     if agent_loop_backend == "verl_tq":
-        raise ValueError("DrMAS native integration requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq.")
+        raise ValueError(
+            "DrMAS native integration requires agent_loop_backend to be synthetic_tq or hf_local_tq, not verl_tq."
+        )
     max_loop_num = native_cfg.get("max_loop_num", spec.default_max_loop_num)
+    if spec.default_max_loop_num is None:
+        if max_loop_num is not None:
+            raise ValueError(f"DrMAS {spec.task} runtime does not support max_loop_num.")
+    elif _parse_int(max_loop_num) != spec.default_max_loop_num:
+        raise ValueError(
+            f"DrMAS {spec.task} runtime supports only max_loop_num={spec.default_max_loop_num}; got {max_loop_num!r}."
+        )
+    else:
+        max_loop_num = spec.default_max_loop_num
     source_config = config_path or str(Path.cwd())
 
     required = [
@@ -92,7 +115,9 @@ def build_drmas_native_launch_overrides(
     ]
     if max_loop_num is not None and spec.task == "math":
         required.append(f"+agent.orchestra.math.max_loop_num={int(max_loop_num)}")
+        required.append("+trajweave.turn_padding_multiple=2")
     if spec.task == "search":
+        required.append("+trajweave.turn_padding_multiple=4")
         search_url = native_cfg.get("search_url")
         if search_url:
             required.append(f"+env.search.search_url={search_url}")
@@ -102,6 +127,19 @@ def build_drmas_native_launch_overrides(
 
 def _hydra_list(values: tuple[str, ...]) -> str:
     return "[" + ",".join(_quote(value) for value in values) + "]"
+
+
+def _parse_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        digits = normalized[1:] if normalized.startswith(("+", "-")) else normalized
+        if digits.isdigit():
+            return int(normalized)
+    return None
 
 
 def _quote(value: str) -> str:

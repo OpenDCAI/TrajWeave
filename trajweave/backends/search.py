@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from trajweave.backends.policy import PolicyRequest, PolicyResponse, StableByteTokenizer
 
-
 _ANSWER_HINT_RE = re.compile(r"answer hint\s*:\s*(.+)", re.IGNORECASE)
 
 

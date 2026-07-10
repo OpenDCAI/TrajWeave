@@ -52,7 +52,11 @@ class HFTransformersPolicyBackend:
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
         if self.device is not None and self.device_map is None:
             self.model.to(self.device)
-        if not self._uses_stable_tokenizer and self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
+        if (
+            not self._uses_stable_tokenizer
+            and self.tokenizer.pad_token_id is None
+            and self.tokenizer.eos_token_id is not None
+        ):
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model.eval()
 

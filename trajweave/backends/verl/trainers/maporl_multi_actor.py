@@ -13,10 +13,16 @@ from trajweave.backends.verl.extensions.drmas.agent_wise_grpo import TrajWeaveAc
 from trajweave.backends.verl.routing import safe_worker_role_key, split_tq_batch_by_field
 from trajweave.backends.verl.schema import to_python
 from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
+from trajweave.backends.verl.weight_sync import sync_hf_local_rollout_weights
 from verl import DataProto
-from verl.single_controller.ray import RayClassWithInitArgs, RayWorkerGroup, ResourcePoolManager, create_colocated_worker_cls
+from verl.single_controller.ray import (
+    RayClassWithInitArgs,
+    RayWorkerGroup,
+    ResourcePoolManager,
+    create_colocated_worker_cls,
+)
 from verl.trainer.ppo.core_algos import agg_loss
-from verl.trainer.ppo.utils import Role, need_critic, need_reference_policy, need_teacher_policy
+from verl.trainer.ppo.utils import Role
 from verl.trainer.ppo.v1.trainer_base import (
     TrainingWorkerConfig,
     register_trainer,
@@ -42,6 +48,7 @@ class WorkerGroupConfig:
     model_path: str | None
     tokenizer_path: str | None
     trainable: bool
+    gpus: int
 
 
 class _NullLLMServerManager:
@@ -88,13 +95,19 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         self.maporl_trainable_group_ids = [group.group_id for group in groups if group.trainable]
         if not self.maporl_trainable_group_ids:
             raise ValueError("MAPoRL multi-actor trainer requires at least one trainable worker group.")
+        configured_model_ids = [str(item) for item in to_python(self.config.get("agent", {}).get("model_ids", []))]
+        frozen_model_ids = sorted(set(configured_model_ids) - set(self.maporl_trainable_group_ids))
+        if frozen_model_ids:
+            raise ValueError(
+                "MAPoRL multi-actor training currently requires every agent model_id to reference a trainable "
+                f"worker group; frozen model_ids are not routed to PPO: {frozen_model_ids}."
+            )
 
     def _validate_multi_actor_specs(self) -> None:
         tokenizer_mode = str(OmegaConf.select(self.config, "trajweave.multi_actor.tokenizer_mode") or "shared")
         if tokenizer_mode not in {"shared", "compatible"}:
             raise ValueError(
-                "MAPoRL multi-actor trainer supports trajweave.multi_actor.tokenizer_mode in "
-                "{'shared', 'compatible'}."
+                "MAPoRL multi-actor trainer supports trajweave.multi_actor.tokenizer_mode in {'shared', 'compatible'}."
             )
 
         missing_fields: list[str] = []
@@ -125,32 +138,33 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
                 "MAPoRL multi-actor currently supports reference policy only when ref is inside actor. "
                 "Set algorithm.use_kl_in_reward=false for the current TrajWeave multi-actor path."
             )
+        if int(self.config.trainer.nnodes) != 1:
+            raise ValueError("MAPoRL per-group GPU pools currently support trainer.nnodes=1 only.")
+        requested_gpus = sum(
+            self.maporl_worker_group_specs[group_id].gpus for group_id in self.maporl_trainable_group_ids
+        )
+        available_gpus = int(self.config.trainer.n_gpus_per_node)
+        if requested_gpus > available_gpus:
+            raise ValueError(
+                "MAPoRL trainable worker groups request more GPUs than trainer.n_gpus_per_node: "
+                f"requested={requested_gpus}, available={available_gpus}."
+            )
 
     def _init_resource_pool_mgr(self):
-        config = self.config
         self.role_worker_mapping = {}
         self.mapping = {}
-        actor_count = len(self.maporl_worker_group_specs)
-        colocate_count = max(3, actor_count + int(need_critic(config)) + int(need_teacher_policy(config)))
-        global_pool_id = "global_pool"
-        resource_pool_spec = {global_pool_id: [config.trainer.n_gpus_per_node] * config.trainer.nnodes}
+        resource_pool_spec = {
+            self.maporl_worker_group_specs[group_id].role_key: [self.maporl_worker_group_specs[group_id].gpus]
+            for group_id in self.maporl_trainable_group_ids
+        }
         self.resource_pool_manager = ResourcePoolManager(
             resource_pool_spec=resource_pool_spec,
             mapping=self.mapping,
-            max_colocate_count=colocate_count,
+            max_colocate_count=2 if self.use_critic else 1,
         )
 
     def _create_worker_groups(self) -> None:
-        resource_pool = self.resource_pool_manager.resource_pool_dict["global_pool"]
-        class_dict = {}
-        for group in self.maporl_worker_group_specs.values():
-            class_dict[group.role_key] = RayClassWithInitArgs(
-                cls=__import__("ray").remote(TrajWeaveActorRolloutRefWorker),
-                config=_actor_rollout_ref_config_for_group(self.config, group),
-                distillation_config=self.config.get("distillation"),
-                role=str(Role.Actor),
-            )
-
+        critic_class = None
         if self.use_critic:
             critic_cfg = omega_conf_to_dataclass(self.config.critic)
             critic_cfg.engine.infer_max_token_len_per_gpu = critic_cfg.ppo_infer_max_token_len_per_gpu
@@ -162,7 +176,7 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
                 optimizer_config=critic_cfg.optim,
                 checkpoint_config=critic_cfg.checkpoint,
             )
-            class_dict[str(Role.Critic)] = RayClassWithInitArgs(cls=__import__("ray").remote(TrainingWorker), config=worker_cfg)
+            critic_class = RayClassWithInitArgs(cls=__import__("ray").remote(TrainingWorker), config=worker_cfg)
             self._trajweave_critic_cfg = critic_cfg
 
         wg_kwargs = {"device_name": self.config.trainer.device}
@@ -173,19 +187,35 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
                     OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
                 )
 
-        worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
-        wg_dict = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls, **wg_kwargs)
-        spawned = wg_dict.spawn(prefix_set=class_dict.keys())
-
         self.actor_rollout_wgs = {}
-        for group_id, group in self.maporl_worker_group_specs.items():
+        critic_wg = None
+        for index, group_id in enumerate(self.maporl_trainable_group_ids):
+            group = self.maporl_worker_group_specs[group_id]
+            class_dict = {
+                group.role_key: RayClassWithInitArgs(
+                    cls=__import__("ray").remote(TrajWeaveActorRolloutRefWorker),
+                    config=_actor_rollout_ref_config_for_group(self.config, group),
+                    distillation_config=self.config.get("distillation"),
+                    role=str(Role.Actor),
+                )
+            }
+            if index == 0 and critic_class is not None:
+                class_dict[str(Role.Critic)] = critic_class
+            resource_pool = self.resource_pool_manager.resource_pool_dict[group.role_key]
+            worker_dict_cls = create_colocated_worker_cls(class_dict=class_dict)
+            wg_dict = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls, **wg_kwargs)
+            spawned = wg_dict.spawn(prefix_set=class_dict.keys())
             wg = spawned[group.role_key]
             wg.init_model()
             self.actor_rollout_wgs[group_id] = wg
+            if index == 0 and self.use_critic:
+                critic_wg = spawned[str(Role.Critic)]
         self.actor_rollout_wg = self.actor_rollout_wgs[self.maporl_trainable_group_ids[0]]
 
         if self.use_critic:
-            self.critic_wg = spawned[str(Role.Critic)]
+            if critic_wg is None:
+                raise RuntimeError("MAPoRL critic worker group was not created.")
+            self.critic_wg = critic_wg
             self.critic_wg.reset()
             value_loss_ = __import__("functools").partial(value_loss, config=self._trajweave_critic_cfg)
             self.critic_wg.set_loss_fn(value_loss_)
@@ -195,7 +225,6 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
 
     def _init_runtime_managers(self) -> None:
         from verl.experimental.reward_loop import RewardLoopManager
-        from verl.experimental.teacher_loop import MultiTeacherModelManager
 
         resource_pool = None
         self.reward_loop_manager = RewardLoopManager(config=self.config, rm_resource_pool=resource_pool)
@@ -212,7 +241,9 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
         bypass_recomputing_logprobs = rollout_corr_config and rollout_corr_config.get("bypass_mode", False)
         if bypass_recomputing_logprobs:
-            data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=["rollout_log_probs"])
+            data = tq.kv_batch_get(
+                keys=batch.keys, partition_id=batch.partition_id, select_fields=["rollout_log_probs"]
+            )
             data["old_log_probs"] = data.pop("rollout_log_probs")
             tq.kv_batch_put(keys=batch.keys, partition_id=batch.partition_id, fields=data)
             return batch
@@ -234,7 +265,9 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=fields)
         data["old_log_probs"] = response_from_nested(data.pop("log_probs"), data["response_mask"])
         data["entropy"] = response_from_nested(data.pop("entropy"), data["response_mask"])
-        tq.kv_batch_put(keys=batch.keys, partition_id=batch.partition_id, fields=data.select("old_log_probs", "entropy"))
+        tq.kv_batch_put(
+            keys=batch.keys, partition_id=batch.partition_id, fields=data.select("old_log_probs", "entropy")
+        )
 
         data_proto = DataProto(batch=data.to_padded_tensor())
         actor_config = self.config.actor_rollout_ref.actor
@@ -262,7 +295,9 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
             output = self._actor_wg(routed.group_id).compute_log_prob(routed.batch)
             assert len(output) == len(routed.batch)
 
-        data = tq.kv_batch_get(keys=batch.keys, partition_id=batch.partition_id, select_fields=["log_probs", "response_mask"])
+        data = tq.kv_batch_get(
+            keys=batch.keys, partition_id=batch.partition_id, select_fields=["log_probs", "response_mask"]
+        )
         data["ref_log_prob"] = response_from_nested(data.pop("log_probs"), data["response_mask"])
         tq.kv_batch_put(keys=batch.keys, partition_id=batch.partition_id, fields=data.select("ref_log_prob"))
         return batch
@@ -356,13 +391,19 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         total_key_count = _batch_len(batch)
         if routed_key_count != total_key_count:
             raise ValueError(
-                "MAPoRL worker_group routing lost batch keys: "
-                f"routed {routed_key_count}, expected {total_key_count}."
+                f"MAPoRL worker_group routing lost batch keys: routed {routed_key_count}, expected {total_key_count}."
             )
         for item in routed:
             if item.group_id not in self.actor_rollout_wgs:
                 known = ", ".join(sorted(self.actor_rollout_wgs))
                 raise KeyError(f"Unknown MAPoRL worker_group {item.group_id!r}. Known groups: {known}.")
+            world_size = int(self.actor_rollout_wgs[item.group_id].world_size)
+            if _batch_len(item.batch) % world_size != 0:
+                raise ValueError(
+                    "MAPoRL routed batch must be divisible by its actor worker-group world size; "
+                    f"group={item.group_id!r}, samples={_batch_len(item.batch)}, world_size={world_size}. "
+                    "Increase rollout.n/train_batch_size or reduce worker_groups.<id>.gpus."
+                )
         return routed
 
     def _actor_wg(self, group_id: str):
@@ -373,7 +414,7 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
 
     def on_step_end(self):
         with marked_timer("update_weights", self.timing_raw, color="red"):
-            self.checkpoint_manager.update_weights(self.global_steps)
+            sync_hf_local_rollout_weights(self)
 
 
 def _worker_groups_from_config(config: Any) -> list[WorkerGroupConfig]:
@@ -396,6 +437,7 @@ def _worker_groups_from_config(config: Any) -> list[WorkerGroupConfig]:
                 model_path=str(group["model_path"]) if group.get("model_path") else None,
                 tokenizer_path=str(group["tokenizer_path"]) if group.get("tokenizer_path") else None,
                 trainable=bool(group.get("trainable", True)),
+                gpus=_positive_gpu_count(group.get("gpus", 1), group_id=group_id),
             )
         )
     return groups
@@ -423,3 +465,15 @@ def _batch_len(batch: Any) -> int:
     if hasattr(batch, "keys"):
         return len(batch.keys)
     return len(batch)
+
+
+def _positive_gpu_count(value: Any, *, group_id: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"MAPoRL worker group {group_id!r} gpus must be a positive integer.")
+    try:
+        gpus = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"MAPoRL worker group {group_id!r} gpus must be a positive integer.") from exc
+    if gpus <= 0:
+        raise ValueError(f"MAPoRL worker group {group_id!r} gpus must be a positive integer.")
+    return gpus

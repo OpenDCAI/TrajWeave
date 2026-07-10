@@ -1,6 +1,7 @@
 import json
 
 from trajweave.backends.verl.tiny_assets import prepare_tiny_verl_assets
+from trajweave.pipeline.assets import maybe_prepare_assets
 
 
 def test_tiny_verl_assets_record_recipe_name(tmp_path):
@@ -17,3 +18,26 @@ def test_tiny_verl_assets_record_recipe_name(tmp_path):
 
     assert output["recipe_name"] == "agentflow_planner_tool"
     assert row["extra_info"]["trajweave_recipe"] == "agentflow_planner_tool"
+
+
+def test_tiny_verl_assets_default_output_dir_is_isolated_by_recipe(monkeypatch):
+    from trajweave.backends.verl import tiny_assets
+
+    monkeypatch.setattr(tiny_assets, "prepare_tiny_verl_assets", lambda **kwargs: kwargs)
+
+    agentflow = maybe_prepare_assets(
+        {
+            "recipe": "agentflow.flow_grpo.planner_tool",
+            "prepare": {"tiny_verl_assets": {"enabled": True}},
+        }
+    )
+    maporl = maybe_prepare_assets(
+        {
+            "recipe": "maporl.debate_math.full_verl_tiny",
+            "prepare": {"tiny_verl_assets": {"enabled": True}},
+        }
+    )
+
+    assert agentflow["output_dir"] == "outputs/agentflow.flow_grpo.planner_tool_tiny_assets"
+    assert maporl["output_dir"] == "outputs/maporl.debate_math.full_verl_tiny_tiny_assets"
+    assert agentflow["output_dir"] != maporl["output_dir"]

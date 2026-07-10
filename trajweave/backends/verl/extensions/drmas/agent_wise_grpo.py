@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from trajweave.backends.verl.extensions.common.hooks import AgentWiseGRPOHooks, extension_hooks_for_config
+from verl.single_controller.base.decorator import Dispatch, register
 from verl.workers.engine_workers import ActorRolloutRefWorker
 
 
@@ -19,6 +20,34 @@ class TrajWeaveActorRolloutRefWorker(ActorRolloutRefWorker):
         _ensure_torch_dtensor_import_compat()
         install_worker_nested_tensor_compat()
         super().__init__(*args, **kwargs)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def export_hf_rollout_snapshot(
+        self,
+        local_path: str,
+        global_step: int,
+        max_ckpt_to_keep: int = 2,
+    ) -> None:
+        """导出仅供本地 rollout 热加载的 HF 权重，不写 optimizer 分片。"""
+
+        if self.actor is None:
+            raise RuntimeError("Actor model must be initialized before exporting a rollout snapshot.")
+        manager = self.actor.engine.checkpoint_manager
+        previous_contents = manager.checkpoint_save_contents
+        previous_paths = manager.previous_saved_paths
+        previous_step = manager.previous_global_step
+        try:
+            manager.checkpoint_save_contents = ["hf_model"]
+            manager.previous_saved_paths = []
+            self.actor.engine.save_checkpoint(
+                local_path=local_path,
+                global_step=global_step,
+                max_ckpt_to_keep=None,
+            )
+        finally:
+            manager.checkpoint_save_contents = previous_contents
+            manager.previous_saved_paths = previous_paths
+            manager.previous_global_step = previous_step
 
 
 def apply_drmas_agent_wise_grpo_patch(config: Any = None) -> None:
@@ -232,7 +261,10 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
         if tb.OmegaConf.select(self.config.global_profiler, "steps") is not None:
             wg_kwargs["profile_steps"] = tb.OmegaConf.select(self.config.global_profiler, "steps")
             if tb.OmegaConf.select(self.config.global_profiler, "tool") == "nsys":
-                assert tb.OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options") is not None
+                assert (
+                    tb.OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
+                    is not None
+                )
                 wg_kwargs["worker_nsight_options"] = tb.OmegaConf.to_container(
                     tb.OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
                 )
@@ -290,7 +322,9 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
                 worker_group=self.actor_rollout_wg,
                 rollout_resource_pool=actor_rollout_resource_pool,
             )
-            checkpoint_engine_config = tb.omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
+            checkpoint_engine_config = tb.omega_conf_to_dataclass(
+                self.config.actor_rollout_ref.rollout.checkpoint_engine
+            )
             checkpoint_engine_config.backend = "naive"
             self.checkpoint_manager = tb.CheckpointEngineManager(
                 config=checkpoint_engine_config,
@@ -406,6 +440,24 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
     tb.PPOTrainer._compute_advantage = patched_compute_advantage
     tb.PPOTrainer._trajweave_drmas_patch = True
 
+    from verl.trainer.ppo.v1.trainer_sync import PPOTrainerSync
+
+    if not getattr(PPOTrainerSync.on_step_end, "_trajweave_hf_local_sync", False):
+        original_sync_on_step_end = PPOTrainerSync.on_step_end
+
+        def patched_sync_on_step_end(self):
+            if _config_get(_config_get(self.config, "trajweave", {}), "agent_loop_backend") == "hf_local_tq":
+                from trajweave.backends.verl.weight_sync import sync_hf_local_rollout_weights
+                from verl.utils.debug import marked_timer
+
+                with marked_timer("update_weights", self.timing_raw, color="red"):
+                    sync_hf_local_rollout_weights(self)
+                return None
+            return original_sync_on_step_end(self)
+
+        patched_sync_on_step_end._trajweave_hf_local_sync = True  # type: ignore[attr-defined]
+        PPOTrainerSync.on_step_end = patched_sync_on_step_end
+
 
 def _is_trajweave_self_managed_tq(config: Any) -> bool:
     return _config_get(_config_get(config, "trajweave", {}), "agent_loop_backend") in {"synthetic_tq", "hf_local_tq"}
@@ -444,7 +496,7 @@ def _nested_to_padded_tensor_compat(nested_tensor: torch.Tensor, padding: int | 
         padded = torch.full((batch_size, max_len), padding, dtype=values.dtype, device=values.device)
         lengths = offsets.diff().tolist()
         starts = offsets[:-1].tolist()
-        for row, (start, length) in enumerate(zip(starts, lengths)):
+        for row, (start, length) in enumerate(zip(starts, lengths, strict=False)):
             padded[row, :length] = values[start : start + length]
         return padded
 

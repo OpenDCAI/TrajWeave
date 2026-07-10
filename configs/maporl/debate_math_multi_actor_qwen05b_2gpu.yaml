@@ -4,8 +4,8 @@ mode: verl_train
 maporl:
   agent_count: 2
   agent_ids: ["agent_0", "agent_1"]
-  model_ids: ["qwen05b_a", "qwen05b_b"]
-  agent_loop_backend: synthetic_tq
+  model_ids: ["qwen05b_instruct", "qwen05b_base"]
+  agent_loop_backend: hf_local_tq
   tokenizer_mode: shared
   max_rounds: 2
   consensus_threshold: 2
@@ -21,13 +21,13 @@ maporl:
   rule_discount: 0.3
   alpha: [0.0, 0.0, 0.0, 0.0]
   worker_groups:
-    qwen05b_a:
+    qwen05b_instruct:
       model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
       tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
       trainable: true
       gpus: 1
-    qwen05b_b:
-      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    qwen05b_base:
+      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B
       tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
       trainable: true
       gpus: 1
@@ -80,9 +80,9 @@ verl:
     - trainer.experiment_name=maporl_debate_math_multi_actor_qwen05b_2gpu
     - trainer.nnodes=1
     - trainer.n_gpus_per_node=2
-    - trainer.total_epochs=1
-    - trainer.total_training_steps=1
-    - trainer.save_freq=1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=2
     - trainer.test_freq=-1
     - trainer.val_before_train=false
     - trainer.logger=[console]
@@ -93,7 +93,7 @@ verl:
     - data.train_batch_size=2
     - data.val_batch_size=2
     - data.max_prompt_length=96
-    - data.max_response_length=32
+    - data.max_response_length=16
     - data.dataloader_num_workers=0
     - data.filter_overlong_prompts=false
     - data.truncation=right
@@ -107,7 +107,9 @@ verl:
     - actor_rollout_ref.rollout.n=2
     - actor_rollout_ref.rollout.val_kwargs.n=2
     - actor_rollout_ref.rollout.prompt_length=96
-    - actor_rollout_ref.rollout.response_length=32
+    - actor_rollout_ref.rollout.response_length=16
+    - actor_rollout_ref.rollout.temperature=1.2
+    - actor_rollout_ref.rollout.top_p=0.95
     - actor_rollout_ref.rollout.tensor_model_parallel_size=1
     - actor_rollout_ref.rollout.calculate_log_probs=false
     - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1

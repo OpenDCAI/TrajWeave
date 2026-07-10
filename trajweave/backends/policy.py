@@ -25,8 +25,7 @@ class PolicyResponse:
 
 
 class PolicyBackend(Protocol):
-    def generate(self, request: PolicyRequest) -> PolicyResponse:
-        ...
+    def generate(self, request: PolicyRequest) -> PolicyResponse: ...
 
 
 class StableByteTokenizer:

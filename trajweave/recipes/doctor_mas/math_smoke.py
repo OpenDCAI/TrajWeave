@@ -58,7 +58,12 @@ def build_doctor_mas_math_engine(backend: str = "rule", device: str = "cpu", max
     )
 
 
-def run_smoke(backend: str = "rule", device: str = "cpu", rollouts_per_task: int = 2, max_turns: int = 2) -> tuple[SmokeSummary, RolloutResult]:
+def run_smoke(
+    backend: str = "rule",
+    device: str = "cpu",
+    rollouts_per_task: int = 2,
+    max_turns: int = 2,
+) -> tuple[SmokeSummary, RolloutResult]:
     engine = build_doctor_mas_math_engine(backend=backend, device=device, max_turns=max_turns)
     result = engine.run(default_math_tasks(), rollouts_per_task=rollouts_per_task)
     dataproto_rows: int | None = None

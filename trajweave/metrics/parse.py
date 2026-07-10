@@ -4,7 +4,6 @@ import re
 
 from trajweave.metrics.events import MetricEvent
 
-
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 

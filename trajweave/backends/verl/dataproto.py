@@ -34,11 +34,15 @@ class VerlDataProtoAdapter:
         if not samples:
             raise ValueError("Cannot build DataProto from empty samples.")
         prompt_ids = [[ord(ch) % 255 + 1 for ch in sample.prompt] or [1] for sample in samples]
-        response_ids = [sample.response_token_ids or [ord(ch) % 255 + 1 for ch in sample.response] or [1] for sample in samples]
+        response_ids = [
+            sample.response_token_ids or [ord(ch) % 255 + 1 for ch in sample.response] or [1] for sample in samples
+        ]
         prompts = _pad(prompt_ids, self.pad_token_id)
         responses = _pad(response_ids, self.pad_token_id)
         input_ids = torch.cat([prompts, responses], dim=1)
-        attention_mask = torch.cat([(prompts != self.pad_token_id).long(), (responses != self.pad_token_id).long()], dim=1)
+        attention_mask = torch.cat(
+            [(prompts != self.pad_token_id).long(), (responses != self.pad_token_id).long()], dim=1
+        )
         position_ids = torch.arange(input_ids.shape[1], dtype=torch.long).unsqueeze(0).repeat(input_ids.shape[0], 1)
         response_mask = (responses != self.pad_token_id).long()
         token_level_rewards = torch.zeros_like(responses, dtype=torch.float32)

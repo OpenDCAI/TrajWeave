@@ -12,7 +12,7 @@ def maybe_prepare_assets(config: dict[str, Any]) -> dict[str, str] | None:
     from trajweave.backends.verl.tiny_assets import prepare_tiny_verl_assets
 
     return prepare_tiny_verl_assets(
-        output_dir=tiny_cfg.get("output_dir", "outputs/doctor_mas_verl_tiny_assets"),
+        output_dir=tiny_cfg.get("output_dir", f"outputs/{recipe_name(config)}_tiny_assets"),
         train_size=int(tiny_cfg.get("train_size", 2)),
         val_size=int(tiny_cfg.get("val_size", 2)),
         task_family=str(tiny_cfg.get("task_family", "math")),

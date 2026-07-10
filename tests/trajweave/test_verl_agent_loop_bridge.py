@@ -25,15 +25,62 @@ def test_trajweave_agent_loop_runtime_config_reads_verl_overrides():
     assert runtime.recipe == "doctor_mas_math"
     assert runtime.config_path == "configs/drmas/math_smoke.yaml"
     assert runtime.as_overrides()["trajweave.credit_allocator"] == "doctor_mas_agent_wise"
+    assert runtime.turn_padding_multiple == 2
+
+
+def test_trajweave_agent_loop_runtime_config_validates_hf_local_dtype():
+    from trajweave.backends.verl.runtime_config import TrajWeaveAgentLoopRuntimeConfig
+
+    runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(
+        {"trajweave": {"hf_local_dtype": "float16", "hf_local_model_cache_size": 1}}
+    )
+
+    assert runtime.hf_local_dtype == "fp16"
+    assert runtime.hf_local_model_cache_size == 1
+    assert runtime.as_overrides()["trajweave.hf_local_dtype"] == "fp16"
+    assert runtime.as_overrides()["trajweave.hf_local_model_cache_size"] == "1"
+    with pytest.raises(ValueError, match="hf_local_dtype"):
+        TrajWeaveAgentLoopRuntimeConfig.from_verl_config({"trajweave": {"hf_local_dtype": "int8"}})
+    with pytest.raises(ValueError, match="cache_size"):
+        TrajWeaveAgentLoopRuntimeConfig.from_verl_config({"trajweave": {"hf_local_model_cache_size": -1}})
+
+
+def test_hf_local_dtype_maps_to_torch_dtype():
+    torch = pytest.importorskip("torch")
+
+    from trajweave.backends.verl.local_generation import _torch_dtype
+
+    assert _torch_dtype("fp32") is torch.float32
+    assert _torch_dtype("fp16") is torch.float16
+    assert _torch_dtype("bf16") is torch.bfloat16
+
+
+def test_hf_local_model_cache_evicts_before_loading_next_group():
+    from trajweave.backends.verl.local_generation import HFLocalGenerationMixin, _evict_local_model_cache
+
+    first_model = object()
+    cache = {"group_a": first_model}
+
+    evicted = _evict_local_model_cache(cache, max_cached_models=1)
+
+    assert evicted == ("group_a",)
+    assert cache == {}
+    assert _evict_local_model_cache({"group_a": first_model}, max_cached_models=0) == ()
+
+    worker = type("Worker", (HFLocalGenerationMixin,), {})()
+    worker._trajweave_local_models = {"group_b": object()}
+    worker._trajweave_policy_version = 3
+    result = worker.release_local_models()
+    assert result == {"released_groups": ["group_b"], "policy_version": 3}
+    assert worker._trajweave_local_models == {}
 
 
 def test_verl_can_load_trajweave_agent_loop_manager_by_fqn():
     pytest.importorskip("torch")
     pytest.importorskip("transfer_queue")
+    from trajweave.backends.verl.agent_loop import TRAJWEAVE_AGENT_LOOP_MANAGER_FQN
     from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
     from verl.utils.import_utils import load_class_from_fqn
-
-    from trajweave.backends.verl.agent_loop import TRAJWEAVE_AGENT_LOOP_MANAGER_FQN
 
     manager_cls = load_class_from_fqn(TRAJWEAVE_AGENT_LOOP_MANAGER_FQN, "AgentLoopManager")
 

@@ -5,7 +5,7 @@ from typing import Any
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
 from trajweave.recipes.maporl import build_maporl_launch_overrides, run_debate_math_smoke
-from trajweave.recipes.maporl.config import validate_maporl_multi_actor_config
+from trajweave.recipes.maporl.config import resolve_maporl_credit_settings, validate_maporl_multi_actor_config
 
 
 class MAPoRLRecipePlugin:
@@ -26,7 +26,7 @@ class MAPoRLRecipePlugin:
         backend_cfg = config.get("backend", {})
         maporl_cfg = config.get("maporl", {})
         protocol_cfg = config.get("protocol", {})
-        credit_cfg = config.get("credit", {})
+        credit_settings = resolve_maporl_credit_settings(config)
         agent_count = int(maporl_cfg.get("agent_count", team_cfg.get("agent_count", 2)))
         agent_ids = tuple(maporl_cfg.get("agent_ids", [f"agent_{idx}" for idx in range(agent_count)]))
         model_ids = tuple(maporl_cfg.get("model_ids", ["shared"] * len(agent_ids)))
@@ -62,10 +62,10 @@ class MAPoRLRecipePlugin:
                     protocol_cfg.get("criteria_for_consensus_reward_threshold", 0.7),
                 )
             ),
-            rule_horizon=str(credit_cfg.get("rule_horizon", maporl_cfg.get("rule_horizon", "discounted_sum"))),
-            rule_agent_share=str(credit_cfg.get("rule_agent_share", maporl_cfg.get("rule_agent_share", "all"))),
-            rule_discount=float(credit_cfg.get("rule_discount", maporl_cfg.get("rule_discount", 0.3))),
-            alpha=tuple(float(value) for value in credit_cfg.get("alpha", maporl_cfg.get("alpha", [0, 0, 0, 0]))),
+            rule_horizon=credit_settings["rule_horizon"],
+            rule_agent_share=credit_settings["rule_agent_share"],
+            rule_discount=credit_settings["rule_discount"],
+            alpha=credit_settings["alpha"],
             policy_separation=bool(maporl_cfg.get("policy_separation", True)),
             collaboration_separation=bool(maporl_cfg.get("collaboration_separation", True)),
             task_training=bool(maporl_cfg.get("task_training", False)),

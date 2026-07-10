@@ -6,7 +6,7 @@ from trajweave.backends.policy import PolicyBackend, PolicyRequest
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.envs.math import MathTask
-from trajweave.orchestration.base import TeamContext
+from trajweave.orchestration.base import TeamContext, is_approved_response
 
 
 @dataclass
@@ -85,7 +85,7 @@ class SolverVerifierOrchestra:
                 )
             )
             context.append(verifier.name, verifier_response.text)
-            approved = self.approval_keyword in verifier_response.text.upper()
+            approved = is_approved_response(verifier_response.text, self.approval_keyword)
             trajectory.add_turn(
                 AgentTurn(
                     episode_id=episode_id,
@@ -114,7 +114,13 @@ class SolverVerifierOrchestra:
     def _build_prompt(self, role: str, observation: str, context: TeamContext) -> str:
         rendered = context.render()
         if role.lower() == "solver":
-            return f"Task:\n{observation}\n\nTeam context:\n{rendered}\n\nSolve the task and return 'Final answer: <number>'."
+            return (
+                f"Task:\n{observation}\n\nTeam context:\n{rendered}\n\n"
+                "Solve the task and return 'Final answer: <number>'."
+            )
         if role.lower() == "verifier":
-            return f"Task:\n{observation}\n\nTeam context:\n{rendered}\n\nVerify the latest solver answer. Return APPROVED or REVISE."
+            return (
+                f"Task:\n{observation}\n\nTeam context:\n{rendered}\n\n"
+                "Verify the latest solver answer. Return APPROVED or REVISE."
+            )
         return f"Task:\n{observation}\n\nTeam context:\n{rendered}"

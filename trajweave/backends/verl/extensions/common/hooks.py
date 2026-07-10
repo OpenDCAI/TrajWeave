@@ -1,31 +1,62 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+_DEFAULT_ADVANTAGE_TQ_FIELDS = (
+    "uid",
+    "response_mask",
+    "rm_scores",
+    "rollout_log_probs",
+    "old_log_probs",
+    "ref_log_prob",
+    "values",
+)
 
 
 @dataclass(frozen=True)
 class PPOExtensionHooks:
     name: str = "default"
 
-    def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
         return ()
 
     def tq_select_fields(
         self,
         stage: str,
-        default_fields: tuple[str, ...] | None = None,
+        default_fields: tuple[str, ...],
         config: Any = None,
     ) -> tuple[str, ...]:
-        if default_fields is not None:
-            return default_fields
-        if stage != "advantage":
-            return ()
-        return ("uid", "response_mask", "rm_scores", "rollout_log_probs", "old_log_probs", "ref_log_prob", "values")
+        return default_fields
 
     def prepare_dataproto(self, data: Any, *, stage: str, config: Any = None) -> Any:
         return data
+
+    def compute_advantage(
+        self,
+        data: Any,
+        *,
+        batch_keys: list[str],
+        adv_estimator: Any,
+        gamma: float,
+        lam: float,
+        num_repeat: int,
+        norm_adv_by_std_in_grpo: bool,
+        config: Any = None,
+        fallback: Callable[..., Any],
+    ) -> Any:
+        return fallback(
+            data,
+            batch_keys=batch_keys,
+            adv_estimator=adv_estimator,
+            gamma=gamma,
+            lam=lam,
+            num_repeat=num_repeat,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+        )
 
     def on_rollout_output(self, data: Any) -> Any:
         return data
@@ -56,7 +87,7 @@ class PPOExtensionHooks:
 class AgentWiseGRPOHooks(PPOExtensionHooks):
     name: str = "agent_wise_grpo"
 
-    def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
         return ("agent_id", "traj_uid", "turn_id")
 
     def tq_select_fields(
@@ -65,6 +96,8 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         default_fields: tuple[str, ...] | None = None,
         config: Any = None,
     ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
         fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
         if stage == "advantage" and _config_get(config, "group_by_agent_id", False):
             fields.extend(["agent_id", "traj_uid"])
@@ -149,6 +182,7 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         self,
         data: Any,
         *,
+        batch_keys: list[str] | None = None,
         adv_estimator: Any,
         gamma: float = 1.0,
         lam: float = 1.0,
@@ -156,7 +190,6 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         norm_adv_by_std_in_grpo: bool = True,
         config: Any = None,
         fallback: Any = None,
-        batch_keys: list[str] | None = None,
     ) -> Any:
         from verl.trainer.ppo import core_algos
         from verl.trainer.ppo.ray_trainer import compute_response_mask
@@ -197,7 +230,7 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
 class MAPoRLFullPPOHooks(PPOExtensionHooks):
     name: str = "maporl_full_ppo"
 
-    def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
         return (
             "agent_id",
             "policy_group",
@@ -216,29 +249,33 @@ class MAPoRLFullPPOHooks(PPOExtensionHooks):
     def tq_select_fields(
         self,
         stage: str,
-        default_fields: tuple[str, ...] | None = None,
+        default_fields: tuple[str, ...],
         config: Any = None,
     ) -> tuple[str, ...]:
         fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
         if stage == "advantage":
-            fields.extend(self.batch_schema_fields(stage))
+            fields.extend(self.batch_schema_fields(stage, config=config))
         return tuple(dict.fromkeys(fields))
+
+    def prepare_dataproto(self, data: Any, *, stage: str, config: Any = None) -> Any:
+        if stage == "advantage":
+            return _apply_maporl_turn_credit(data, config=config)
+        return data
 
     def compute_advantage(
         self,
         data: Any,
         *,
+        batch_keys: list[str],
         adv_estimator: Any,
-        gamma: float = 1.0,
-        lam: float = 1.0,
-        num_repeat: int = 1,
-        norm_adv_by_std_in_grpo: bool = True,
+        gamma: float,
+        lam: float,
+        num_repeat: int,
+        norm_adv_by_std_in_grpo: bool,
         config: Any = None,
-        fallback: Any = None,
-        batch_keys: list[str] | None = None,
+        fallback: Callable[..., Any],
     ) -> Any:
-        if fallback is None:
-            raise ValueError("MAPoRLFullPPOHooks requires a fallback advantage implementation.")
+        data = _apply_maporl_turn_credit(data, config=config)
         return fallback(
             data,
             batch_keys=batch_keys,
@@ -250,17 +287,44 @@ class MAPoRLFullPPOHooks(PPOExtensionHooks):
             config=config,
         )
 
+    def output_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...],
+        data: Any,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        fields = list(default_fields)
+        if stage == "advantage":
+            for field in ("token_level_scores", "token_level_rewards"):
+                if field in data.batch:
+                    fields.append(field)
+        return tuple(dict.fromkeys(fields))
+
     def compute_extra_metrics(self, data: Any, metrics: dict[str, Any], stage: str) -> dict[str, Any]:
         if stage != "advantage":
             return {}
         output: dict[str, Any] = {}
         non_tensors = getattr(data, "non_tensor_batch", {})
-        for field in ("raw_score", "correctness", "consensus_reached"):
+        response_mask = getattr(data, "batch", {}).get("response_mask")
+        valid_rows = None
+        if response_mask is not None and response_mask.ndim == 2:
+            valid_rows = response_mask.bool().any(dim=-1).detach().cpu().tolist()
+        for field in (
+            "raw_score",
+            "correctness",
+            "consensus_reached",
+            "maporl_score",
+            "maporl_bonus",
+            "maporl_reward",
+        ):
             values = non_tensors.get(field)
             if values is None:
                 continue
             try:
-                numeric_values = [float(value) for value in values]
+                numeric_values = [
+                    float(value) for row, value in enumerate(values) if valid_rows is None or valid_rows[row]
+                ]
             except (TypeError, ValueError):
                 continue
             if numeric_values:
@@ -272,7 +336,7 @@ class MAPoRLFullPPOHooks(PPOExtensionHooks):
 class AgentFlowPlannerGRPOHooks(PPOExtensionHooks):
     name: str = "agentflow_planner_grpo"
 
-    def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
         return (
             "agent_id",
             "traj_uid",
@@ -291,15 +355,18 @@ class AgentFlowPlannerGRPOHooks(PPOExtensionHooks):
         default_fields: tuple[str, ...] | None = None,
         config: Any = None,
     ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
         fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
         if stage == "advantage":
-            fields.extend(self.batch_schema_fields(stage))
+            fields.extend(self.batch_schema_fields(stage, config=config))
         return tuple(dict.fromkeys(fields))
 
     def compute_advantage(
         self,
         data: Any,
         *,
+        batch_keys: list[str] | None = None,
         adv_estimator: Any,
         gamma: float = 1.0,
         lam: float = 1.0,
@@ -307,7 +374,6 @@ class AgentFlowPlannerGRPOHooks(PPOExtensionHooks):
         norm_adv_by_std_in_grpo: bool = True,
         config: Any = None,
         fallback: Any = None,
-        batch_keys: list[str] | None = None,
     ) -> Any:
         if fallback is None:
             raise ValueError("AgentFlowPlannerGRPOHooks requires a fallback advantage implementation.")
@@ -337,6 +403,116 @@ class AgentFlowPlannerGRPOHooks(PPOExtensionHooks):
             planner_turns = [str(value) for value in stages].count("planner_next_step")
             output["trajweave/agentflow/planner_turns"] = planner_turns
         return output
+
+
+_MAPORL_REQUIRED_TURN_FIELDS = (
+    "traj_uid",
+    "round_id",
+    "agent_index",
+    "raw_score",
+    "correctness",
+    "finished_round",
+)
+_MAPORL_CREDIT_APPLIED = "trajweave_maporl_credit_applied"
+
+
+def _apply_maporl_turn_credit(data: Any, *, config: Any = None) -> Any:
+    meta_info = getattr(data, "meta_info", None)
+    if meta_info is not None and meta_info.get(_MAPORL_CREDIT_APPLIED, False):
+        return data
+
+    import numpy as np
+    import torch
+
+    from trajweave.credit.maporl import MAPoRLPPOScoreRuleCreditAssigner
+
+    non_tensors = getattr(data, "non_tensor_batch", {})
+    missing = [field for field in _MAPORL_REQUIRED_TURN_FIELDS if field not in non_tensors]
+    if missing:
+        raise KeyError(f"MAPoRL advantage credit requires non_tensor_batch fields: {missing}.")
+    if "response_mask" not in data.batch or "token_level_scores" not in data.batch:
+        raise KeyError("MAPoRL advantage credit requires response_mask and token_level_scores tensors.")
+
+    response_mask = data.batch["response_mask"]
+    previous_scores = data.batch["token_level_scores"]
+    if response_mask.ndim != 2 or previous_scores.shape != response_mask.shape:
+        raise ValueError("MAPoRL response_mask and token_level_scores must be aligned 2D tensors.")
+    row_count = response_mask.shape[0]
+    turn_fields = {
+        field: _batch_values(non_tensors[field], row_count=row_count, field=field)
+        for field in _MAPORL_REQUIRED_TURN_FIELDS
+    }
+    valid_rows = response_mask.bool().any(dim=-1).detach().cpu().tolist()
+    real_rows = [row for row, is_valid in enumerate(valid_rows) if is_valid]
+    if not real_rows:
+        raise ValueError("MAPoRL credit calculation requires at least one non-padding response row.")
+
+    grouped_rows: dict[object, list[int]] = defaultdict(list)
+    for row in real_rows:
+        grouped_rows[turn_fields["traj_uid"][row]].append(row)
+
+    assigner = MAPoRLPPOScoreRuleCreditAssigner.from_config(config)
+    row_credits: list[Any | None] = [None] * row_count
+    for traj_uid, rows in grouped_rows.items():
+        finished_rounds = {int(turn_fields["finished_round"][row]) for row in rows}
+        if len(finished_rounds) != 1:
+            raise ValueError(f"MAPoRL trajectory {traj_uid!r} has inconsistent finished_round values.")
+        credits = assigner.score_turns(
+            round_ids=[int(turn_fields["round_id"][row]) for row in rows],
+            agent_indices=[int(turn_fields["agent_index"][row]) for row in rows],
+            raw_scores=[float(turn_fields["raw_score"][row]) for row in rows],
+            correctnesses=[float(turn_fields["correctness"][row]) for row in rows],
+            finished_round=finished_rounds.pop(),
+        )
+        for row, credit in zip(rows, credits, strict=True):
+            row_credits[row] = credit
+
+    if any(row_credits[row] is None for row in real_rows):
+        raise RuntimeError("MAPoRL credit calculation did not produce a reward for every real response row.")
+
+    token_level_scores = torch.zeros_like(previous_scores)
+    maporl_scores = np.zeros(row_count, dtype=np.float32)
+    maporl_bonuses = np.zeros(row_count, dtype=np.float32)
+    maporl_rewards = np.zeros(row_count, dtype=np.float32)
+    for row in real_rows:
+        credit = row_credits[row]
+        if credit is None:
+            raise RuntimeError(f"MAPoRL row {row} is missing its calculated credit.")
+        valid_tokens = torch.nonzero(response_mask[row].bool(), as_tuple=False).flatten()
+        token_level_scores[row, valid_tokens[-1]] = credit.reward
+        maporl_scores[row] = credit.score
+        maporl_bonuses[row] = credit.bonus
+        maporl_rewards[row] = credit.reward
+
+    previous_rewards = data.batch.get("token_level_rewards")
+    reward_adjustment = 0.0 if previous_rewards is None else previous_rewards - previous_scores
+    data.batch["token_level_scores"] = token_level_scores
+    data.batch["token_level_rewards"] = token_level_scores + reward_adjustment
+    if any(not is_valid for is_valid in valid_rows):
+        padding_mask = torch.tensor(
+            [not is_valid for is_valid in valid_rows],
+            dtype=torch.bool,
+            device=data.batch["token_level_rewards"].device,
+        )
+        data.batch["token_level_rewards"][padding_mask] = 0
+    data.non_tensor_batch["maporl_score"] = maporl_scores
+    data.non_tensor_batch["maporl_bonus"] = maporl_bonuses
+    data.non_tensor_batch["maporl_reward"] = maporl_rewards
+    if meta_info is None:
+        data.meta_info = {}
+    data.meta_info[_MAPORL_CREDIT_APPLIED] = True
+    return data
+
+
+def _batch_values(values: Any, *, row_count: int, field: str) -> list[Any]:
+    if hasattr(values, "tolist"):
+        values = values.tolist()
+    if not isinstance(values, list | tuple):
+        values = [values]
+    output = list(values)
+    if len(output) != row_count:
+        raise ValueError(f"MAPoRL field {field!r} has {len(output)} rows, expected {row_count}.")
+    return output
 
 
 def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:

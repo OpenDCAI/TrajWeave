@@ -54,7 +54,10 @@ def default_search_tasks() -> list[SearchTask]:
             answer="Guido van Rossum",
             search_query="Python programming language creator",
             documents=(
-                SearchDocument(title="Python", text="Python was created by Guido van Rossum and first released in 1991."),
+                SearchDocument(
+                    title="Python",
+                    text="Python was created by Guido van Rossum and first released in 1991.",
+                ),
                 SearchDocument(title="Java", text="Java was originally developed by James Gosling."),
             ),
         ),

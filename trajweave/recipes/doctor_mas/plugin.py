@@ -104,7 +104,9 @@ class DoctorMASRecipePlugin:
         elif backend_type == "tiny-torch":
             policy_backend = TinyTorchPolicyBackend(device=str(backend_cfg.get("device", "cpu")))
         elif backend_type == "rule":
-            policy_backend = RuleBasedSearchPolicyBackend() if recipe == "doctor_mas_search" else RuleBasedMathPolicyBackend()
+            policy_backend = (
+                RuleBasedSearchPolicyBackend() if recipe == "doctor_mas_search" else RuleBasedMathPolicyBackend()
+            )
         else:
             raise ValueError(f"Unknown backend.type: {backend_type}")
 
@@ -130,11 +132,15 @@ class DoctorMASRecipePlugin:
         config = context.config
         training_cfg = config.get("training", {})
         backend_cfg = config.get("backend", {})
-        output_dir = config.get("output", {}).get("dir", training_cfg.get("output_dir", "outputs/doctor_mas_tiny_train"))
+        output_dir = config.get("output", {}).get(
+            "dir", training_cfg.get("output_dir", "outputs/doctor_mas_tiny_train")
+        )
         train_config = TrainConfig(
             steps=int(training_cfg.get("steps", 120)),
             batch_tasks=int(training_cfg.get("batch_tasks", 8)),
-            rollouts_per_task=int(config.get("rollout", {}).get("rollouts_per_task", training_cfg.get("rollouts_per_task", 8))),
+            rollouts_per_task=int(
+                config.get("rollout", {}).get("rollouts_per_task", training_cfg.get("rollouts_per_task", 8))
+            ),
             max_turns=int(config.get("team", {}).get("max_turns", training_cfg.get("max_turns", 2))),
             eval_interval=int(training_cfg.get("eval_interval", 10)),
             lr=float(training_cfg.get("lr", 0.03)),
@@ -158,8 +164,16 @@ class DoctorMASRecipePlugin:
             "final_metrics": history[-1] if history else None,
         }
         context.tracker.log_metrics(output["final_metrics"] or {}, source="tiny_training")
-        context.tracker.log_artifact(name="legacy_tiny_metrics.jsonl", path=f"{train_config.output_dir}/metrics.jsonl", kind="metrics")
-        context.tracker.log_artifact(name="legacy_tiny_policy.pt", path=f"{train_config.output_dir}/tiny_policy.pt", kind="checkpoint")
+        context.tracker.log_artifact(
+            name="legacy_tiny_metrics.jsonl",
+            path=f"{train_config.output_dir}/metrics.jsonl",
+            kind="metrics",
+        )
+        context.tracker.log_artifact(
+            name="legacy_tiny_policy.pt",
+            path=f"{train_config.output_dir}/tiny_policy.pt",
+            kind="checkpoint",
+        )
         if context.prepared_assets:
             output["prepared_assets"] = context.prepared_assets
         return output

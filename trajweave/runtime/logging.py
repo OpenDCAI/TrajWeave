@@ -6,6 +6,7 @@ from typing import Any
 
 from trajweave.storage.jsonl import JsonlWriter
 from trajweave.storage.run_store import utc_now_iso
+from trajweave.storage.serialization import redact_secrets
 
 
 class StructuredLogger:
@@ -21,20 +22,26 @@ class StructuredLogger:
 
     def log(self, level: str, event: str, message: str, payload: dict[str, Any] | None = None) -> None:
         level_name = level.upper()
-        row = {
-            "ts": utc_now_iso(),
-            "run_id": self.run_id,
-            "level": level_name,
-            "event": event,
-            "message": message,
-            "payload": payload or {},
-        }
+        row = redact_secrets(
+            {
+                "ts": utc_now_iso(),
+                "run_id": self.run_id,
+                "level": level_name,
+                "event": event,
+                "message": message,
+                "payload": payload or {},
+            }
+        )
         self._writer.write(row)
         if getattr(logging, level_name, logging.INFO) >= self._level:
             with self.console_path.open("a", encoding="utf-8") as file:
-                file.write(f"{row['ts']} {level_name} {event} {message}\n")
+                file.write(f"{row['ts']} {row['level']} {row['event']} {row['message']}\n")
+            self.console_path.chmod(0o600)
             if self._console:
-                logging.getLogger("trajweave.runtime").log(getattr(logging, level_name, logging.INFO), message)
+                logging.getLogger("trajweave.runtime").log(
+                    getattr(logging, level_name, logging.INFO),
+                    row["message"],
+                )
 
     def info(self, event: str, message: str, payload: dict[str, Any] | None = None) -> None:
         self.log("INFO", event, message, payload)

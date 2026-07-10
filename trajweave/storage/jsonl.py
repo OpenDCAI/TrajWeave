@@ -15,6 +15,7 @@ class JsonlWriter:
     def write(self, row: dict[str, Any]) -> None:
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(json_safe(row), ensure_ascii=False) + "\n")
+        self.path.chmod(0o600)
 
     def write_many(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -22,3 +23,4 @@ class JsonlWriter:
         with self.path.open("a", encoding="utf-8") as file:
             for row in rows:
                 file.write(json.dumps(json_safe(row), ensure_ascii=False) + "\n")
+        self.path.chmod(0o600)

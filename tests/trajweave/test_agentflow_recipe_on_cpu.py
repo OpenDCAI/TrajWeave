@@ -68,9 +68,12 @@ def test_agentflow_verl_config_prepares_planner_grpo_launch():
     assert "trajweave.backends.verl.main_ppo" in command
     assert "+trajweave.recipe=agentflow_planner_tool" in command
     assert "+trajweave.verl_extensions=[trajweave_agentflow_planner_grpo]" in command
-    assert "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.AgentFlowPlannerGRPOHooks" in command
+    assert (
+        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.AgentFlowPlannerGRPOHooks"
+        in command
+    )
     assert "+agent.orchestra.agentflow.max_steps=2" in command
-    assert "+agent.orchestra.agentflow.enabled_tools=[\"base_generator\"]" in command
+    assert '+agent.orchestra.agentflow.enabled_tools=["base_generator"]' in command
     assert "+trajweave.credit_allocator=agentflow_planner_only_grpo" in command
     assert "+trajweave.agent_loop_backend=synthetic_tq" in command
     assert "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager" in command_text
@@ -87,3 +90,21 @@ def test_agentflow_verl_config_rejects_native_verl_tq_backend():
                 "verl": {"enabled": True, "execute": False},
             }
         )
+
+
+@pytest.mark.parametrize("mode", ["smoke", "verl_train"])
+def test_agentflow_config_rejects_non_planner_trainable_agent(mode):
+    config = {
+        "recipe": "agentflow.flow_grpo.planner_tool",
+        "mode": mode,
+        "prepare": {"tiny_verl_assets": {"enabled": False}},
+        "backend": {"type": "rule"},
+        "agentflow": {
+            "agent_loop_backend": "synthetic_tq",
+            "trainable_agent": "executor",
+        },
+        "verl": {"enabled": True, "execute": False},
+    }
+
+    with pytest.raises(ValueError, match="trainable_agent.*planner"):
+        run_from_config(config)

@@ -30,10 +30,15 @@ class DrMASNativeRecipePlugin:
     def _summary(self, context: RunContext) -> dict[str, Any]:
         spec = recipe_spec(context.recipe)
         native_cfg = context.config.get("drmas_native", {})
+        agent_ids = list(native_cfg.get("agent_ids", spec.agent_ids))
+        model_ids = list(native_cfg.get("model_ids", native_cfg.get("models", ["default"] * len(agent_ids))))
         return {
             "task": spec.task,
             "runtime_recipe": spec.runtime_recipe,
-            "agent_ids": list(native_cfg.get("agent_ids", spec.agent_ids)),
+            "agent_ids": agent_ids,
+            "model_ids": model_ids,
+            "model_sharing": True,
+            "training_backend": "verl_v1_single_actor_wg",
             "orchestra_type": spec.orchestra_type,
             "coordination_protocol": spec.coordination_protocol,
             "group_by_agent_id": True,

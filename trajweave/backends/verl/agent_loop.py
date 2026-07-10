@@ -10,33 +10,45 @@ import ray
 import torch
 import transfer_queue as tq
 
+from trajweave.backends.verl.batch_padding import pad_session_batch
+from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
+from trajweave.backends.verl.emitters.registry import build_recipe_outputs
+from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
+from trajweave.backends.verl.runtime_config import (
+    TrajWeaveAgentLoopRuntimeConfig,
+)
+from trajweave.backends.verl.runtime_config import (
+    config_get as _get,
+)
+from trajweave.backends.verl.runtime_config import (
+    validate_agent_loop_backend as _validate_agent_loop_backend,
+)
+from trajweave.backends.verl.schema import (
+    MAS_EXTRA_FIELDS,
+)
+from trajweave.backends.verl.schema import (
+    batch_item as _batch_item,
+)
+from trajweave.backends.verl.schema import (
+    canonical_drmas_agent_id as _canonical_drmas_agent_id,
+)
+from trajweave.backends.verl.schema import (
+    pad_or_trim_1d as _pad_or_trim_1d,
+)
+from trajweave.backends.verl.schema import (
+    padded_rm_scores as _padded_rm_scores,
+)
+from trajweave.backends.verl.schema import (
+    to_python as _to_python,
+)
+from trajweave.storage.jsonl import JsonlWriter
 from verl.experimental.agent_loop.agent_loop import (
-    AgentLoopMetrics,
     AgentLoopOutput,
     AgentLoopWorker,
     get_trajectory_info,
 )
 from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
-
-from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
-from trajweave.backends.verl.emitters.registry import build_recipe_outputs
-from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
-from trajweave.backends.verl.runtime_config import (
-    TrajWeaveAgentLoopRuntimeConfig,
-    config_get as _get,
-    validate_agent_loop_backend as _validate_agent_loop_backend,
-)
-from trajweave.backends.verl.schema import (
-    MAS_EXTRA_FIELDS,
-    batch_item as _batch_item,
-    canonical_drmas_agent_id as _canonical_drmas_agent_id,
-    flatten_token_ids as _flatten_token_ids,
-    pad_or_trim_1d as _pad_or_trim_1d,
-    padded_rm_scores as _padded_rm_scores,
-    to_python as _to_python,
-)
-from trajweave.storage.jsonl import JsonlWriter
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +77,38 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
             backend=self.trajweave_runtime_config.agent_loop_backend,
         )
 
+    def reload_local_models(self, model_paths: dict[str, str], *, policy_version: int) -> list[dict[str, Any]]:
+        """让所有 AgentLoop worker 在下一批采样前使用同一版本权重。"""
+
+        if self.trajweave_runtime_config.agent_loop_backend != "hf_local_tq":
+            return []
+        results = ray.get(
+            [
+                worker.reload_local_models.remote(model_paths, policy_version=policy_version)
+                for worker in self.agent_loop_workers
+            ]
+        )
+        versions = {int(result["policy_version"]) for result in results}
+        if versions != {int(policy_version)}:
+            raise RuntimeError(
+                f"AgentLoop weight reload returned inconsistent versions: expected {policy_version}, got {versions}."
+            )
+        logger.info(
+            "Synchronized %d AgentLoop workers to policy_version=%d",
+            len(results),
+            policy_version,
+        )
+        return results
+
+    def release_local_models(self) -> list[dict[str, Any]]:
+        """在 Actor 导出 HF 快照前释放所有 AgentLoop 本地模型。"""
+
+        if self.trajweave_runtime_config.agent_loop_backend != "hf_local_tq":
+            return []
+        results = ray.get([worker.release_local_models.remote() for worker in self.agent_loop_workers])
+        logger.info("Released local rollout models from %d AgentLoop workers", len(results))
+        return results
+
 
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
@@ -77,6 +121,17 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         tq.init()
+        self._trajweave_policy_version = 0
+
+    def reload_local_models(self, model_paths: dict[str, str], *, policy_version: int) -> dict[str, Any]:
+        return HFLocalGenerationMixin.reload_local_models(
+            self,
+            model_paths,
+            policy_version=policy_version,
+        )
+
+    def release_local_models(self) -> dict[str, Any]:
+        return HFLocalGenerationMixin.release_local_models(self)
 
     async def generate_sequences(self, batch) -> None:
         validate = bool(_to_python(batch["validate"])) if "validate" in batch else False
@@ -105,7 +160,9 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
         await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "running"})
         try:
             config = self.config.actor_rollout_ref.rollout
-            n = int(_to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n)))
+            n = int(
+                _to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
+            )
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
             for session_id in range(n):
                 use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
@@ -115,6 +172,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     use_hf_local=use_hf_local,
                     prompt=prompt,
                     session_id=session_id,
+                    validate=trajectory["validate"],
                 )
                 await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
@@ -129,12 +187,17 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             for output in outputs[:-1]:
                 if output.reward_score is None:
                     output.reward_score = final_output.reward_score
-                output.extra_fields.setdefault("reward_extra_info", final_output.extra_fields.get("reward_extra_info", {}))
+                output.extra_fields.setdefault(
+                    "reward_extra_info", final_output.extra_fields.get("reward_extra_info", {})
+                )
 
         uid, session_id = str(_to_python(kwargs["uid"])), int(kwargs["session_id"])
         keys, fields, tags = [], [], []
         online_turn_rows: list[dict[str, Any]] = []
         for index, output in enumerate(outputs):
+            output.extra_fields.setdefault("min_global_steps", self._local_policy_version())
+            output.extra_fields.setdefault("max_global_steps", self._local_policy_version())
+            output.extra_fields.setdefault("policy_version", self._local_policy_version())
             prompt_ids = output.prompt_ids[-self.rollout_config.prompt_length :]
             response_ids = output.response_ids[: self.rollout_config.response_length]
             response_mask_ids = output.response_mask[: len(response_ids)]
@@ -149,10 +212,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             response_mask = torch.tensor(response_mask_ids + [0] * response_pad, dtype=torch.int64)
             input_ids = torch.cat([prompts, responses], dim=0)
             attention_mask = torch.tensor(
-                [0] * prompt_pad
-                + [1] * len(prompt_ids)
-                + [1] * len(response_ids)
-                + [0] * response_pad,
+                [0] * prompt_pad + [1] * len(prompt_ids) + [1] * len(response_ids) + [0] * response_pad,
                 dtype=torch.int64,
             )
             multi_modal_inputs = self._compute_multi_modal_inputs(output, input_ids)
@@ -176,7 +236,9 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 )
             field["agent_name"] = output.extra_fields.get("trajweave_agent_name", field.get("agent_name"))
             field["role"] = output.extra_fields.get("trajweave_role", field["agent_name"])
-            field["policy_group"] = output.extra_fields.get("policy_group", field.get("policy_group", field["agent_name"]))
+            field["policy_group"] = output.extra_fields.get(
+                "policy_group", field.get("policy_group", field["agent_name"])
+            )
             field["worker_group"] = output.extra_fields.get("worker_group", field["policy_group"])
             field["worker_group_model_path"] = output.extra_fields.get("worker_group_model_path") or ""
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
@@ -194,13 +256,13 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             field["multi_modal_inputs"] = multi_modal_inputs
             fields.append(field)
             keys.append(f"{uid}_{session_id}_{index}")
-            prompt_len, response_len = field["prompts"].size(0), field["responses"].size(0)
+            stored_prompt_len, stored_response_len = field["prompts"].size(0), field["responses"].size(0)
             tags.append(
                 {
                     "status": "success",
-                    "prompt_len": prompt_len,
-                    "response_len": response_len,
-                    "seq_len": prompt_len + response_len,
+                    "prompt_len": stored_prompt_len,
+                    "response_len": stored_response_len,
+                    "seq_len": stored_prompt_len + stored_response_len,
                     "global_steps": _to_python(kwargs["global_steps"]),
                     "min_global_steps": field["extra_fields"].get("min_global_steps"),
                     "max_global_steps": field["extra_fields"].get("max_global_steps"),
@@ -217,17 +279,19 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     "role": _to_python(field["role"]),
                     "policy_group": _to_python(field["policy_group"]),
                     "worker_group": _to_python(field["worker_group"]),
+                    "worker_group_model_path": _to_python(field["worker_group_model_path"]),
                     "agent_id": _to_python(field["agent_id"]),
                     "traj_uid": _to_python(field["traj_uid"]),
                     "reward_score": _to_python(output.reward_score),
-                    "prompt_len": prompt_len,
-                    "response_len": response_len,
+                    "prompt_text": _to_python(output.extra_fields.get("prompt_text", "")),
+                    "response_text": _to_python(output.extra_fields.get("response_text", "")),
+                    "observation_text": _to_python(output.extra_fields.get("observation_text", "")),
+                    "final_answer": _to_python(output.extra_fields.get("final_answer", "")),
+                    "workflow_success": bool(output.extra_fields.get("workflow_success", False)),
+                    "prompt_len": len(prompt_ids),
+                    "response_len": len(response_ids),
                     "global_steps": _to_python(kwargs["global_steps"]),
-                    "metadata": {
-                        key: _to_python(field[key])
-                        for key in MAS_EXTRA_FIELDS
-                        if key in field
-                    },
+                    "metadata": {key: _to_python(field[key]) for key in MAS_EXTRA_FIELDS if key in field},
                 }
             )
             for trace_idx, trace_event in enumerate(output.extra_fields.get("agentflow_trace", [])):
@@ -243,6 +307,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                         "role": trace_event.get("role"),
                         "policy_group": trace_event.get("policy_group"),
                         "worker_group": trace_event.get("policy_group"),
+                        "worker_group_model_path": trace_event.get("worker_group_model_path", ""),
                         "agent_id": trace_event.get("agent_id"),
                         "traj_uid": _to_python(field["traj_uid"]),
                         "reward_score": _to_python(output.reward_score),
@@ -256,6 +321,14 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     }
                 )
 
+        pad_session_batch(
+            keys=keys,
+            fields=fields,
+            tags=tags,
+            multiple=runtime.turn_padding_multiple,
+            uid=uid,
+            session_id=session_id,
+        )
         await tq.async_kv_batch_put(
             keys=keys,
             fields=list_of_dict_to_tensordict(fields),

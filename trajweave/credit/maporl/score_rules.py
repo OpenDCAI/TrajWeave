@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import sqrt
+from typing import Any
 
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import MultiAgentTrajectory, TrainingSample
@@ -96,6 +98,73 @@ def _same_answer(left: object | None, right: object | None) -> bool:
     return str(left).strip() == str(right).strip()
 
 
+_MAPORL_SCORE_RULE_DEFAULTS: dict[str, object] = {
+    "rule_horizon": "discounted_sum",
+    "rule_agent_share": "all",
+    "rule_discount": 0.3,
+    "alpha": (0.0, 0.0, 0.0, 0.0),
+    "correct_threshold": 0.7,
+    "wrong_threshold": 0.3,
+    "bonus_correct_threshold": 0.5,
+    "bonus_wrong_threshold": 0.5,
+    "include_bonus": True,
+}
+_MISSING = object()
+
+
+@dataclass(frozen=True)
+class MAPoRLTurnCredit:
+    score: float
+    bonus: float
+    reward: float
+
+
+def resolve_maporl_score_rule_config(config: Any) -> dict[str, object]:
+    """读取 VERL algorithm/trajweave 配置并规范化 MAPoRL credit 参数。"""
+
+    values = dict(_MAPORL_SCORE_RULE_DEFAULTS)
+    candidates = (
+        _config_path(config, "agent", "orchestra", "maporl"),
+        _config_path(config, "maporl"),
+        _config_path(config, "credit"),
+        _config_path(config, "trajweave", "credit"),
+        _config_path(config, "trajweave", "maporl"),
+        _config_path(config, "trajweave", "maporl_credit"),
+        _config_path(config, "trajweave"),
+        _config_path(config, "algorithm", "maporl"),
+        _config_path(config, "algorithm", "maporl_credit"),
+        _config_path(config, "algorithm"),
+        config,
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        for key in values:
+            value = _config_get(candidate, key, _MISSING)
+            if value is not _MISSING:
+                values[key] = value
+
+    alpha = values["alpha"]
+    if isinstance(alpha, str):
+        raise TypeError("MAPoRL alpha must be a sequence of numbers, not a string.")
+    try:
+        normalized_alpha = tuple(float(value) for value in alpha)  # type: ignore[union-attr]
+    except TypeError as exc:
+        raise TypeError("MAPoRL alpha must be a sequence of numbers.") from exc
+
+    return {
+        "rule_horizon": str(values["rule_horizon"]),
+        "rule_agent_share": str(values["rule_agent_share"]),
+        "rule_discount": float(values["rule_discount"]),
+        "alpha": normalized_alpha,
+        "correct_threshold": float(values["correct_threshold"]),
+        "wrong_threshold": float(values["wrong_threshold"]),
+        "bonus_correct_threshold": float(values["bonus_correct_threshold"]),
+        "bonus_wrong_threshold": float(values["bonus_wrong_threshold"]),
+        "include_bonus": _as_bool(values["include_bonus"]),
+    }
+
+
 @dataclass
 class MAPoRLPPOScoreRuleCreditAssigner:
     """MAPoRL-style per-turn credit allocation.
@@ -118,6 +187,10 @@ class MAPoRLPPOScoreRuleCreditAssigner:
     include_bonus: bool = True
     metadata_defaults: dict[str, object] = field(default_factory=dict)
 
+    @classmethod
+    def from_config(cls, config: Any) -> MAPoRLPPOScoreRuleCreditAssigner:
+        return cls(**resolve_maporl_score_rule_config(config))
+
     def assign(self, trajectories: list[MultiAgentTrajectory], team: TeamSpec) -> list[TrainingSample]:
         trainable = {agent.name for agent in team.trainable_agents()}
         samples: list[TrainingSample] = []
@@ -130,42 +203,26 @@ class MAPoRLPPOScoreRuleCreditAssigner:
             total_rounds = _trajectory_round_count(trajectory, turns)
             total_agents = len(team.agents)
             finished_round = int(trajectory.metadata.get("finished_round", -1))
-            raw_scores = _matrix_from_turns(turns, "raw_score", default=float(trajectory.global_reward or 0.0))
-            correctnesses = _matrix_from_turns(turns, "correctness", default=float(trajectory.success or 0.0))
+            round_ids = [int(turn.metadata.get("round_id", turn.turn_id)) for turn in turns]
+            agent_indices = [
+                int(turn.metadata.get("agent_index", agent_order.get(turn.agent_name, 0))) for turn in turns
+            ]
+            credits = self.score_turns(
+                round_ids=round_ids,
+                agent_indices=agent_indices,
+                raw_scores=[
+                    float(turn.metadata.get("raw_score", float(trajectory.global_reward or 0.0))) for turn in turns
+                ],
+                correctnesses=[
+                    float(turn.metadata.get("correctness", float(trajectory.success or 0.0))) for turn in turns
+                ],
+                finished_round=finished_round,
+                total_rounds=total_rounds,
+                total_agents=total_agents,
+            )
 
-            for turn in turns:
-                round_id = int(turn.metadata.get("round_id", turn.turn_id))
-                agent_index = int(turn.metadata.get("agent_index", agent_order.get(turn.agent_name, 0)))
-                score = _score_rule(
-                    raw_scores,
-                    total_rounds=total_rounds,
-                    total_agents=total_agents,
-                    finished_round=finished_round,
-                    round_id=round_id,
-                    agent_index=agent_index,
-                    rule_horizon=self.rule_horizon,
-                    rule_agent_share=self.rule_agent_share,
-                    rule_discount=self.rule_discount,
-                    correct_threshold=self.correct_threshold,
-                    wrong_threshold=self.wrong_threshold,
-                )
-                bonus = (
-                    _bonus_rule(
-                        correctnesses,
-                        total_rounds=total_rounds,
-                        total_agents=total_agents,
-                        finished_round=finished_round,
-                        round_id=round_id,
-                        agent_index=agent_index,
-                        alpha=self._alpha4(),
-                        correct_threshold=self.bonus_correct_threshold,
-                        wrong_threshold=self.bonus_wrong_threshold,
-                    )
-                    if self.include_bonus
-                    else 0.0
-                )
-                reward = score + bonus
-                turn.reward = reward
+            for turn, credit in zip(turns, credits, strict=True):
+                turn.reward = credit.reward
                 sample = TrainingSample(
                     sample_id=f"{trajectory.episode_id}:{turn.turn_id}:{turn.agent_name}",
                     episode_id=trajectory.episode_id,
@@ -179,7 +236,7 @@ class MAPoRLPPOScoreRuleCreditAssigner:
                     response=turn.action_text,
                     response_token_ids=turn.action_token_ids,
                     response_logprobs=turn.action_logprobs,
-                    reward=reward,
+                    reward=credit.reward,
                     metadata={
                         **self.metadata_defaults,
                         **turn.metadata,
@@ -187,14 +244,91 @@ class MAPoRLPPOScoreRuleCreditAssigner:
                         "score_rule": self.rule_horizon,
                         "rule_agent_share": self.rule_agent_share,
                         "rule_discount": self.rule_discount,
-                        "maporl_score": score,
-                        "maporl_bonus": bonus,
+                        "maporl_score": credit.score,
+                        "maporl_bonus": credit.bonus,
                         "raw_global_reward": float(trajectory.global_reward or 0.0),
                         "finished_round": finished_round,
                     },
                 )
                 samples.append(sample)
         return samples
+
+    def score_turns(
+        self,
+        *,
+        round_ids: Sequence[int],
+        agent_indices: Sequence[int],
+        raw_scores: Sequence[float],
+        correctnesses: Sequence[float],
+        finished_round: int,
+        total_rounds: int | None = None,
+        total_agents: int | None = None,
+    ) -> list[MAPoRLTurnCredit]:
+        """按输入顺序计算一条轨迹中每个 agent turn 的 MAPoRL credit。"""
+
+        lengths = {len(round_ids), len(agent_indices), len(raw_scores), len(correctnesses)}
+        if len(lengths) != 1:
+            raise ValueError("MAPoRL turn fields must have the same number of rows.")
+        if len(round_ids) == 0:
+            return []
+
+        normalized_round_ids = [int(value) for value in round_ids]
+        normalized_agent_indices = [int(value) for value in agent_indices]
+        normalized_raw_scores = [float(value) for value in raw_scores]
+        normalized_correctnesses = [float(value) for value in correctnesses]
+        inferred_rounds = max(normalized_round_ids) + 1
+        inferred_agents = max(normalized_agent_indices) + 1
+        total_rounds = inferred_rounds if total_rounds is None else int(total_rounds)
+        total_agents = inferred_agents if total_agents is None else int(total_agents)
+        if total_rounds <= 0 or total_agents <= 0:
+            raise ValueError("MAPoRL total_rounds and total_agents must be positive.")
+
+        raw_score_matrix = dict(
+            zip(
+                zip(normalized_round_ids, normalized_agent_indices, strict=True),
+                normalized_raw_scores,
+                strict=True,
+            )
+        )
+        correctness_matrix = dict(
+            zip(
+                zip(normalized_round_ids, normalized_agent_indices, strict=True),
+                normalized_correctnesses,
+                strict=True,
+            )
+        )
+        credits: list[MAPoRLTurnCredit] = []
+        for round_id, agent_index in zip(normalized_round_ids, normalized_agent_indices, strict=True):
+            score = _score_rule(
+                raw_score_matrix,
+                total_rounds=total_rounds,
+                total_agents=total_agents,
+                finished_round=int(finished_round),
+                round_id=round_id,
+                agent_index=agent_index,
+                rule_horizon=self.rule_horizon,
+                rule_agent_share=self.rule_agent_share,
+                rule_discount=self.rule_discount,
+                correct_threshold=self.correct_threshold,
+                wrong_threshold=self.wrong_threshold,
+            )
+            bonus = (
+                _bonus_rule(
+                    correctness_matrix,
+                    total_rounds=total_rounds,
+                    total_agents=total_agents,
+                    finished_round=int(finished_round),
+                    round_id=round_id,
+                    agent_index=agent_index,
+                    alpha=self._alpha4(),
+                    correct_threshold=self.bonus_correct_threshold,
+                    wrong_threshold=self.bonus_wrong_threshold,
+                )
+                if self.include_bonus
+                else 0.0
+            )
+            credits.append(MAPoRLTurnCredit(score=score, bonus=bonus, reward=score + bonus))
+        return credits
 
     def _alpha4(self) -> tuple[float, float, float, float]:
         values = tuple(float(value) for value in self.alpha)
@@ -209,15 +343,6 @@ def _trajectory_round_count(trajectory: MultiAgentTrajectory, turns: list) -> in
         return int(configured)
     round_ids = [int(turn.metadata.get("round_id", 0)) for turn in turns]
     return max(round_ids, default=0) + 1
-
-
-def _matrix_from_turns(turns: list, field: str, *, default: float) -> dict[tuple[int, int], float]:
-    values: dict[tuple[int, int], float] = {}
-    for turn in turns:
-        round_id = int(turn.metadata.get("round_id", turn.turn_id))
-        agent_index = int(turn.metadata.get("agent_index", 0))
-        values[(round_id, agent_index)] = float(turn.metadata.get(field, default))
-    return values
 
 
 def _get_matrix_score(
@@ -304,7 +429,9 @@ def _score_rule(
     if rule_horizon != "discounted_sum":
         raise ValueError(f"Unsupported MAPoRL rule_horizon: {rule_horizon}")
 
-    discounted_factors = [rule_discount ** (future_round - round_id) for future_round in range(round_id, final_round + 1)]
+    discounted_factors = [
+        rule_discount ** (future_round - round_id) for future_round in range(round_id, final_round + 1)
+    ]
     discount_sum = sum(discounted_factors) or 1.0
     if rule_agent_share == "individual":
         total = 0.0
@@ -385,3 +512,34 @@ def _bonus_rule(
             score += alpha[3] if current_score < wrong_threshold else alpha[2]
 
     return score
+
+
+def _config_path(config: Any, *keys: str) -> Any:
+    current = config
+    for key in keys:
+        current = _config_get(current, key, _MISSING)
+        if current is _MISSING:
+            return None
+    return current
+
+
+def _config_get(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    try:
+        return config.get(key, default)
+    except (AttributeError, TypeError):
+        return getattr(config, key, default)
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        raise ValueError(f"Unsupported boolean value: {value!r}")
+    return bool(value)

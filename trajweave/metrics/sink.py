@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -45,5 +47,15 @@ class MetricAggregator:
                     counts[name] = counts.get(name, 0) + 1
         summary = {"latest": latest, "counts": counts}
         self.summary_path.parent.mkdir(parents=True, exist_ok=True)
-        self.summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        fd, temporary_path = tempfile.mkstemp(prefix=f".{self.summary_path.name}.", dir=self.summary_path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary_path, 0o600)
+            os.replace(temporary_path, self.summary_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.unlink(temporary_path)
         return summary

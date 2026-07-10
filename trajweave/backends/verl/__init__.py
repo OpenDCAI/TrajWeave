@@ -3,8 +3,8 @@ def _ensure_torch_dtensor_import_compat() -> None:
 
     try:
         import builtins
-        import torch.distributed.tensor as tensor_mod
 
+        import torch.distributed.tensor as tensor_mod
         from torch.distributed._tensor import DTensor, Shard
         from torch.distributed._tensor.placement_types import DTensorSpec
 
