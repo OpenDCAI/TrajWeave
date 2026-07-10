@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了三个论文方向，对应四条可运行的 MASRL 路径：
+TrajWeave 现在接入了四个论文方向，对应五条可运行的 MASRL 路径：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -18,6 +18,7 @@ TrajWeave 现在接入了三个论文方向，对应四条可运行的 MASRL 路
 | DrMAS Search          | verifier -> searcher -> evidence -> answer    | smoke、Qwen2.5-0.5B 双卡真实 GRPO 训练和 evidence 回写已验证        |
 | MAPoRL Debate Math    | multiple agents debate until consensus        | 两个独立 0.5B Actor Worker Group、shared critic、双卡 PPO 已验证    |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
+| GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
 
 当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。
 
@@ -29,8 +30,8 @@ TrajWeave 现在接入了三个论文方向，对应四条可运行的 MASRL 路
 | Runtime 加固提交  | `45168dc feat: harden MASRL training runtime`                                               |
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
-| 训练步数          | 四条链路均完成 `2/2` step，return code 均为 `0`                                            |
-| 单元与集成测试    | `130 passed`                                                                               |
+| 训练步数          | 五条链路均完成 `2/2` step，return code 均为 `0`                                            |
+| 单元与集成测试    | `144 passed`                                                                               |
 | 代码边界          | `git status --short -- verl` 为空，当前 MASRL runtime 加固没有修改 `verl/` 源码            |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
@@ -39,6 +40,7 @@ TrajWeave 现在接入了三个论文方向，对应四条可运行的 MASRL 路
 | DrMAS Search          | `configs/drmas/search_qwen05b_2gpu.yaml`                      | `20260710-093641-drmas-search-verl-tiny-49fad5c9`                   |     28 |
 | AgentFlow PlannerTool | `configs/agentflow/flow_grpo_qwen05b_2gpu.yaml`               | `20260710-100202-agentflow-flow-grpo-planner-tool-b4bcb924`         |     48 |
 | MAPoRL Debate Math    | `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml`    | `20260710-094639-maporl-debate-math-full-verl-tiny-37ad795c`        |     32 |
+| GiGPO SolverVerifier  | `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml`        | `20260710-195759-gigpo-solver-verifier-math-81926544`                |     25 |
 
 MAPoRL 的稳定双卡基线使用两个不同模型 checkpoint：`qwen05b_instruct` 和 `qwen05b_base`。两个 Worker Group 每轮各有 8 个样本、各自 `updated=1`，`missing_trainable=0`；第二轮 rollout 分别读取两个 Actor 的 `global_step_1` 权重快照。
 
@@ -148,6 +150,7 @@ configs/                         按算法归档的 YAML 启动入口。
   drmas/                         DrMAS Math/Search 的 smoke、tiny、VERL 配置。
   maporl/                        MAPoRL debate 配置。
   agentflow/                     AgentFlow planner-tool 配置。
+  gigpo/                         GiGPO solver-verifier step-credit 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -163,15 +166,18 @@ trajweave/
     search_answer/               Verifier -> Searcher -> Answer workflow。
     maporl_debate/               MAPoRL debate 和 consensus protocol。
     agentflow/                   AgentFlow planner/tool/verifier protocol。
+    gigpo/                       GiGPO 的可验证 Solver/Frozen-Verifier protocol。
   credit/                        Reward propagation 和 credit assignment。
+    common/                      可复用的 step grouping 和 discounted return。
     agentflow/                   Planner-only Flow-GRPO credit。
     doctor_mas/                  Agent-wise DrMAS normalization。
     maporl/                      MAPoRL score 和 bonus rules。
+    gigpo/                       GiGPO episode + step hierarchical credit。
   rollout/                       离线 rollout engine。
   recipes/                       论文专属 recipe package。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -184,6 +190,7 @@ trajweave/
     verl/extensions/drmas/       DrMAS agent-wise GRPO hooks。
     verl/extensions/maporl/      MAPoRL PPO hooks。
     verl/extensions/agentflow/   AgentFlow planner-only GRPO hooks。
+    verl/extensions/gigpo/       GiGPO hierarchical GRPO runtime extension。
     verl/trainers/               TrajWeave 注册的 VERL V1 trainers。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
@@ -221,8 +228,8 @@ verl/                            保留的 VERL backend。
 | 概念          | 回答的问题                                      | 当前例子                                                                 |
 | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------ |
 | Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`               |
-| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra` |
-| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner` |
+| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `GiGPOSolverVerifierOrchestra` |
+| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `GiGPOCreditAssigner` |
 
 不要假设“一篇论文等于一个环境”。例如 DrMAS 可以跑 Math，也可以跑 Search。真正决定组合关系的是 paper recipe。
 
@@ -263,7 +270,7 @@ VERL 本身是否需要通用 extension point？
   -> 只在有兼容性测试时小范围修改 verl/
 ```
 
-当前四条稳定链路都没有修改 `verl/`。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
+当前五条稳定链路都没有新增 `verl/` 修改。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
 
 ## 8. 运行命令
 
@@ -287,6 +294,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/gigpo/solver_verifier_math_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -319,6 +329,9 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
 
 CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
   --config configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml
 ```
 
 这些配置包含本地模型路径。Contributor 在其他机器运行前，必须修改 YAML 中的 `model_path` 和 `tokenizer_path`，不能假设 `/data/workspace/liuzhou/models` 存在。
@@ -478,6 +491,10 @@ traj_uid, reward_score, prompt_text, response_text,
 worker_group_model_path, prompt_len, response_len, global_steps, metadata
 ```
 
+GiGPO 的 online turn 还必须包含 `anchor_observation`、`next_observation` 和 `step_reward`。当前 VERL V1
+控制台里的 `response_length/*` 统计的是 TransferQueue 固定存储宽度；审计真实生成长度时，以 online turn
+JSONL 的 `response_len` 为准，训练 token 则由 TransferQueue 中的 `response_mask/loss_mask` 屏蔽。
+
 Runtime 还必须满足这些安全和可审计约束：
 
 - config snapshot 和日志中的敏感字段要脱敏；
@@ -501,7 +518,7 @@ ruff format --check trajweave tests/trajweave
 git diff --check
 ```
 
-修改配置时，还要解析 `configs/` 下全部 YAML，并检查重复 key。修改 shared runtime、AgentLoop、routing、padding、weight sync 或 extension hook 时，必须运行四条 0.5B 双卡回归中的受影响路径；跨算法共享代码发生变化时，四条都要跑。
+修改配置时，还要解析 `configs/` 下全部 YAML，并检查重复 key。修改 shared runtime、AgentLoop、routing、padding、weight sync 或 extension hook 时，必须运行五条 0.5B 双卡回归中的受影响路径；跨算法共享代码发生变化时，五条都要跑。
 
 真实训练通过至少要同时满足：
 
@@ -515,7 +532,7 @@ online trajectory 没有 padding 泄漏、空训练 prompt 或错误 Worker Grou
 logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 ```
 
-如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前四条稳定路径不依赖 `verl/` 源码修改。
+如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前五条稳定路径不依赖新增 `verl/` 源码修改。
 
 ## 14. Paper Recipe Catalog
 
@@ -580,6 +597,21 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 当前状态    | smoke、Qwen2.5-0.5B 双卡两步真实训练、四角色 trace、Planner-only 更新已验证 |
 | 主要配置    | `configs/agentflow/flow_grpo_smoke.yaml`, `configs/agentflow/flow_grpo_verl_tiny.yaml`, `configs/agentflow/flow_grpo_qwen05b_2gpu.yaml` |
 | 已知限制    | 当前工具是内置测试工具；未验证浏览器/外部工具、长周期训练和论文指标。 |
+
+### GiGPO SolverVerifier Math
+
+| 字段        | 内容                                                        |
+| ----------- | ----------------------------------------------------------- |
+| 论文贡献    | 在 episode-level GRPO 之外增加相同 anchor state 内的 step-level relative advantage。 |
+| Environment | `SolverVerifierMathEnvironment`                             |
+| Orchestra   | `GiGPOSolverVerifierOrchestra`，只训练 Solver，Verifier 提供冻结反馈，exact match 控制停止 |
+| Credit      | `GiGPOCreditAssigner` + `GiGPOHooks`                        |
+| VERL 路径   | step transition emitter -> TransferQueue -> GiGPO hook -> single Actor Worker Group |
+| 推理流      | question -> solver -> verifier feedback -> retry or exact-match stop |
+| 训练流      | final outcome -> sparse step reward -> discounted step return -> episode/step normalization -> weighted advantage -> Actor update |
+| 当前状态    | smoke、Qwen2.5-0.5B 双卡两步真实训练、非零层级优势、checkpoint 和 policy version 回流已验证 |
+| 主要配置    | `configs/gigpo/solver_verifier_math_smoke.yaml`, `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml` |
+| 已知限制    | 当前只验证数学可判定环境和单一共享 Actor；ALFWorld/WebShop、similarity grouping 的大规模效果与论文指标尚未验证。 |
 
 ## 15. 贡献者规则
 

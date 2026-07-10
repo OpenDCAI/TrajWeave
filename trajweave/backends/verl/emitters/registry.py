@@ -35,6 +35,11 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         synthetic_method="_build_agentflow_planner_tool_outputs",
         hf_local_method="_build_hf_agentflow_planner_tool_outputs",
     ),
+    "gigpo_solver_verifier_math": EmitterRoute(
+        recipe="gigpo_solver_verifier_math",
+        synthetic_method="_build_gigpo_solver_verifier_outputs",
+        hf_local_method="_build_hf_gigpo_solver_verifier_outputs",
+    ),
 }
 
 

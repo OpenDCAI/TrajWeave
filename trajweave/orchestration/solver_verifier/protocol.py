@@ -14,6 +14,7 @@ class SolverVerifierOrchestra:
     solver_name: str = "solver"
     verifier_name: str = "verifier"
     approval_keyword: str = "APPROVED"
+    require_environment_success: bool = False
 
     def run(
         self,
@@ -85,7 +86,15 @@ class SolverVerifierOrchestra:
                 )
             )
             context.append(verifier.name, verifier_response.text)
-            approved = is_approved_response(verifier_response.text, self.approval_keyword)
+            model_approved = is_approved_response(verifier_response.text, self.approval_keyword)
+            approved = model_approved
+            approval_source = "verifier_agent"
+            if self.require_environment_success:
+                if environment is None or not hasattr(environment, "evaluate"):
+                    raise ValueError("Environment-backed solver verification requires environment.evaluate().")
+                _, approved = environment.evaluate(task, final_answer)
+                approved = bool(approved)
+                approval_source = "environment_exact_match"
             trajectory.add_turn(
                 AgentTurn(
                     episode_id=episode_id,
@@ -100,7 +109,13 @@ class SolverVerifierOrchestra:
                     action_token_ids=verifier_response.token_ids,
                     action_logprobs=verifier_response.logprobs,
                     done=approved,
-                    metadata=verifier_response.metadata | {"approved": approved, "loop_index": loop_index},
+                    metadata=verifier_response.metadata
+                    | {
+                        "approved": approved,
+                        "model_approved": model_approved,
+                        "approval_source": approval_source,
+                        "loop_index": loop_index,
+                    },
                 )
             )
             turn_id += 1

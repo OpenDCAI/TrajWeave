@@ -39,6 +39,7 @@ class FakeWorkflowWorker:
                         "task_training": True,
                     },
                     "agentflow": {"max_steps": 1, "enabled_tools": ["base_generator"]},
+                    "gigpo": {"max_steps": 2},
                 },
             }
         }
@@ -260,6 +261,35 @@ def test_hf_agentflow_accepts_allowed_tool_without_requiring_redundant_context_l
     assert outputs[0].extra_fields["plan_valid"] is True
     assert outputs[0].extra_fields["tool_name"] == "base_generator"
     assert outputs[0].reward_score == 1.0
+
+
+def test_hf_gigpo_emits_solver_steps_with_sparse_reward_and_transition_fields():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["Final answer: 0", "REVISE", "Final answer: 2"]),
+        recipe="gigpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 2
+    assert [output.extra_fields["agent_id"] for output in outputs] == ["solver", "solver"]
+    assert [output.extra_fields["step_reward"] for output in outputs] == [0.0, 1.0]
+    assert all(output.extra_fields["active_mask"] == 1.0 for output in outputs)
+    assert "verifier_feedback" in outputs[0].extra_fields["anchor_obs"]
+    assert "REVISE" in outputs[0].extra_fields["next_obs"]
+
+
+def test_hf_gigpo_does_not_let_verifier_approve_a_wrong_math_answer():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["Final answer: 0", "APPROVED", "Final answer: 2"]),
+        recipe="gigpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 2
+    assert outputs[-1].reward_score == 1.0
+    assert outputs[-1].extra_fields["step_reward"] == 1.0
 
 
 def test_agentflow_planner_prompt_uses_the_configured_tool_name():

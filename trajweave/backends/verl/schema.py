@@ -31,6 +31,10 @@ MAS_EXTRA_FIELDS = (
     "step_id",
     "policy_version",
     "plan_valid",
+    "anchor_obs",
+    "next_obs",
+    "step_reward",
+    "active_mask",
 )
 
 

@@ -12,12 +12,14 @@ from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
+from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
 from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
+from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
 from trajweave.recipes.maporl.debate_math import default_debate_team
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
@@ -141,6 +143,18 @@ def build_hf_workflow_outputs(
             backend=backend,
             session_id=session_id,
         )
+    elif recipe == "gigpo_solver_verifier_math":
+        task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
+        team = default_gigpo_team(max_steps=_gigpo_max_steps(worker.config))
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=GiGPOSolverVerifierOrchestra(),
+            environment=SolverVerifierMathEnvironment(),
+            backend=backend,
+            session_id=session_id,
+        )
+        _annotate_sparse_step_rewards(trajectory, team=team)
     else:
         raise ValueError(f"Unsupported HF workflow recipe: {recipe}")
 
@@ -206,6 +220,11 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                 "policy_version": worker._local_policy_version(),
             }
         )
+        if turn.anchor_observation is not None:
+            metadata["anchor_obs"] = _canonical_transition_value(turn.anchor_observation)
+            metadata["next_obs"] = _canonical_transition_value(turn.next_observation)
+            metadata["step_reward"] = float(turn.step_reward or 0.0)
+            metadata["active_mask"] = 1.0
         if trajectory.team_name == "agentflow_planner_tool":
             step_id = metadata.get("step_id")
             metadata["agentflow_trace"] = [
@@ -281,3 +300,25 @@ def _drmas_search_max_turns(config: Any) -> int:
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
     search_cfg = config_get(orchestra_cfg, "search", {}) or {}
     return int(config_get(search_cfg, "max_loop_num", 2))
+
+
+def _gigpo_max_steps(config: Any) -> int:
+    agent_cfg = config_get(config, "agent", {}) or {}
+    orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
+    gigpo_cfg = config_get(orchestra_cfg, "gigpo", {}) or {}
+    return int(config_get(gigpo_cfg, "max_steps", 2))
+
+
+def _annotate_sparse_step_rewards(trajectory: MultiAgentTrajectory, *, team: TeamSpec) -> None:
+    trainable_agents = {agent.name for agent in team.trainable_agents()}
+    trainable_turns = trajectory.trainable_turns(trainable_agents)
+    for turn in trainable_turns:
+        turn.step_reward = 0.0
+    if trainable_turns:
+        trainable_turns[-1].step_reward = float(trajectory.global_reward or 0.0)
+
+
+def _canonical_transition_value(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)

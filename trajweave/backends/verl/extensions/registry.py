@@ -28,6 +28,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
     recipe = _get(trajweave, "recipe", default=None)
     if credit_allocator == "agentflow_planner_only_grpo" or recipe == "agentflow_planner_tool":
         return ("trajweave_agentflow_planner_grpo",)
+    if credit_allocator == "gigpo_hierarchical_grpo" or recipe == "gigpo_solver_verifier_math":
+        return ("trajweave_gigpo_hierarchical_grpo",)
     if credit_allocator in {"maporl_ppo_score_rule", "maporl_full_ppo"} or recipe == "maporl_debate_math":
         return ("trajweave_maporl_full_ppo",)
     if credit_allocator == "maporl_score_bonus":
@@ -55,11 +57,13 @@ def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.agentflow import apply_agentflow_planner_grpo_patch
     from trajweave.backends.verl.extensions.common.nested_compat import apply_tq_nested_compat_patch
     from trajweave.backends.verl.extensions.drmas import apply_drmas_agent_wise_grpo_patch
+    from trajweave.backends.verl.extensions.gigpo import apply_gigpo_hierarchical_grpo_patch
     from trajweave.backends.verl.extensions.maporl import apply_maporl_full_ppo_patch, apply_maporl_single_model_patch
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
         "trajweave_agentflow_planner_grpo": apply_agentflow_planner_grpo_patch,
+        "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,
         "trajweave_maporl_full_ppo": apply_maporl_full_ppo_patch,
         "trajweave_maporl_single_model": apply_maporl_single_model_patch,
         "tq_nested_compat": apply_tq_nested_compat_patch,

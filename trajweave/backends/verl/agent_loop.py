@@ -11,7 +11,12 @@ import torch
 import transfer_queue as tq
 
 from trajweave.backends.verl.batch_padding import pad_session_batch
-from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
+from trajweave.backends.verl.emitters import (
+    AgentFlowEmitterMixin,
+    DrMASEmitterMixin,
+    GiGPOEmitterMixin,
+    MAPoRLEmitterMixin,
+)
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
 from trajweave.backends.verl.runtime_config import (
@@ -114,6 +119,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
     MAPoRLEmitterMixin,
+    GiGPOEmitterMixin,
     DrMASEmitterMixin,
     HFLocalGenerationMixin,
     AgentLoopWorker,
@@ -288,6 +294,9 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     "observation_text": _to_python(output.extra_fields.get("observation_text", "")),
                     "final_answer": _to_python(output.extra_fields.get("final_answer", "")),
                     "workflow_success": bool(output.extra_fields.get("workflow_success", False)),
+                    "anchor_observation": _to_python(output.extra_fields.get("anchor_obs")),
+                    "next_observation": _to_python(output.extra_fields.get("next_obs")),
+                    "step_reward": _to_python(output.extra_fields.get("step_reward")),
                     "prompt_len": len(prompt_ids),
                     "response_len": len(response_ids),
                     "global_steps": _to_python(kwargs["global_steps"]),

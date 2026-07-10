@@ -21,3 +21,10 @@ def test_recipe_registry_exposes_agentflow_namespace():
     assert recipe.name == "agentflow.flow_grpo.planner_tool"
     assert recipe.family == "agentflow"
     assert recipe.runtime_recipe == "agentflow_planner_tool"
+
+
+def test_recipe_registry_exposes_gigpo_namespace():
+    recipe = resolve_recipe("gigpo_solver_verifier_math")
+
+    assert recipe.name == "gigpo.solver_verifier_math"
+    assert recipe.family == "gigpo"

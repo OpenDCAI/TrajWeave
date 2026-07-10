@@ -56,6 +56,10 @@ def pad_session_batch(
                 "correctness": 0.0,
                 "consensus_reached": False,
                 "finished_round": -1,
+                "anchor_obs": f"__padding__:{pad_uid}",
+                "next_obs": "__padding__",
+                "step_reward": 0.0,
+                "active_mask": 0.0,
             }.items():
                 if key in sample:
                     sample[key] = value
@@ -72,6 +76,10 @@ def pad_session_batch(
                     "round_id": -1,
                     "agent_index": -1,
                     "finished_round": -1,
+                    "anchor_obs": f"__padding__:{pad_uid}",
+                    "next_obs": "__padding__",
+                    "step_reward": 0.0,
+                    "active_mask": 0.0,
                 }
             )
             sample["extra_fields"] = extra_fields

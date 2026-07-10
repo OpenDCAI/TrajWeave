@@ -58,6 +58,13 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         runtime_recipe="agentflow_planner_tool",
         aliases=("agentflow_planner_tool", "agentflow.flow_grpo"),
     ),
+    RecipeDefinition(
+        name="gigpo.solver_verifier_math",
+        family="gigpo",
+        task="math",
+        runtime_recipe="gigpo_solver_verifier_math",
+        aliases=("gigpo_solver_verifier_math", "gigpo.math"),
+    ),
 )
 
 

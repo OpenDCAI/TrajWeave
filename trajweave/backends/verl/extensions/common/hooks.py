@@ -227,6 +227,136 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
 
 
 @dataclass(frozen=True)
+class GiGPOHooks(PPOExtensionHooks):
+    name: str = "gigpo_hierarchical_grpo"
+
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
+        if stage != "advantage":
+            return ()
+        return ("agent_id", "traj_uid", "turn_id", "anchor_obs", "next_obs", "step_reward", "active_mask")
+
+    def tq_select_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...] | None = None,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
+        fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
+        if stage == "advantage":
+            fields.extend(self.batch_schema_fields(stage, config=config))
+        return tuple(dict.fromkeys(fields))
+
+    def compute_advantage(
+        self,
+        data: Any,
+        *,
+        batch_keys: list[str],
+        adv_estimator: Any,
+        gamma: float,
+        lam: float,
+        num_repeat: int,
+        norm_adv_by_std_in_grpo: bool,
+        config: Any = None,
+        fallback: Callable[..., Any],
+    ) -> Any:
+        del batch_keys, lam, num_repeat, norm_adv_by_std_in_grpo, fallback
+
+        import torch
+
+        from trajweave.credit.gigpo import compute_gigpo_scalar_advantages
+        from verl.trainer.ppo import core_algos
+        from verl.trainer.ppo.ray_trainer import compute_response_mask
+
+        if adv_estimator != core_algos.AdvantageEstimator.GRPO:
+            raise ValueError(f"GiGPO requires the critic-free GRPO trainer path, got {adv_estimator!r}.")
+        if "response_mask" not in data.batch:
+            data.batch["response_mask"] = compute_response_mask(data)
+        missing = [field for field in self.batch_schema_fields("advantage") if field not in data.non_tensor_batch]
+        if missing:
+            raise KeyError(f"GiGPO advantage requires non_tensor_batch fields: {missing}.")
+
+        response_mask = data.batch["response_mask"]
+        row_count = response_mask.shape[0]
+        non_tensors = data.non_tensor_batch
+        raw_active_values = _batch_values(non_tensors["active_mask"], row_count=row_count, field="active_mask")
+        active_values = [bool(float(value)) for value in raw_active_values]
+        valid_rows = response_mask.bool().any(dim=-1).detach().cpu().tolist()
+        active_mask = [bool(active and valid) for active, valid in zip(active_values, valid_rows, strict=True)]
+        raw_step_rewards = _batch_values(non_tensors["step_reward"], row_count=row_count, field="step_reward")
+        step_rewards = torch.tensor(
+            [float(value) for value in raw_step_rewards],
+            dtype=torch.float32,
+            device=response_mask.device,
+        )
+        gigpo_config = _config_get(config, "gigpo", {}) or {}
+        result = compute_gigpo_scalar_advantages(
+            episode_rewards=data.batch["token_level_rewards"].sum(dim=-1),
+            step_rewards=step_rewards,
+            rollout_groups=_batch_values(non_tensors["uid"], row_count=row_count, field="uid"),
+            trajectory_ids=_batch_values(non_tensors["traj_uid"], row_count=row_count, field="traj_uid"),
+            turn_ids=[
+                int(value) for value in _batch_values(non_tensors["turn_id"], row_count=row_count, field="turn_id")
+            ],
+            anchor_observations=_batch_values(non_tensors["anchor_obs"], row_count=row_count, field="anchor_obs"),
+            gamma=float(gamma),
+            step_advantage_weight=float(_config_get(gigpo_config, "step_advantage_weight", 1.0)),
+            mode=str(_config_get(gigpo_config, "mode", "mean_std_norm")),
+            enable_similarity=bool(_config_get(gigpo_config, "enable_similarity", False)),
+            similarity_threshold=float(_config_get(gigpo_config, "similarity_threshold", 0.95)),
+            active_mask=active_mask,
+        )
+        advantages = result.advantages.unsqueeze(-1) * response_mask
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = advantages
+        data.batch["gigpo_episode_advantage"] = result.episode_advantages
+        data.batch["gigpo_step_advantage"] = result.step_advantages
+        data.batch["gigpo_step_return"] = result.step_returns
+        data.non_tensor_batch["gigpo_step_group_uid"] = result.step_group_ids
+        data.meta_info["gigpo_step_group_sizes"] = result.step_group_sizes
+        data.meta_info["gigpo_active_mask"] = active_mask
+        return data
+
+    def compute_extra_metrics(self, data: Any, metrics: dict[str, Any], stage: str) -> dict[str, Any]:
+        del metrics
+        if stage != "advantage" or "gigpo_step_return" not in data.batch:
+            return {}
+        import torch
+
+        active_mask = torch.tensor(
+            data.meta_info.get("gigpo_active_mask", []),
+            dtype=torch.bool,
+            device=data.batch["gigpo_step_return"].device,
+        )
+        if active_mask.numel() == 0 or not bool(active_mask.any()):
+            return {}
+        group_sizes = data.meta_info.get("gigpo_step_group_sizes", {})
+        values = {
+            "episode_advantage": data.batch["gigpo_episode_advantage"][active_mask],
+            "step_advantage": data.batch["gigpo_step_advantage"][active_mask],
+            "step_return": data.batch["gigpo_step_return"][active_mask],
+        }
+        combined = data.batch["advantages"][active_mask]
+        response_mask = data.batch["response_mask"][active_mask].bool()
+        first_tokens = response_mask.float().argmax(dim=-1)
+        combined_scalars = combined[torch.arange(combined.shape[0], device=combined.device), first_tokens]
+        output = {
+            "trajweave/gigpo/step_group_count": float(len(group_sizes)),
+            "trajweave/gigpo/step_group_size_mean": (
+                float(sum(group_sizes.values()) / len(group_sizes)) if group_sizes else 0.0
+            ),
+            "trajweave/gigpo/advantage_mean": float(combined_scalars.mean()),
+            "trajweave/gigpo/advantage_std": float(combined_scalars.std(unbiased=False)),
+            "trajweave/gigpo/nonzero_advantage_ratio": float((combined_scalars.abs() > 1e-8).float().mean()),
+        }
+        for name, tensor in values.items():
+            output[f"trajweave/gigpo/{name}_mean"] = float(tensor.mean())
+            output[f"trajweave/gigpo/{name}_std"] = float(tensor.std(unbiased=False))
+        return output
+
+
+@dataclass(frozen=True)
 class MAPoRLFullPPOHooks(PPOExtensionHooks):
     name: str = "maporl_full_ppo"
 
@@ -521,6 +651,12 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     recipe = _config_get(trajweave, "recipe", None)
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
+    if (
+        credit_allocator == "gigpo_hierarchical_grpo"
+        or recipe == "gigpo_solver_verifier_math"
+        or "trajweave_gigpo_hierarchical_grpo" in extension_names
+    ):
+        return GiGPOHooks()
     if (
         credit_allocator == "agentflow_planner_only_grpo"
         or recipe == "agentflow_planner_tool"

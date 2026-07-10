@@ -17,6 +17,9 @@ class AgentTurn:
     action_text: str
     action_token_ids: list[int] = field(default_factory=list)
     action_logprobs: list[float] = field(default_factory=list)
+    anchor_observation: Any | None = None
+    next_observation: Any | None = None
+    step_reward: float | None = None
     reward: float | None = None
     advantage: float | None = None
     done: bool = False

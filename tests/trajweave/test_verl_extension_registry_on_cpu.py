@@ -13,3 +13,12 @@ def test_verl_extensions_auto_select_maporl_from_recipe_and_credit():
     assert _extension_names({"trajweave": {"credit_allocator": "maporl_ppo_score_rule"}}) == (
         "trajweave_maporl_full_ppo",
     )
+
+
+def test_verl_extensions_auto_select_gigpo_from_recipe_and_credit():
+    assert _extension_names({"trajweave": {"recipe": "gigpo_solver_verifier_math"}}) == (
+        "trajweave_gigpo_hierarchical_grpo",
+    )
+    assert _extension_names({"trajweave": {"credit_allocator": "gigpo_hierarchical_grpo"}}) == (
+        "trajweave_gigpo_hierarchical_grpo",
+    )
