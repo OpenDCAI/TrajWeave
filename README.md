@@ -10,32 +10,39 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在有四条可运行的 MAS 路径：
+TrajWeave 现在接入了三个论文方向，对应四条可运行的 MASRL 路径：
 
-| 路径                  | MAS 形态                                      | 当前状态                                           |
-| --------------------- | --------------------------------------------- | -------------------------------------------------- |
-| DrMAS Math            | solver -> verifier loop                       | smoke、tiny train、VERL tiny train 已验证          |
-| DrMAS Search          | verifier -> searcher -> answer                | smoke、VERL tiny train 已验证                      |
-| MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、同 tokenizer 0.5B 双卡、兼容 tokenizer Qwen0.5B+1.5B 双卡 multi-actor 已验证 |
-| AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | smoke、VERL tiny train 已验证                      |
+| 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
+| DrMAS Math            | solver -> verifier loop                       | smoke、tiny、Qwen2.5-0.5B 双卡真实 GRPO 训练已验证                  |
+| DrMAS Search          | verifier -> searcher -> evidence -> answer    | smoke、Qwen2.5-0.5B 双卡真实 GRPO 训练和 evidence 回写已验证        |
+| MAPoRL Debate Math    | multiple agents debate until consensus        | 两个独立 0.5B Actor Worker Group、shared critic、双卡 PPO 已验证    |
+| AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
 
-最新 MAPoRL P0 验收记录：
+当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。
 
-| 项目           | 结果                                                                 |
-| -------------- | -------------------------------------------------------------------- |
-| 分支和 PR      | `lz-dev` 已推送，PR `OpenDCAI/TrajWeave#22`                          |
-| commit         | `3fbca39 feat: harden MAPoRL multi-worker training`                  |
-| 配置入口       | `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml`           |
-| 训练后端       | `verl_v1_multi_actor_wg`                                             |
-| tokenizer 边界 | 当前 P0 只支持 `tokenizer_mode=shared`，异构 tokenizer 会配置时报错 |
-| 真实训练 run   | `outputs/trajweave/runs/20260707-180851-maporl-debate-math-full-verl-tiny-7e0f3fe8` |
-| 训练结果       | `verl_returncode=0`，`multi_actor_validation_status=passed`          |
-| 多 WG 指标     | `qwen05b_a/samples=6`，`qwen05b_b/samples=6`，两个 group 都 `updated=1` |
-| checkpoint     | `outputs/maporl_debate_math_multi_actor_qwen05b_2gpu/checkpoints/global_step_1/actors/qwen05b_a/` 和 `qwen05b_b/` |
+最新严格验收基线：
 
-这个验收说明：当前 MAPoRL 已经不是单 actor 玩具路径，而是可以通过同一个 YAML 启动两个 trainable worker groups，并在 TrajWeave 的 metrics、online trajectory 和 checkpoint 中分别审计两个 actor group。
+| 项目              | 结果                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| 分支和 PR         | `lz-dev`，[PR #22](https://github.com/OpenDCAI/TrajWeave/pull/22)                          |
+| Runtime 加固提交  | `45168dc feat: harden MASRL training runtime`                                               |
+| 机器              | 单机两张 Tesla P40                                                                         |
+| 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
+| 训练步数          | 四条链路均完成 `2/2` step，return code 均为 `0`                                            |
+| 单元与集成测试    | `130 passed`                                                                               |
+| 代码边界          | `git status --short -- verl` 为空，当前 MASRL runtime 加固没有修改 `verl/` 源码            |
 
-MAPoRL P1 增加了 `tokenizer_mode=compatible`：它允许两个 worker group 使用不同模型路径和不同 tokenizer 路径，但会先对 tokenizer vocab 和关键 special token id 做 fingerprint 校验。只有 fingerprint 一致时，才允许共享 token-id batch 和 shared critic。这个模式用于 Qwen2.5-0.5B + Qwen2.5-1.5B 这类“模型异构、tokenizer 兼容”的训练验证。
+| Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
+| --------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | -----: |
+| DrMAS Math            | `configs/drmas/math_qwen05b_2gpu.yaml`                        | `20260710-093259-drmas-math-verl-tiny-05885d5a`                     |     24 |
+| DrMAS Search          | `configs/drmas/search_qwen05b_2gpu.yaml`                      | `20260710-093641-drmas-search-verl-tiny-49fad5c9`                   |     28 |
+| AgentFlow PlannerTool | `configs/agentflow/flow_grpo_qwen05b_2gpu.yaml`               | `20260710-100202-agentflow-flow-grpo-planner-tool-b4bcb924`         |     48 |
+| MAPoRL Debate Math    | `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml`    | `20260710-094639-maporl-debate-math-full-verl-tiny-37ad795c`        |     32 |
+
+MAPoRL 的稳定双卡基线使用两个不同模型 checkpoint：`qwen05b_instruct` 和 `qwen05b_base`。两个 Worker Group 每轮各有 8 个样本、各自 `updated=1`，`missing_trainable=0`；第二轮 rollout 分别读取两个 Actor 的 `global_step_1` 权重快照。
+
+`tokenizer_mode=compatible` 仍然保留，用于在共享 token-id batch 前校验 vocab 和关键 special token id。它只表示“不同 tokenizer 路径经过 fingerprint 校验后兼容”，不表示支持真正不同词表。`Qwen2.5-0.5B + Qwen2.5-1.5B` 配置是容量相关的兼容性入口，不是两张 P40 上的稳定回归基线；当前稳定基线是 0.5B-Instruct + 0.5B-Base，并显式共享 tokenizer。
 
 最新的 TrajWeave runtime 会把一次训练 run 持久化到统一目录：
 
@@ -59,9 +66,12 @@ outputs/trajweave/runs/RUN_ID/
   trajectories/
     online_turns/
       worker-PID.jsonl
+  checkpoints/
+    global_step_N/
+    rollout_sync/global_step_N/
 ```
 
-验收规则是：不能只看训练命令是否 return code 为 0。只要改动 shared runtime，就必须同时检查 logs、metrics、artifacts 和 trajectory JSONL。
+验收规则是：不能只看训练命令是否 return code 为 0。只要改动 shared runtime，就必须同时检查 logs、metrics、artifacts、trajectory JSONL、Actor 梯度、policy version 和 rollout snapshot。
 
 ## 2. 设计原则
 
@@ -90,31 +100,40 @@ Backend
 
 ```mermaid
 flowchart TD
-    CFG["YAML config"] --> RUN["trajweave.runner"]
-    RUN --> CTX["RunContext"]
-    CTX --> STORE["RunStore"]
-    CTX --> TRACK["ExperimentTracker"]
-    CTX --> PLUGIN["RecipePlugin"]
+    CFG["YAML config"] --> CLI["trajweave.cli.run"]
+    CLI --> RUN["Runner / RunContext"]
+    RUN --> PLUGIN["RecipePlugin"]
+    RUN --> STORE["RunStore + ExperimentTracker"]
 
-    PLUGIN --> ENV["Environment"]
-    PLUGIN --> ORCH["Orchestra"]
-    PLUGIN --> CREDIT["CreditAssigner"]
-    PLUGIN --> ASSET["Asset preparation"]
-    PLUGIN --> LAUNCH["VERL launch"]
+    PLUGIN --> ENV["Environment / task assets"]
+    PLUGIN --> ORCH["Orchestration protocol"]
+    PLUGIN --> CREDIT["Credit / reward rule"]
+    PLUGIN --> LAUNCH["VERL launcher"]
 
-    ENV --> ROLL["Rollout"]
-    ORCH --> ROLL
-    ROLL --> TRAJ["MultiAgentTrajectory"]
-    TRAJ --> CREDIT
-    CREDIT --> SAMPLE["TrainingSample / VERL fields"]
-    SAMPLE --> LAUNCH
-    LAUNCH --> VERL["VERL PPO / GRPO trainer"]
-    VERL --> LOOP["TrajWeave AgentLoop"]
-    LOOP --> TURNLOG["online_turns JSONL"]
-    VERL --> METRICS["VERL metrics"]
+    LAUNCH --> TRAINER["VERL V1 trainer"]
+    TRAINER --> LOOP["TrajWeave AgentLoopManager"]
+    LOOP --> WORKFLOW["workflow_runtime"]
+    ENV --> WORKFLOW
+    ORCH --> WORKFLOW
+    WORKFLOW --> GEN["local_generation per Worker Group"]
+    GEN --> TURNS["multi-agent turns"]
+    TURNS --> EMIT["recipe emitter + schema"]
+    EMIT --> PAD["per-group padding + routing"]
+    PAD --> BATCH["TransferQueue / DataProto"]
+    BATCH --> HOOK["credit and extension hooks"]
+    CREDIT --> HOOK
+    HOOK --> ACTOR["Actor Worker Group update"]
+    HOOK --> CRITIC["optional critic update"]
 
-    TRACK --> RUNFILES["logs / metrics / artifacts"]
-    STORE --> RUNFILES
+    ACTOR --> SYNC["weight export + rollout_sync snapshot"]
+    SYNC --> GEN
+
+    TURNS --> TURNLOG["online_turns JSONL"]
+    TRAINER --> METRICS["normalized metrics"]
+    STORE --> RUNFILES["logs / metrics / artifacts / status"]
+    TURNLOG --> RUNFILES
+    METRICS --> RUNFILES
+    SYNC --> RUNFILES
 ```
 
 ## 4. 仓库结构
@@ -151,12 +170,21 @@ trajweave/
   rollout/                       离线 rollout engine。
   recipes/                       论文专属 recipe package。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
-    verl/emitters/registry.py    Recipe -> AgentLoop emitter routing table。
+    verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow 的真实 HF workflow runtime。
+    verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
+    verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
+    verl/routing.py              按 worker_group 拆分和路由训练 batch。
+    verl/schema.py               TrajWeave 在线字段和 batch schema。
+    verl/runtime_config.py       解析 Hydra/OmegaConf runtime 配置。
+    verl/weight_sync.py          导出更新后权重，并生成下一轮 rollout snapshot。
+    verl/launcher.py             构造、启动和严格校验 VERL 子进程。
+    verl/emitters/               Recipe -> AgentLoop output 和训练字段映射。
     verl/extensions/common/      共享 hook 和 nested TransferQueue compatibility。
-    verl/extensions/drmas/       DrMAS agent-wise GRPO runtime patch。
-    verl/extensions/maporl/      MAPoRL PPO runtime patch。
+    verl/extensions/drmas/       DrMAS agent-wise GRPO hooks。
+    verl/extensions/maporl/      MAPoRL PPO hooks。
+    verl/extensions/agentflow/   AgentFlow planner-only GRPO hooks。
     verl/trainers/               TrajWeave 注册的 VERL V1 trainers。
-    verl/extensions/agentflow/   AgentFlow planner-only GRPO runtime patch。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -180,7 +208,7 @@ verl/                            保留的 VERL backend。
 | `trajweave/rollout`         | 修改离线 rollout 收集。                                  | VERL trainer patch。                                   |
 | `trajweave/recipes`         | 组合 env、orchestra、credit、assets 和 backend。         | 通用 storage 或 metric infrastructure。                |
 | `trajweave/backends`        | 新增 policy generation 或 training backend adapter。      | 论文专属业务规则，除非已经隔离。                       |
-| `trajweave/backends/verl`   | 把 TrajWeave 接到 VERL config、AgentLoop、DataProto。    | 应该 backend-agnostic 的 MAS 核心抽象。                |
+| `trajweave/backends/verl`   | AgentLoop、workflow runtime、路由、padding、hooks、权重同步和 VERL launch。 | 应该 backend-agnostic 的 MAS 核心抽象。                |
 | `trajweave/storage`         | 持久化 run manifest、artifact、trajectory。              | Metric 定义或 reward 逻辑。                            |
 | `trajweave/metrics`         | 定义、解析、聚合或写入 metrics。                         | 文件布局或 trainer launch 逻辑。                       |
 | `trajweave/runtime`         | 记录 events、logs、lifecycle、run finalization。         | 算法专属 reward propagation。                          |
@@ -200,13 +228,27 @@ verl/                            保留的 VERL backend。
 
 ## 7. VERL Bridge 边界
 
-TrajWeave 有三条路径进入 VERL：
+TrajWeave 有四条路径进入 VERL：
 
-| 路径              | 目的                                             | 主要文件                                                                |
-| ----------------- | ------------------------------------------------ | ----------------------------------------------------------------------- |
-| Offline export    | 把离线 `TrainingSample` 转成 DataProto           | `backends/verl/dataproto.py`, `backends/verl/export.py`                 |
-| Online training   | 让 VERL 在 rollout 时调用 TrajWeave AgentLoop    | `backends/verl/main_ppo.py`, `agent_loop.py`, `runtime_config.py`, `emitters/registry.py`, `extensions/` |
-| Trainer extension | 不改 `verl/` 的情况下注册 TrajWeave-owned VERL V1 trainer | `backends/verl/trainers/`                                                |
+| 路径                | 目的                                                     | 主要文件                                                                |
+| ------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Offline export      | 把离线 `TrainingSample` 转成 DataProto                   | `backends/verl/dataproto.py`, `backends/verl/export.py`                 |
+| Online workflow     | 让 VERL rollout 调用真实多 Agent workflow 和 HF 模型     | `agent_loop.py`, `workflow_runtime.py`, `local_generation.py`           |
+| Batch/algorithm hook| 注入字段、按组 padding/routing、credit 和 advantage 逻辑 | `schema.py`, `batch_padding.py`, `routing.py`, `emitters/`, `extensions/` |
+| Trainer/weight sync | 注册 TrajWeave Trainer，并把更新权重送回下一轮 rollout   | `trainers/`, `weight_sync.py`, `launcher.py`, `main_ppo.py`             |
+
+在线训练的关键约束：
+
+```text
+workflow_runtime 只负责执行多 Agent 协议并产生 turn
+  -> emitter 把 turn 映射成稳定 schema
+  -> batch_padding 按 Worker Group 补齐 batch
+  -> routing 把样本送到对应 Actor Worker Group
+  -> extension hook 计算论文专属 reward/advantage
+  -> Trainer 更新 Actor/Critic
+  -> weight_sync 导出各 Actor 权重
+  -> local_generation 下一轮读取新的 policy version
+```
 
 修改前按这个规则判断：
 
@@ -220,6 +262,8 @@ VERL 是否需要额外 batch fields 或 advantage grouping？
 VERL 本身是否需要通用 extension point？
   -> 只在有兼容性测试时小范围修改 verl/
 ```
+
+当前四条稳定链路都没有修改 `verl/`。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
 
 ## 8. 运行命令
 
@@ -261,7 +305,25 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_verl_tiny.yaml
 ```
 
-资源验证配置：
+真实 Qwen2.5-0.5B 双卡回归入口：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/drmas/math_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/drmas/search_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/agentflow/flow_grpo_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
+```
+
+这些配置包含本地模型路径。Contributor 在其他机器运行前，必须修改 YAML 中的 `model_path` 和 `tokenizer_path`，不能假设 `/data/workspace/liuzhou/models` 存在。
+
+MAPoRL 相关资源配置：
 
 ```text
 configs/maporl/debate_math_qwen05b_2gpu.yaml
@@ -270,11 +332,11 @@ configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
-`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。这条 P0 稳定路径要求所有 trainable worker group 使用同一个 `tokenizer_path`，训练后必须能在 metrics 里看到两个 group 的 sample/update 指标，并在 checkpoint 里看到 `actors/qwen05b_a/` 和 `actors/qwen05b_b/`。
+`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 是当前稳定双卡基线。它使用 `trajweave_maporl_multi_actor_sync`，启动 `qwen05b_instruct` 和 `qwen05b_base` 两个 trainable Worker Group。两个模型 checkpoint 不同，但共享经过明确配置的 tokenizer，因此可以安全共享 token-id batch 和 critic。
 
-`configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml` 用于 P1 异构模型验证。它启动 `qwen05b` 和 `qwen15b` 两个 trainable worker groups，使用 `tokenizer_mode=compatible`，启动前会校验两个 tokenizer 的 vocab fingerprint 是否一致。当前这个模式仍然不支持真正不同词表的 tokenizer；如果 fingerprint 不一致，应该新建 per-worker-tokenizer batch boundary 和 per-group critic 后再打开。
+`configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml` 是容量相关的 compatible-tokenizer 入口。它会在启动前校验 vocab fingerprint 和关键 special token id，但不保证在两张 24 GB P40 上完成全参数多步 PPO。真正不同词表的 tokenizer 仍需要 per-worker tokenization boundary，以及独立 critic 或重新定义的共享 critic 接口。
 
-MAPoRL 0.5B 双卡验收时的关键检查项：
+MAPoRL 双卡验收时的关键检查项：
 
 ```text
 summary.json:
@@ -282,15 +344,25 @@ summary.json:
   multi_actor_validation_status: passed
   tokenizer_mode: shared
 
-metrics:
-  trajweave/maporl/actor_groups/qwen05b_a/samples = 6
-  trajweave/maporl/actor_groups/qwen05b_b/samples = 6
-  trajweave/maporl/actor_groups/qwen05b_a/updated = 1
-  trajweave/maporl/actor_groups/qwen05b_b/updated = 1
+metrics, each step:
+  trajweave/maporl/actor_groups/qwen05b_instruct/samples = 8
+  trajweave/maporl/actor_groups/qwen05b_base/samples = 8
+  trajweave/maporl/actor_groups/qwen05b_instruct/updated = 1
+  trajweave/maporl/actor_groups/qwen05b_base/updated = 1
   trajweave/maporl/actor_groups/missing_trainable = 0
+  actor/qwen05b_instruct/grad_norm is finite
+  actor/qwen05b_base/grad_norm is finite
 
 online_turns:
-  每条 agent turn 必须带 worker_group、agent_id、traj_uid 和 worker_group_batch_stats。
+  每条训练 turn 必须带 worker_group、agent_id、traj_uid、policy_version、
+  worker_group_model_path 和 worker_group_batch_stats。
+  step 1 使用 policy_version=0；step 2 使用 policy_version=1。
+
+checkpoints:
+  global_step_N/actors/qwen05b_instruct/
+  global_step_N/actors/qwen05b_base/
+  rollout_sync/global_step_N/maporl_actor_qwen05b_instruct/
+  rollout_sync/global_step_N/maporl_actor_qwen05b_base/
 ```
 
 ## 9. MAS 数据流 GIF
@@ -394,14 +466,28 @@ Recipe plugin 应该尽量简单。它负责组合模块，不应该把一整套
 | `metrics/summary.json`           | 最新 metric snapshot                                   |
 | `artifacts/artifact_index.jsonl` | prepared assets、command files、logs、checkpoints      |
 | `trajectories/online_turns`      | online rollout 时，每个 agent turn 一行 JSONL          |
+| `checkpoints/global_step_N`      | 可恢复的 Actor/Critic optimizer 和模型分片             |
+| `checkpoints/rollout_sync`       | 下一轮本地 generation 实际读取的 Hugging Face 权重快照 |
 
 对 online MASRL training 来说，每条 turn row 至少应该包含：
 
 ```text
 run_id, recipe, uid, session_id, turn_id, validate,
 agent_name, role, policy_group, worker_group, agent_id,
-traj_uid, reward_score, prompt_len, response_len, global_steps, metadata
+traj_uid, reward_score, prompt_text, response_text,
+worker_group_model_path, prompt_len, response_len, global_steps, metadata
 ```
+
+Runtime 还必须满足这些安全和可审计约束：
+
+- config snapshot 和日志中的敏感字段要脱敏；
+- JSON、JSONL 和 status 更新要使用原子写入或文件锁，避免并发损坏；
+- VERL 子进程失败时必须写入 `failed` 状态，并清理完整进程组；
+- observed training steps 必须等于 expected training steps；
+- metrics 不允许出现 NaN 或 Inf；
+- artifact index 中的路径必须真实存在；
+- padding row 不能进入持久化 trajectory 或论文 credit 计算；
+- AgentFlow 的 frozen trace 可以没有训练 token，但不能缺少稳定的 role 和 agent identity。
 
 ## 13. 验证命令
 
@@ -410,10 +496,26 @@ TrajWeave 改动优先跑最小相关检查：
 ```bash
 python -m compileall -q trajweave
 pytest tests/trajweave -q
+ruff check trajweave tests/trajweave
+ruff format --check trajweave tests/trajweave
 git diff --check
 ```
 
-如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer 或 protocol tests。
+修改配置时，还要解析 `configs/` 下全部 YAML，并检查重复 key。修改 shared runtime、AgentLoop、routing、padding、weight sync 或 extension hook 时，必须运行四条 0.5B 双卡回归中的受影响路径；跨算法共享代码发生变化时，四条都要跑。
+
+真实训练通过至少要同时满足：
+
+```text
+return code = 0
+observed steps = expected steps
+Actor/Critic 指标全部有限
+非退化 batch 至少出现一次有效 Actor gradient
+下一轮 policy_version 增加并读取新的 rollout snapshot
+online trajectory 没有 padding 泄漏、空训练 prompt 或错误 Worker Group 路由
+logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
+```
+
+如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前四条稳定路径不依赖 `verl/` 源码修改。
 
 ## 14. Paper Recipe Catalog
 
@@ -427,12 +529,12 @@ git diff --check
 | Environment | `SolverVerifierMathEnvironment`                            |
 | Orchestra   | `SolverVerifierOrchestra`                                  |
 | Credit      | `DoctorMASCreditAssigner`                                  |
-| VERL 路径   | DrMAS emitter 加 agent-wise extension hooks                |
+| VERL 路径   | 真实 HF workflow + DrMAS emitter + agent-wise GRPO hooks   |
 | 推理流      | question -> solver -> verifier -> refine or stop           |
 | 训练流      | final reward -> per-agent credit -> VERL actor update      |
-| 当前状态    | smoke、tiny train、VERL tiny train 已验证                  |
-| 主要配置    | `drmas/math_smoke.yaml`, `drmas/math_verl_tiny.yaml`        |
-| 已知限制    | 还没有做 paper-scale Qwen 或 Llama 验证。                  |
+| 当前状态    | smoke、tiny、Qwen2.5-0.5B 双卡两步真实训练已验证           |
+| 主要配置    | `configs/drmas/math_smoke.yaml`, `configs/drmas/math_verl_tiny.yaml`, `configs/drmas/math_qwen05b_2gpu.yaml` |
+| 已知限制    | 未做 paper-scale 数据集、长时间收敛和论文指标复现。        |
 
 ### DrMAS Search
 
@@ -442,12 +544,12 @@ git diff --check
 | Environment | `SearchAnswerEnvironment`                                   |
 | Orchestra   | `SearchAnswerOrchestra`                                     |
 | Credit      | `DoctorMASCreditAssigner`                                   |
-| VERL 路径   | DrMAS search emitter 加 agent-wise extension hooks          |
-| 推理流      | question -> verifier -> searcher/tool -> answer             |
+| VERL 路径   | 真实 HF workflow + Search emitter + agent-wise GRPO hooks    |
+| 推理流      | question -> verifier -> searcher -> evidence -> answer       |
 | 训练流      | final answer reward -> agent-wise credit -> VERL update     |
-| 当前状态    | smoke 和 VERL tiny train 已验证                             |
-| 主要配置    | `drmas/search_smoke.yaml`, `drmas/search_verl_tiny.yaml`     |
-| 已知限制    | 还没有真实外部 search API 或大模型验证。                    |
+| 当前状态    | smoke、Qwen2.5-0.5B 双卡训练和 search evidence 回写已验证   |
+| 主要配置    | `configs/drmas/search_smoke.yaml`, `configs/drmas/search_verl_tiny.yaml`, `configs/drmas/search_qwen05b_2gpu.yaml` |
+| 已知限制    | 当前使用内置文档检索环境；未验证真实外部 Search API 和 paper-scale benchmark。 |
 
 ### MAPoRL Debate Math
 
@@ -457,12 +559,12 @@ git diff --check
 | Environment | `SolverVerifierMathEnvironment`                             |
 | Orchestra   | `MAPoRLDebateOrchestra`                                     |
 | Credit      | `MAPoRLPPOScoreRuleCreditAssigner`                          |
-| VERL 路径   | MAPoRL emitter 加 MAPoRL extension hooks                    |
+| VERL 路径   | 真实 debate workflow + per-group routing + MAPoRL PPO Trainer/hooks |
 | 推理流      | question -> agent_0 and agent_1 debate -> consensus answer  |
-| 训练流      | debate score -> per-turn MAPoRL fields -> route by `worker_group` -> each actor worker group computes logprob and PPO update |
-| 当前状态    | smoke、VERL tiny train、同 tokenizer 0.5B 双卡 multi-actor train 已验证 |
-| 主要配置    | `maporl/debate_math_smoke.yaml`, `maporl/debate_math_verl_tiny.yaml`, `maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` |
-| 已知限制    | 当前 P0 稳定路径要求所有 trainable worker group 使用完全相同的 tokenizer path；checkpoint resume、异构 tokenizer 和 per-group critic 还没有实现。 |
+| 训练流      | debate score -> per-turn fields -> route by `worker_group` -> each Actor PPO update -> shared critic -> per-group rollout snapshot |
+| 当前状态    | smoke、两个不同 0.5B checkpoint、双 Actor Worker Group、两步 PPO/critic 更新已验证 |
+| 主要配置    | `configs/maporl/debate_math_smoke.yaml`, `configs/maporl/debate_math_verl_tiny.yaml`, `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` |
+| 已知限制    | 稳定路径要求共享 tokenizer；真正不同词表、per-group critic、多机和 checkpoint resume 长任务尚未验证。 |
 
 ### AgentFlow PlannerTool
 
@@ -472,12 +574,12 @@ git diff --check
 | Environment | `SolverVerifierMathEnvironment`                             |
 | Orchestra   | `AgentFlowPlannerToolOrchestra`                             |
 | Credit      | `FlowGRPOPlannerOnlyCreditAssigner`                         |
-| VERL 路径   | AgentFlow emitter 加 planner-only extension hooks           |
+| VERL 路径   | 真实 HF workflow + AgentFlow emitter + planner-only GRPO hooks |
 | 推理流      | task -> planner -> executor -> tool -> verifier -> stop or continue |
 | 训练流      | final outcome reward -> planner-only samples -> VERL GRPO update |
-| 当前状态    | smoke 和 VERL tiny train 已验证                             |
-| 主要配置    | `agentflow/flow_grpo_smoke.yaml`, `agentflow/flow_grpo_verl_tiny.yaml` |
-| 已知限制    | 还没有验证外部工具和 paper-scale LLM training。             |
+| 当前状态    | smoke、Qwen2.5-0.5B 双卡两步真实训练、四角色 trace、Planner-only 更新已验证 |
+| 主要配置    | `configs/agentflow/flow_grpo_smoke.yaml`, `configs/agentflow/flow_grpo_verl_tiny.yaml`, `configs/agentflow/flow_grpo_qwen05b_2gpu.yaml` |
+| 已知限制    | 当前工具是内置测试工具；未验证浏览器/外部工具、长周期训练和论文指标。 |
 
 ## 15. 贡献者规则
 
@@ -488,6 +590,8 @@ git diff --check
 5. 每次 paper recipe 状态变化都要更新 README。
 6. 保留 Apache-2.0 attribution 和复制过来的上游源码 header。
 7. 不要重新引入大量上游 VERL examples、Docker matrices 或 docs，除非它们直接支撑 TrajWeave。
+8. 不要用“进程返回 0”代替端到端验收；必须审计 trajectory、metrics、policy version 和 checkpoint。
+9. 不要把两步框架验证描述为 paper-scale reproduction，也不要把容量相关配置描述为稳定基线。
 
 ## 16. 归属和许可
 
