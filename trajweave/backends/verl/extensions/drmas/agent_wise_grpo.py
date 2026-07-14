@@ -410,7 +410,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             data, is_metrics = tb.compute_rollout_correction_and_add_to_batch(data, rollout_corr_config)
             metrics.update(is_metrics)
 
-        data = tb.compute_advantage_for_multi_trajectories(
+        data = hooks.compute_advantage(
             data,
             batch_keys=batch.keys,
             adv_estimator=self.config.algorithm.adv_estimator,
@@ -419,6 +419,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             num_repeat=self.config.actor_rollout_ref.rollout.n,
             norm_adv_by_std_in_grpo=self.config.algorithm.get("norm_adv_by_std_in_grpo", True),
             config=self.config.algorithm,
+            fallback=tb.compute_advantage_for_multi_trajectories,
         )
 
         output_fields = ["advantages", "returns"]
@@ -428,6 +429,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             output_fields.append("response_mask")
             if "rollout_is_weights" in data.batch:
                 output_fields.append("rollout_is_weights")
+        output_fields = list(hooks.output_fields("advantage", tuple(output_fields), data, config=self.config.algorithm))
 
         output = {}
         for field in output_fields:

@@ -1,0 +1,8 @@
+recipe: matpo_browse
+mode: smoke
+
+team:
+  max_turns: 3
+
+rollout:
+  rollouts_per_task: 2

@@ -72,6 +72,13 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         runtime_recipe="comas_peer_review_math",
         aliases=("comas_peer_review_math", "comas.math"),
     ),
+    RecipeDefinition(
+        name="matpo.browse_qa.parent_broadcast",
+        family="matpo",
+        task="browse_qa",
+        runtime_recipe="matpo_browse",
+        aliases=("matpo_browse", "matpo.browse_qa"),
+    ),
 )
 
 

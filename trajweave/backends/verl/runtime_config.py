@@ -125,4 +125,5 @@ def _default_turn_padding_multiple(recipe: str | None) -> int:
         "maporl_debate_math": 2,
         "agentflow_planner_tool": 4,
         "gigpo_solver_verifier_math": 2,
+        "matpo_browse": 2,
     }.get(str(recipe), 1)

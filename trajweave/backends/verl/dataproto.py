@@ -14,6 +14,8 @@ DRMAS_AGENT_IDS = {
     "searcher": "Search Agent",
     "search": "Search Agent",
     "answer": "Answer Agent",
+    "planner": "Planner Agent",
+    "browsing_agent": "Browsing Agent",
 }
 
 
@@ -68,6 +70,11 @@ class VerlDataProtoAdapter:
             "role": np.array([sample.role for sample in samples], dtype=object),
             "policy_group": np.array([sample.policy_group for sample in samples], dtype=object),
             "turn_id": np.array([sample.turn_id for sample in samples], dtype=object),
+            "reqs_id": np.array([sample.metadata.get("reqs_id", sample.sample_id) for sample in samples], dtype=object),
+            "parent_reqs_id": np.array([sample.metadata.get("parent_reqs_id", "") for sample in samples], dtype=object),
+            "agent_type": np.array([sample.metadata.get("agent_type", sample.agent_name) for sample in samples], dtype=object),
+            "role_id": np.array([sample.metadata.get("role_id", sample.role) for sample in samples], dtype=object),
+            "shared_model_id": np.array([sample.metadata.get("shared_model_id", sample.policy_group) for sample in samples], dtype=object),
         }
         tensors = {
             "prompts": prompts,
@@ -79,5 +86,21 @@ class VerlDataProtoAdapter:
             "token_level_rewards": token_level_rewards,
             "advantages": advantages,
             "returns": advantages.clone(),
+            "is_from_subagent_tool": torch.tensor(
+                [bool(sample.metadata.get("is_from_subagent_tool", False)) for sample in samples],
+                dtype=torch.bool,
+            ),
+            "turn_count": torch.tensor(
+                [int(sample.metadata.get("turn_count", sample.turn_id)) for sample in samples],
+                dtype=torch.long,
+            ),
+            "matpo_tool_format_valid": torch.tensor(
+                [bool(sample.metadata.get("matpo_tool_format_valid", True)) for sample in samples],
+                dtype=torch.bool,
+            ),
+            "matpo_tool_call_count": torch.tensor(
+                [int(sample.metadata.get("matpo_tool_call_count", 0)) for sample in samples],
+                dtype=torch.long,
+            ),
         }
         return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors, meta_info={"source": "trajweave"})

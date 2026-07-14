@@ -357,6 +357,125 @@ class GiGPOHooks(PPOExtensionHooks):
 
 
 @dataclass(frozen=True)
+class MATPOParentBroadcastHooks(PPOExtensionHooks):
+    name: str = "matpo_parent_broadcast"
+
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
+        if stage != "advantage":
+            return ()
+        return (
+            "reqs_id",
+            "parent_reqs_id",
+            "is_from_subagent_tool",
+            "turn_count",
+            "agent_type",
+            "role_id",
+            "shared_model_id",
+            "matpo_tool_format_valid",
+            "matpo_tool_call_count",
+        )
+
+    def tq_select_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...] | None = None,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
+        fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
+        if stage == "advantage":
+            fields.extend(self.batch_schema_fields(stage, config=config))
+        return tuple(dict.fromkeys(fields))
+
+    def compute_advantage(
+        self,
+        data: Any,
+        *,
+        batch_keys: list[str] | None = None,
+        adv_estimator: Any,
+        gamma: float = 1.0,
+        lam: float = 1.0,
+        num_repeat: int = 1,
+        norm_adv_by_std_in_grpo: bool = True,
+        config: Any = None,
+        fallback: Any = None,
+    ) -> Any:
+        import numpy as np
+        import torch
+
+        if fallback is None:
+            raise ValueError("MATPOParentBroadcastHooks requires a fallback advantage implementation.")
+        is_child_values = data.non_tensor_batch.get("is_from_subagent_tool")
+        if is_child_values is None and "is_from_subagent_tool" in data.batch.keys():
+            is_child_values = data.batch["is_from_subagent_tool"].detach().cpu().tolist()
+        if is_child_values is None:
+            return fallback(
+                data,
+                batch_keys=batch_keys,
+                adv_estimator=adv_estimator,
+                gamma=gamma,
+                lam=lam,
+                num_repeat=num_repeat,
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                config=config,
+            )
+
+        is_child = np.array([bool(value) for value in is_child_values])
+        if not is_child.any():
+            return fallback(
+                data,
+                batch_keys=batch_keys,
+                adv_estimator=adv_estimator,
+                gamma=gamma,
+                lam=lam,
+                num_repeat=num_repeat,
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                config=config,
+            )
+
+        main_mask = ~is_child
+        if not main_mask.any():
+            data.batch["advantages"] = torch.zeros_like(data.batch["token_level_rewards"])
+            data.batch["returns"] = torch.zeros_like(data.batch["token_level_rewards"])
+            return data
+
+        main_indices = np.where(main_mask)[0]
+        main_batch_keys = [batch_keys[int(index)] for index in main_indices] if batch_keys is not None else None
+        main_data = data[main_mask]
+        main_data = fallback(
+            main_data,
+            batch_keys=main_batch_keys,
+            adv_estimator=adv_estimator,
+            gamma=gamma,
+            lam=lam,
+            num_repeat=num_repeat,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+        )
+
+        advantages = torch.zeros_like(data.batch["token_level_rewards"])
+        returns = torch.zeros_like(data.batch["token_level_rewards"])
+        for output_row, source_row in enumerate(main_indices):
+            advantages[source_row] = main_data.batch["advantages"][output_row]
+            returns[source_row] = main_data.batch["returns"][output_row]
+
+        reqs_ids = np.array([str(value) for value in data.non_tensor_batch.get("reqs_id", [])], dtype=object)
+        parent_reqs_ids = np.array([str(value) for value in data.non_tensor_batch.get("parent_reqs_id", [])], dtype=object)
+        req_to_row = {reqs_ids[row]: row for row in main_indices if row < len(reqs_ids)}
+        for row in np.where(is_child)[0]:
+            parent_row = req_to_row.get(parent_reqs_ids[row] if row < len(parent_reqs_ids) else "")
+            if parent_row is None:
+                continue
+            advantages[row] = advantages[parent_row] * data.batch["response_mask"][row]
+            returns[row] = returns[parent_row] * data.batch["response_mask"][row]
+
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
+        return data
+
+
+@dataclass(frozen=True)
 class MAPoRLFullPPOHooks(PPOExtensionHooks):
     name: str = "maporl_full_ppo"
 
@@ -659,6 +778,12 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
         from trajweave.backends.verl.extensions.comas import CoMASInteractionREINFORCEHooks
 
         return CoMASInteractionREINFORCEHooks()
+    if (
+        credit_allocator == "matpo_parent_broadcast_grpo"
+        or recipe == "matpo_browse"
+        or "trajweave_matpo_parent_broadcast" in extension_names
+    ):
+        return MATPOParentBroadcastHooks()
     if (
         credit_allocator == "gigpo_hierarchical_grpo"
         or recipe == "gigpo_solver_verifier_math"

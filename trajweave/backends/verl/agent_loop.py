@@ -17,6 +17,7 @@ from trajweave.backends.verl.emitters import (
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
+    MATPOEmitterMixin,
 )
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
@@ -120,6 +121,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
     CoMASEmitterMixin,
+    MATPOEmitterMixin,
     MAPoRLEmitterMixin,
     GiGPOEmitterMixin,
     DrMASEmitterMixin,

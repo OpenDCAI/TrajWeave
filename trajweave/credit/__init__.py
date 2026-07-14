@@ -4,6 +4,7 @@ from trajweave.credit.comas import CoMASInteractionCreditAssigner
 from trajweave.credit.doctor_mas import DoctorMASCreditAssigner
 from trajweave.credit.gigpo import GiGPOCreditAssigner
 from trajweave.credit.global_broadcast import GlobalBroadcastCreditAssigner
+from trajweave.credit.matpo import MATPOParentBroadcastCreditAssigner
 from trajweave.credit.maporl import (
     MAPoRLPPOScoreRuleCreditAssigner,
     MAPoRLScoreBonusCreditAssigner,
@@ -18,6 +19,7 @@ __all__ = [
     "GlobalBroadcastCreditAssigner",
     "GiGPOCreditAssigner",
     "MAPoRLPPOScoreRuleCreditAssigner",
+    "MATPOParentBroadcastCreditAssigner",
     "MAPoRLScoreBonusCreditAssigner",
     "shape_maporl_reward",
 ]

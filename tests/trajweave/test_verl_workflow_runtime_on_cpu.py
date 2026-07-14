@@ -46,6 +46,7 @@ class FakeWorkflowWorker:
                         "task_name": "math",
                         "assignment_seed": 7,
                     },
+                    "matpo": {"max_turns": 3},
                 },
             }
         }
@@ -138,6 +139,21 @@ def _math_prompt() -> dict:
         "raw_prompt": [{"role": "user", "content": "What is 1 + 1?"}],
         "reward_model": {"ground_truth": "2"},
         "extra_info": {},
+    }
+
+
+def _search_prompt() -> dict:
+    return {
+        "uid": "browse-1",
+        "raw_prompt": [{"role": "user", "content": "Which city is the capital of France?"}],
+        "reward_model": {"ground_truth": "Paris"},
+        "extra_info": {
+            "search_query": "capital France",
+            "documents": [
+                {"title": "France", "text": "France is a country in Europe. Its capital city is Paris."},
+                {"title": "Germany", "text": "Germany's capital city is Berlin."},
+            ],
+        },
     }
 
 
@@ -243,6 +259,30 @@ def test_hf_search_requires_public_documents_and_never_uses_ground_truth_as_evid
             prompt=prompt,
             session_id=0,
         )
+
+
+def test_hf_matpo_emits_parent_child_metadata_for_planner_worker_browse():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker([
+            "CALL search_and_browse: capital France",
+            "Evidence summary: France capital is Paris. Suggested final answer: Paris",
+            "Final answer: Paris",
+        ]),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "browsing_agent",
+        "planner",
+    ]
+    assert [output.reward_score for output in outputs] == [1.0, 1.0]
+    child = outputs[0].extra_fields
+    parent_ids = {outputs[1].extra_fields["reqs_id"]}
+    assert child["is_from_subagent_tool"] is True
+    assert child["parent_reqs_id"] in parent_ids
+    assert outputs[1].extra_fields["matpo_tool_call_count"] == 1
 
 
 def test_hf_agentflow_projects_only_trainable_planner_and_keeps_frozen_trace():

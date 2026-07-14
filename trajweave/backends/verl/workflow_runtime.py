@@ -18,6 +18,7 @@ from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
 from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
+from trajweave.orchestration.matpo import PlannerWorkerOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
@@ -26,6 +27,7 @@ from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
 from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
 from trajweave.recipes.maporl.debate_math import default_debate_team
+from trajweave.recipes.matpo.smoke import default_team as default_matpo_team
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
@@ -148,6 +150,24 @@ def build_hf_workflow_outputs(
             backend=backend,
             session_id=session_id,
         )
+    elif recipe == "matpo_browse":
+        extra_info = to_python(prompt.get("extra_info", {})) or {}
+        task = SearchTask(
+            task_id=task_id,
+            question=question,
+            answer=ground_truth,
+            search_query=str(extra_info.get("search_query") or question),
+            documents=_search_documents(extra_info),
+        )
+        team = default_matpo_team(max_turns=_matpo_max_turns(worker.config))
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=PlannerWorkerOrchestra(),
+            environment=SearchAnswerEnvironment(),
+            backend=backend,
+            session_id=session_id,
+        )
     elif recipe == "gigpo_solver_verifier_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         team = default_gigpo_team(max_steps=_gigpo_max_steps(worker.config))
@@ -206,6 +226,12 @@ def _run_protocol(
 def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, team: TeamSpec) -> list[AgentLoopOutput]:
     trainable_agents = {agent.name for agent in team.agents if agent.trainable}
     trainable_turns = [turn for turn in trajectory.turns if turn.agent_name in trainable_agents]
+    if trajectory.team_name == "matpo_planner_worker_browse":
+        trainable_turns = [
+            turn
+            for turn in trainable_turns
+            if bool(turn.metadata.get("is_from_subagent_tool")) or bool(turn.done)
+        ]
     if not trainable_turns:
         raise RuntimeError(f"Workflow {trajectory.team_name} produced no trainable turns.")
 
@@ -318,6 +344,13 @@ def _drmas_search_max_turns(config: Any) -> int:
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
     search_cfg = config_get(orchestra_cfg, "search", {}) or {}
     return int(config_get(search_cfg, "max_loop_num", 2))
+
+
+def _matpo_max_turns(config: Any) -> int:
+    agent_cfg = config_get(config, "agent", {}) or {}
+    orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
+    matpo_cfg = config_get(orchestra_cfg, "matpo", {}) or {}
+    return int(config_get(matpo_cfg, "max_turns", 3))
 
 
 def _gigpo_max_steps(config: Any) -> int:
