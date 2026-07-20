@@ -13,6 +13,7 @@ import transfer_queue as tq
 from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
+    CoMASEmitterMixin,
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
@@ -118,6 +119,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
+    CoMASEmitterMixin,
     MAPoRLEmitterMixin,
     GiGPOEmitterMixin,
     DrMASEmitterMixin,

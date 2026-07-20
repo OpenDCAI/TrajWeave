@@ -108,6 +108,7 @@ class ExperimentTracker:
             for event in parse_verl_console_metrics(str(result.get("stdout") or ""), run_id=self.run_id):
                 self.metrics.write(event)
         self.log_metric("returncode", result.get("returncode"), source="verl")
+        self._register_online_trajectories()
         if result.get("returncode") == 0:
             self._register_latest_checkpoint()
 
@@ -138,6 +139,18 @@ class ExperimentTracker:
                 path=checkpoint,
                 kind="checkpoint",
                 metadata={"global_step": step},
+            )
+
+    def _register_online_trajectories(self) -> None:
+        online_turn_dir = self.run_dir / "trajectories" / "online_turns"
+        if not online_turn_dir.is_dir():
+            return
+        for shard in sorted(online_turn_dir.glob("*.jsonl")):
+            self.log_artifact(
+                name=f"online_turns/{shard.name}",
+                path=shard,
+                kind="trajectory",
+                metadata={"format": "jsonl"},
             )
 
     def write_summary(self, output: dict[str, Any]) -> dict[str, Any]:

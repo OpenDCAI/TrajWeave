@@ -60,6 +60,17 @@ def pad_session_batch(
                 "next_obs": "__padding__",
                 "step_reward": 0.0,
                 "active_mask": 0.0,
+                "discussion_id": -1,
+                "interaction_id": f"__padding__:{pad_uid}",
+                "comas_stage": "__padding__",
+                "solver_agent_id": "__padding__",
+                "evaluator_agent_id": "__padding__",
+                "scorer_agent_id": "__padding__",
+                "generated_score": -1,
+                "score_valid": False,
+                "normalized_score": -1.0,
+                "intrinsic_reward": 0.0,
+                "reward_source": "__padding__",
             }.items():
                 if key in sample:
                     sample[key] = value
@@ -80,6 +91,17 @@ def pad_session_batch(
                     "next_obs": "__padding__",
                     "step_reward": 0.0,
                     "active_mask": 0.0,
+                    "discussion_id": -1,
+                    "interaction_id": f"__padding__:{pad_uid}",
+                    "comas_stage": "__padding__",
+                    "solver_agent_id": "__padding__",
+                    "evaluator_agent_id": "__padding__",
+                    "scorer_agent_id": "__padding__",
+                    "generated_score": -1,
+                    "score_valid": False,
+                    "normalized_score": -1.0,
+                    "intrinsic_reward": 0.0,
+                    "reward_source": "__padding__",
                 }
             )
             sample["extra_fields"] = extra_fields

@@ -1,6 +1,6 @@
 import json
 
-from trajweave.backends.verl.tiny_assets import prepare_tiny_verl_assets
+from trajweave.backends.verl.tiny_assets import prepare_tiny_verl_assets, prepare_verl_dataset
 from trajweave.pipeline.assets import maybe_prepare_assets
 
 
@@ -41,3 +41,18 @@ def test_tiny_verl_assets_default_output_dir_is_isolated_by_recipe(monkeypatch):
     assert agentflow["output_dir"] == "outputs/agentflow.flow_grpo.planner_tool_tiny_assets"
     assert maporl["output_dir"] == "outputs/maporl.debate_math.full_verl_tiny_tiny_assets"
     assert agentflow["output_dir"] != maporl["output_dir"]
+
+
+def test_verl_dataset_preparation_does_not_create_a_tiny_model(tmp_path):
+    output = prepare_verl_dataset(
+        tmp_path / "assets",
+        train_size=1,
+        val_size=1,
+        task_family="math",
+        recipe_name="comas_peer_review_math",
+    )
+
+    assert not (tmp_path / "assets/model").exists()
+    with open(output["train_file"], encoding="utf-8") as handle:
+        row = json.loads(handle.readline())
+    assert row["extra_info"]["trajweave_recipe"] == "comas_peer_review_math"

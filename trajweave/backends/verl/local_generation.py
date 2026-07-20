@@ -134,7 +134,7 @@ class HFLocalGenerationMixin:
             return model
         from transformers import AutoModelForCausalLM
 
-        model_path = self._maporl_worker_group_model_path(policy_group) or self.model_config.local_path
+        model_path = self._worker_group_model_path(policy_group) or self.model_config.local_path
         runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
         evicted_groups = _evict_local_model_cache(cache, runtime.hf_local_model_cache_size)
         if evicted_groups:
@@ -211,8 +211,8 @@ class HFLocalGenerationMixin:
         return int(getattr(self, "_trajweave_policy_version", 0))
 
     def _local_tokenizer(self, *, policy_group: str = "shared"):
-        tokenizer_path = self._maporl_worker_group_tokenizer_path(policy_group)
-        model_path = self._maporl_worker_group_model_path(policy_group)
+        tokenizer_path = self._worker_group_tokenizer_path(policy_group)
+        model_path = self._worker_group_model_path(policy_group)
         if not tokenizer_path and not model_path:
             return self.tokenizer
         tokenizer_source = tokenizer_path or model_path
@@ -251,26 +251,26 @@ class HFLocalGenerationMixin:
             ids = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
         return ids
 
-    def _maporl_worker_group_model_path(self, group_id: str) -> str | None:
+    def _worker_group_model_path(self, group_id: str) -> str | None:
         overrides = getattr(self, "_trajweave_model_path_overrides", {})
         if group_id in overrides:
             return str(overrides[group_id])
         if "__default__" in overrides:
             return str(overrides["__default__"])
-        group_cfg = self._maporl_worker_group_config(group_id)
+        group_cfg = self._worker_group_config(group_id)
         model_path = config_get(group_cfg, "model_path", default=None)
         if model_path is None:
             return None
         return str(to_python(model_path))
 
-    def _maporl_worker_group_tokenizer_path(self, group_id: str) -> str | None:
-        group_cfg = self._maporl_worker_group_config(group_id)
+    def _worker_group_tokenizer_path(self, group_id: str) -> str | None:
+        group_cfg = self._worker_group_config(group_id)
         tokenizer_path = config_get(group_cfg, "tokenizer_path", default=None)
         if tokenizer_path is None:
             return None
         return str(to_python(tokenizer_path))
 
-    def _maporl_worker_group_config(self, group_id: str) -> Any:
+    def _worker_group_config(self, group_id: str) -> Any:
         agent_cfg = config_get(self.config, "agent", default={}) or {}
         worker_groups = config_get(agent_cfg, "worker_groups", default={}) or {}
         worker_groups = to_python(worker_groups)
@@ -281,6 +281,21 @@ class HFLocalGenerationMixin:
                 if isinstance(group, dict) and str(group.get("id")) == str(group_id):
                     return group
         return {}
+
+    def _maporl_worker_group_model_path(self, group_id: str) -> str | None:
+        """MAPoRL 旧调用点的兼容别名。"""
+
+        return self._worker_group_model_path(group_id)
+
+    def _maporl_worker_group_tokenizer_path(self, group_id: str) -> str | None:
+        """MAPoRL 旧调用点的兼容别名。"""
+
+        return self._worker_group_tokenizer_path(group_id)
+
+    def _maporl_worker_group_config(self, group_id: str) -> Any:
+        """MAPoRL 旧调用点的兼容别名。"""
+
+        return self._worker_group_config(group_id)
 
 
 def _torch_dtype(name: str) -> torch.dtype:

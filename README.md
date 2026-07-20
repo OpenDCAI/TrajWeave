@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了四个论文方向，对应五条可运行的 MASRL 路径：
+TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路径：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -19,6 +19,7 @@ TrajWeave 现在接入了四个论文方向，对应五条可运行的 MASRL 路
 | MAPoRL Debate Math    | multiple agents debate until consensus        | 两个独立 0.5B Actor Worker Group、shared critic、双卡 PPO 已验证    |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
 | GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
+| CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
 
 当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。
 
@@ -30,8 +31,8 @@ TrajWeave 现在接入了四个论文方向，对应五条可运行的 MASRL 路
 | Runtime 加固提交  | `45168dc feat: harden MASRL training runtime`                                               |
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
-| 训练步数          | 五条链路均完成 `2/2` step，return code 均为 `0`                                            |
-| 单元与集成测试    | `144 passed`                                                                               |
+| 训练步数          | 六条链路均完成 `2/2` step，return code 均为 `0`                                            |
+| 单元与集成测试    | `162 passed`                                                                               |
 | 代码边界          | `git status --short -- verl` 为空，当前 MASRL runtime 加固没有修改 `verl/` 源码            |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
@@ -41,8 +42,11 @@ TrajWeave 现在接入了四个论文方向，对应五条可运行的 MASRL 路
 | AgentFlow PlannerTool | `configs/agentflow/flow_grpo_qwen05b_2gpu.yaml`               | `20260710-100202-agentflow-flow-grpo-planner-tool-b4bcb924`         |     48 |
 | MAPoRL Debate Math    | `configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml`    | `20260710-094639-maporl-debate-math-full-verl-tiny-37ad795c`        |     32 |
 | GiGPO SolverVerifier  | `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml`        | `20260710-195759-gigpo-solver-verifier-math-81926544`                |     25 |
+| CoMAS PeerReview Math | `configs/comas/peer_review_math_qwen05b_2gpu.yaml`             | `20260720-053755-comas-peer-review-math-qwen05b-2gpu-caaefdb6`       |     48 |
 
 MAPoRL 的稳定双卡基线使用两个不同模型 checkpoint：`qwen05b_instruct` 和 `qwen05b_base`。两个 Worker Group 每轮各有 8 个样本、各自 `updated=1`，`missing_trainable=0`；第二轮 rollout 分别读取两个 Actor 的 `global_step_1` 权重快照。
+
+CoMAS 的稳定验收基线使用两个独立 Qwen2.5-0.5B-Instruct Actor。每步生成 24 条 turn，`policy_0` 和 `policy_1` 各接收 12 条并独立更新；两步共落盘 48 条 turn、16 个 interaction，交互奖励约束违规数为 0。
 
 `tokenizer_mode=compatible` 仍然保留，用于在共享 token-id batch 前校验 vocab 和关键 special token id。它只表示“不同 tokenizer 路径经过 fingerprint 校验后兼容”，不表示支持真正不同词表。`Qwen2.5-0.5B + Qwen2.5-1.5B` 配置是容量相关的兼容性入口，不是两张 P40 上的稳定回归基线；当前稳定基线是 0.5B-Instruct + 0.5B-Base，并显式共享 tokenizer。
 
@@ -151,6 +155,7 @@ configs/                         按算法归档的 YAML 启动入口。
   maporl/                        MAPoRL debate 配置。
   agentflow/                     AgentFlow planner-tool 配置。
   gigpo/                         GiGPO solver-verifier step-credit 配置。
+  comas/                         CoMAS peer-review interaction-reward 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -167,17 +172,24 @@ trajweave/
     maporl_debate/               MAPoRL debate 和 consensus protocol。
     agentflow/                   AgentFlow planner/tool/verifier protocol。
     gigpo/                       GiGPO 的可验证 Solver/Frozen-Verifier protocol。
+    comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
   credit/                        Reward propagation 和 credit assignment。
     common/                      可复用的 step grouping 和 discounted return。
     agentflow/                   Planner-only Flow-GRPO credit。
     doctor_mas/                  Agent-wise DrMAS normalization。
     maporl/                      MAPoRL score 和 bonus rules。
     gigpo/                       GiGPO episode + step hierarchical credit。
+    comas/                       CoMAS score parser 和 interaction reward 真值表。
+  recipes/                       按论文隔离的可执行组合。
+    doctor_mas/                  DrMAS Math/Search recipe。
+    maporl/                      MAPoRL debate recipe。
+    agentflow/                   AgentFlow planner-tool recipe。
+    gigpo/                       GiGPO solver-verifier recipe。
+    comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
   rollout/                       离线 rollout engine。
-  recipes/                       论文专属 recipe package。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、CoMAS 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -191,7 +203,9 @@ trajweave/
     verl/extensions/maporl/      MAPoRL PPO hooks。
     verl/extensions/agentflow/   AgentFlow planner-only GRPO hooks。
     verl/extensions/gigpo/       GiGPO hierarchical GRPO runtime extension。
-    verl/trainers/               TrajWeave 注册的 VERL V1 trainers。
+    verl/extensions/comas/       CoMAS interaction REINFORCE advantage hook。
+    verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
+    verl/trainers/               通用多 Actor Trainer 和 MAPoRL 旧入口兼容层。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -227,9 +241,9 @@ verl/                            保留的 VERL backend。
 
 | 概念          | 回答的问题                                      | 当前例子                                                                 |
 | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------ |
-| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`               |
-| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `GiGPOSolverVerifierOrchestra` |
-| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `GiGPOCreditAssigner` |
+| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`, `CoMASMathEnvironment` |
+| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `GiGPOSolverVerifierOrchestra`, `CoMASPeerReviewOrchestra` |
+| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `GiGPOCreditAssigner`, `CoMASInteractionCreditAssigner` |
 
 不要假设“一篇论文等于一个环境”。例如 DrMAS 可以跑 Math，也可以跑 Search。真正决定组合关系的是 paper recipe。
 
@@ -270,7 +284,7 @@ VERL 本身是否需要通用 extension point？
   -> 只在有兼容性测试时小范围修改 verl/
 ```
 
-当前五条稳定链路都没有新增 `verl/` 修改。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
+当前六条稳定链路都没有新增 `verl/` 修改。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
 
 ## 8. 运行命令
 
@@ -297,6 +311,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/gigpo/solver_verifier_math_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/comas/peer_review_math_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -332,6 +349,9 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
 
 CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
   --config configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/comas/peer_review_math_qwen05b_2gpu.yaml
 ```
 
 这些配置包含本地模型路径。Contributor 在其他机器运行前，必须修改 YAML 中的 `model_path` 和 `tokenizer_path`，不能假设 `/data/workspace/liuzhou/models` 存在。
@@ -345,7 +365,7 @@ configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
 ```
 
-`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 是当前稳定双卡基线。它使用 `trajweave_maporl_multi_actor_sync`，启动 `qwen05b_instruct` 和 `qwen05b_base` 两个 trainable Worker Group。两个模型 checkpoint 不同，但共享经过明确配置的 tokenizer，因此可以安全共享 token-id batch 和 critic。
+`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 是当前稳定双卡基线。它通过兼容注册名 `trajweave_maporl_multi_actor_sync` 启动，实际实现由通用 `trajweave_multi_actor_sync` Trainer 提供，并启动 `qwen05b_instruct` 和 `qwen05b_base` 两个 trainable Worker Group。两个模型 checkpoint 不同，但共享经过明确配置的 tokenizer，因此可以安全共享 token-id batch 和 critic。
 
 `configs/maporl/debate_math_multi_actor_qwen05b_qwen15b_2gpu.yaml` 是容量相关的 compatible-tokenizer 入口。它会在启动前校验 vocab fingerprint 和关键 special token id，但不保证在两张 24 GB P40 上完成全参数多步 PPO。真正不同词表的 tokenizer 仍需要 per-worker tokenization boundary，以及独立 critic 或重新定义的共享 critic 接口。
 
@@ -374,8 +394,8 @@ online_turns:
 checkpoints:
   global_step_N/actors/qwen05b_instruct/
   global_step_N/actors/qwen05b_base/
-  rollout_sync/global_step_N/maporl_actor_qwen05b_instruct/
-  rollout_sync/global_step_N/maporl_actor_qwen05b_base/
+  rollout_sync/global_step_N/trajweave_actor_qwen05b_instruct/
+  rollout_sync/global_step_N/trajweave_actor_qwen05b_base/
 ```
 
 ## 9. MAS 数据流 GIF
@@ -419,9 +439,10 @@ npm run render:mas-gifs
 7. 在 `configs/PAPER_NAME/` 下新增 YAML entrypoint。
 8. 如果 VERL online training 需要特殊字段，在 `trajweave/backends/verl/emitters/` 下新增 emitter，并在 `emitters/registry.py` 注册。
 9. 如果 VERL advantage 或 trainer 行为需要正式 hook，在 `trajweave/backends/verl/extensions/` 下新增。
-10. 通过 `RunStore` 和 `ExperimentTracker` 记录 artifacts、metrics 和 trajectory output。
-11. 在 `tests/trajweave` 下新增测试。
-12. 更新本 README 的论文 recipe 目录。
+10. 多模型同时更新时复用 `multi_actor/` 和 `trajweave_multi_actor_sync`，不要再建论文专属 Trainer 副本。
+11. 通过 `RunStore` 和 `ExperimentTracker` 记录 artifacts、metrics 和 trajectory output。
+12. 在 `tests/trajweave` 下新增测试。
+13. 更新本 README 的论文 recipe 目录。
 
 最小 recipe package 形态：
 
@@ -518,7 +539,7 @@ ruff format --check trajweave tests/trajweave
 git diff --check
 ```
 
-修改配置时，还要解析 `configs/` 下全部 YAML，并检查重复 key。修改 shared runtime、AgentLoop、routing、padding、weight sync 或 extension hook 时，必须运行五条 0.5B 双卡回归中的受影响路径；跨算法共享代码发生变化时，五条都要跑。
+修改配置时，还要解析 `configs/` 下全部 YAML，并检查重复 key。修改 shared runtime、AgentLoop、routing、padding、weight sync 或 extension hook 时，必须运行六条 0.5B 双卡回归中的受影响路径；跨算法共享代码发生变化时，六条都要跑。
 
 真实训练通过至少要同时满足：
 
@@ -532,7 +553,7 @@ online trajectory 没有 padding 泄漏、空训练 prompt 或错误 Worker Grou
 logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 ```
 
-如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前五条稳定路径不依赖新增 `verl/` 源码修改。
+如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前六条稳定路径不依赖新增 `verl/` 源码修改。
 
 ## 14. Paper Recipe Catalog
 
@@ -612,6 +633,22 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 当前状态    | smoke、Qwen2.5-0.5B 双卡两步真实训练、非零层级优势、checkpoint 和 policy version 回流已验证 |
 | 主要配置    | `configs/gigpo/solver_verifier_math_smoke.yaml`, `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml` |
 | 已知限制    | 当前只验证数学可判定环境和单一共享 Actor；ALFWorld/WebShop、similarity grouping 的大规模效果与论文指标尚未验证。 |
+
+### CoMAS PeerReview Math
+
+| 字段        | 内容                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------- |
+| 论文贡献    | 通过 Solver、Evaluator、Scorer 三阶段同行评审生成 interaction reward，让多个 Agent 共同进化。 |
+| 参考实现    | [xxyQwQ/CoMAS](https://github.com/xxyQwQ/CoMAS)，对齐源码提交 `0d98c97`。                         |
+| Environment | `CoMASMathEnvironment`；ground truth 只计算最后一轮 population accuracy，不参与训练奖励。       |
+| Orchestra   | `CoMASPeerReviewOrchestra`；每轮所有 Agent 都先作为 Solver，再随机、均衡地承担 Evaluator 和 Scorer。 |
+| Credit      | `CoMASInteractionCreditAssigner` + `CoMASInteractionREINFORCEHooks`。                              |
+| VERL 路径   | peer-review workflow -> CoMAS emitter -> per-group routing -> 独立 Actor Worker Group PPO -> weight sync。 |
+| 推理流      | all agents solve -> shuffled evaluation -> shuffled scoring -> 下一轮抽样上轮 discussion 作为参考。    |
+| 训练流      | `<score>1/2/3</score>` -> 角色奖励真值表 -> `gamma=1` 累积回报 -> 按 Worker Group 归一化 -> PPO 更新。 |
+| 当前状态    | 两个独立 Qwen2.5-0.5B-Instruct Actor 完成双卡 `2/2` step；48 条 turn、16 个 interaction，奖励约束违规数为 0，两组权重都实际更新并产生差异。 |
+| 主要配置    | `configs/comas/peer_review_math_smoke.yaml`, `configs/comas/peer_review_math_qwen05b_2gpu.yaml`。      |
+| 已知限制    | 当前真实训练 recipe 只接入 Math；受两卡资源限制用 2 Agent 验证，而原配置默认为 4 Agent；Coding/Science 的原始 prompt 已保留，但对应环境、评测和 paper-scale benchmark 尚未接入。 |
 
 ## 15. 贡献者规则
 

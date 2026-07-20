@@ -35,6 +35,17 @@ MAS_EXTRA_FIELDS = (
     "next_obs",
     "step_reward",
     "active_mask",
+    "discussion_id",
+    "interaction_id",
+    "comas_stage",
+    "solver_agent_id",
+    "evaluator_agent_id",
+    "scorer_agent_id",
+    "generated_score",
+    "score_valid",
+    "normalized_score",
+    "intrinsic_reward",
+    "reward_source",
 )
 
 

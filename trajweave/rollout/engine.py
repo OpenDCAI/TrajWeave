@@ -8,7 +8,7 @@ from trajweave.backends.policy import PolicyBackend
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import MultiAgentTrajectory, TrainingSample
 from trajweave.credit.base import CreditAssigner
-from trajweave.envs.base import Environment
+from trajweave.envs.base import Environment, evaluate_trajectory
 from trajweave.orchestration.base import Orchestra
 
 
@@ -47,7 +47,7 @@ class RolloutEngine:
                     policy_backend=self.policy_backend,
                     environment=self.environment,
                 )
-                reward, success = self.environment.evaluate(task, trajectory.final_answer)
+                reward, success = evaluate_trajectory(self.environment, task, trajectory)
                 trajectory.global_reward = reward
                 trajectory.success = success
                 trajectory.metadata["rollout_idx"] = rollout_idx

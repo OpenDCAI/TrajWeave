@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from trajweave.backends.verl.routing import safe_worker_role_key
+from trajweave.backends.verl.routing import safe_actor_role_key
 from trajweave.backends.verl.runtime_config import TrajWeaveAgentLoopRuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,13 @@ def sync_hf_local_rollout_weights(trainer: Any) -> dict[str, str]:
     if actor_wgs:
         model_paths = _export_multi_actor_snapshots(
             actor_wgs=actor_wgs,
-            trainable_group_ids=set(getattr(trainer, "maporl_trainable_group_ids", actor_wgs)),
+            trainable_group_ids=set(
+                getattr(
+                    trainer,
+                    "multi_actor_trainable_group_ids",
+                    getattr(trainer, "maporl_trainable_group_ids", actor_wgs),
+                )
+            ),
             root=root,
             global_step=global_step,
         )
@@ -71,11 +77,11 @@ def _export_multi_actor_snapshots(
     for group_id, actor_wg in actor_wgs.items():
         if group_id not in trainable_group_ids:
             continue
-        group_path = root / safe_worker_role_key(group_id)
+        group_path = root / safe_actor_role_key(group_id)
         actor_wg.export_hf_rollout_snapshot(str(group_path), global_step, max_ckpt_to_keep=2)
         model_paths[str(group_id)] = str(_require_hf_snapshot(group_path))
     if not model_paths:
-        raise RuntimeError("No trainable MAPoRL worker group produced an HF rollout snapshot.")
+        raise RuntimeError("No trainable TrajWeave worker group produced an HF rollout snapshot.")
     return model_paths
 
 

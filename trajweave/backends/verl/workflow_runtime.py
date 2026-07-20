@@ -9,14 +9,19 @@ from trajweave.backends.verl.runtime_config import config_get
 from trajweave.backends.verl.schema import to_python
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
+from trajweave.credit.comas import CoMASInteractionCreditAssigner
+from trajweave.envs.base import evaluate_trajectory
+from trajweave.envs.comas import CoMASMathEnvironment
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
+from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
+from trajweave.recipes.comas.peer_review_math import CoMASRulePolicyBackend, default_comas_team
 from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
 from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
@@ -42,10 +47,10 @@ class HFLocalWorkerPolicyBackend:
             validate=self.validate,
             prompt_text=request.prompt,
         )
-        model_path = (
-            self.worker._maporl_worker_group_model_path(request.agent.policy_group)
-            or self.worker.model_config.local_path
-        )
+        resolver = getattr(self.worker, "_worker_group_model_path", None)
+        if resolver is None:
+            resolver = self.worker._maporl_worker_group_model_path
+        model_path = resolver(request.agent.policy_group) or self.worker.model_config.local_path
         return PolicyResponse(
             text=self.worker._decode_response_ids(response_ids),
             token_ids=response_ids,
@@ -155,6 +160,18 @@ def build_hf_workflow_outputs(
             session_id=session_id,
         )
         _annotate_sparse_step_rewards(trajectory, team=team)
+    elif recipe == "comas_peer_review_math":
+        task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
+        team, protocol, environment = _comas_runtime_components(worker)
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=protocol,
+            environment=environment,
+            backend=backend,
+            session_id=session_id,
+        )
+        CoMASInteractionCreditAssigner().allocate_trajectory(trajectory)
     else:
         raise ValueError(f"Unsupported HF workflow recipe: {recipe}")
 
@@ -167,7 +184,7 @@ def _run_protocol(
     team: TeamSpec,
     protocol: Any,
     environment: Any,
-    backend: HFLocalWorkerPolicyBackend,
+    backend: Any,
     session_id: int,
 ) -> MultiAgentTrajectory:
     observation = environment.initial_observation(task)
@@ -180,7 +197,7 @@ def _run_protocol(
         policy_backend=backend,
         environment=environment,
     )
-    reward, success = environment.evaluate(task, trajectory.final_answer)
+    reward, success = evaluate_trajectory(environment, task, trajectory)
     trajectory.global_reward = float(reward)
     trajectory.success = bool(success)
     return trajectory
@@ -213,6 +230,7 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                 "worker_group": turn.policy_group,
                 "traj_uid": trajectory.episode_id,
                 "workflow_success": bool(trajectory.success),
+                "workflow_evaluation_reward": float(trajectory.global_reward or 0.0),
                 "final_answer": trajectory.final_answer,
                 "prompt_text": turn.prompt,
                 "response_text": turn.action_text,
@@ -237,7 +255,7 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                 prompt_ids=prompt_ids,
                 response_ids=[int(item) for item in turn.action_token_ids],
                 response_mask=[1] * len(turn.action_token_ids),
-                reward_score=float(trajectory.global_reward or 0.0),
+                reward_score=_turn_training_reward(turn, trajectory=trajectory),
                 num_turns=output_index + 1,
                 metrics=metrics,
                 extra_fields=metadata,
@@ -307,6 +325,72 @@ def _gigpo_max_steps(config: Any) -> int:
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
     gigpo_cfg = config_get(orchestra_cfg, "gigpo", {}) or {}
     return int(config_get(gigpo_cfg, "max_steps", 2))
+
+
+def build_rule_comas_workflow_outputs(
+    worker: Any,
+    *,
+    prompt: dict[str, Any],
+    session_id: int,
+) -> list[AgentLoopOutput]:
+    task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
+    raw_prompt = to_python(prompt.get("raw_prompt", []))
+    question = _question_from_prompt(raw_prompt)
+    reward_model = to_python(prompt.get("reward_model", {})) or {}
+    task = MathTask(
+        task_id=task_id,
+        question=question,
+        answer=_integer_ground_truth(str(reward_model.get("ground_truth", ""))),
+    )
+    team, protocol, environment = _comas_runtime_components(worker)
+    backend = _WorkerEncodedPolicyBackend(worker=worker, delegate=CoMASRulePolicyBackend())
+    trajectory = _run_protocol(
+        task=task,
+        team=team,
+        protocol=protocol,
+        environment=environment,
+        backend=backend,
+        session_id=session_id,
+    )
+    CoMASInteractionCreditAssigner().allocate_trajectory(trajectory)
+    return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
+
+
+@dataclass
+class _WorkerEncodedPolicyBackend:
+    worker: Any
+    delegate: Any
+
+    def generate(self, request: PolicyRequest) -> PolicyResponse:
+        response = self.delegate.generate(request)
+        response.token_ids = self.worker._encode_text(response.text)
+        response.logprobs = [0.0] * len(response.token_ids)
+        response.metadata["rollout_source"] = "synthetic_tq"
+        return response
+
+
+def _comas_runtime_components(worker: Any) -> tuple[TeamSpec, CoMASPeerReviewOrchestra, CoMASMathEnvironment]:
+    agent_ids = worker._comas_agent_ids()
+    model_ids = worker._comas_model_ids(default_agent_ids=agent_ids)
+    num_rounds = worker._comas_num_rounds()
+    team = default_comas_team(
+        agent_ids=tuple(agent_ids),
+        model_ids=tuple(model_ids),
+        num_rounds=num_rounds,
+    )
+    protocol = CoMASPeerReviewOrchestra(
+        num_rounds=num_rounds,
+        num_references=worker._comas_num_references(),
+        task_name=worker._comas_task_name(),
+        assignment_seed=worker._comas_assignment_seed(),
+    )
+    return team, protocol, CoMASMathEnvironment()
+
+
+def _turn_training_reward(turn: AgentTurn, *, trajectory: MultiAgentTrajectory) -> float:
+    if turn.reward is not None:
+        return float(turn.reward)
+    return float(trajectory.global_reward or 0.0)
 
 
 def _annotate_sparse_step_rewards(trajectory: MultiAgentTrajectory, *, team: TeamSpec) -> None:

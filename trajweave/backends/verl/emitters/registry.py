@@ -40,6 +40,11 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         synthetic_method="_build_gigpo_solver_verifier_outputs",
         hf_local_method="_build_hf_gigpo_solver_verifier_outputs",
     ),
+    "comas_peer_review_math": EmitterRoute(
+        recipe="comas_peer_review_math",
+        synthetic_method="_build_comas_peer_review_outputs",
+        hf_local_method="_build_hf_comas_peer_review_outputs",
+    ),
 }
 
 

@@ -53,7 +53,7 @@ class MAPoRLEmitterMixin:
                             "agent_id": agent_id,
                             "policy_group": model_ids[agent_index],
                             "worker_group": model_ids[agent_index],
-                            "worker_group_model_path": self._maporl_worker_group_model_path(model_ids[agent_index]),
+                            "worker_group_model_path": self._worker_group_model_path(model_ids[agent_index]),
                             "agent_answer": round_answer,
                             "raw_score": reward,
                             "correctness": reward,

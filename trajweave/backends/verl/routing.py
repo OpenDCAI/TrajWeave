@@ -67,7 +67,7 @@ def normalize_group_values(values: Any) -> list[str]:
     return normalized
 
 
-def safe_worker_role_key(group_id: str) -> str:
+def safe_actor_role_key(group_id: str) -> str:
     safe = []
     for char in str(group_id):
         if char.isalnum():
@@ -75,4 +75,10 @@ def safe_worker_role_key(group_id: str) -> str:
         else:
             safe.append("_")
     key = "".join(safe).strip("_")
-    return f"maporl_actor_{key or 'group'}"
+    return f"trajweave_actor_{key or 'group'}"
+
+
+def safe_worker_role_key(group_id: str) -> str:
+    """MAPoRL 旧测试和外部调用的兼容别名。"""
+
+    return safe_actor_role_key(group_id).replace("trajweave_actor_", "maporl_actor_", 1)

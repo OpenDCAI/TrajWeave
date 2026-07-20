@@ -4,7 +4,8 @@ from pathlib import Path
 
 from trajweave.metrics import parse_verl_console_metrics
 from trajweave.runner import run_from_config
-from trajweave.storage import TrajectoryStore
+from trajweave.runtime import ExperimentTracker
+from trajweave.storage import RunStore, RunStoreConfig, TrajectoryStore
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -133,3 +134,30 @@ def test_trajectory_store_writes_online_turn_shards(tmp_path):
     shard_path = tmp_path / "trajectories" / "online_turns" / "worker_1.jsonl"
     rows = read_jsonl(shard_path)
     assert rows == [{"run_id": "run-test", "agent_name": "solver", "turn_id": 0}]
+
+
+def test_verl_result_registers_online_turn_shards_as_artifacts(tmp_path):
+    run_store = RunStore(
+        RunStoreConfig(root_dir=str(tmp_path), run_id="online-artifact"),
+        recipe="comas.peer_review_math",
+        canonical_recipe="comas.peer_review_math",
+        mode="verl_train",
+        config_path=None,
+        raw_config={},
+    )
+    run_store.initialize()
+    try:
+        tracker = ExperimentTracker(run_store, logging_config={"console": False})
+        shard = tracker.trajectories.online_turn_shard_path("worker-1")
+        shard.write_text('{"role":"solver"}\n', encoding="utf-8")
+        stdout = run_store.logs_dir / "child.log"
+        stdout.write_text("step:1 - actor/grad_norm:1.0\n", encoding="utf-8")
+
+        tracker.log_verl_result({"returncode": 0, "stdout_path": str(stdout)})
+
+        artifacts = read_jsonl(run_store.artifacts_dir / "artifact_index.jsonl")
+        online = [row for row in artifacts if row["kind"] == "trajectory"]
+        assert [row["name"] for row in online] == ["online_turns/worker-1.jsonl"]
+        assert online[0]["metadata"] == {"format": "jsonl"}
+    finally:
+        run_store.release_lock()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from trajweave.backends.verl.routing import safe_worker_role_key, split_batch_by_group_values
+from trajweave.backends.verl.routing import safe_actor_role_key, safe_worker_role_key, split_batch_by_group_values
 
 
 class FakeKVBatch:
@@ -44,6 +44,10 @@ def test_safe_worker_role_key_sanitizes_model_ids():
     assert safe_worker_role_key("qwen2.5/0.5b") == "maporl_actor_qwen2_5_0_5b"
 
 
+def test_safe_actor_role_key_is_recipe_neutral():
+    assert safe_actor_role_key("qwen2.5/0.5b") == "trajweave_actor_qwen2_5_0_5b"
+
+
 def test_trajweave_maporl_multi_actor_trainer_is_registered():
     pytest.importorskip("transfer_queue")
     from trajweave.backends.verl.trainers import register_trajweave_trainers
@@ -53,3 +57,14 @@ def test_trajweave_maporl_multi_actor_trainer_is_registered():
 
     trainer_cls = get_trainer_cls("trajweave_maporl_multi_actor_sync")
     assert trainer_cls.__name__ == "TrajWeaveMAPoRLMultiActorSyncTrainer"
+
+
+def test_recipe_neutral_multi_actor_trainer_is_registered():
+    pytest.importorskip("transfer_queue")
+    from trajweave.backends.verl.trainers import register_trajweave_trainers
+    from verl.trainer.ppo.v1 import get_trainer_cls
+
+    register_trajweave_trainers()
+
+    trainer_cls = get_trainer_cls("trajweave_multi_actor_sync")
+    assert trainer_cls.__name__ == "TrajWeaveMultiActorSyncTrainer"

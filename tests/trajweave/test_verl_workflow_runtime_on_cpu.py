@@ -40,6 +40,12 @@ class FakeWorkflowWorker:
                     },
                     "agentflow": {"max_steps": 1, "enabled_tools": ["base_generator"]},
                     "gigpo": {"max_steps": 2},
+                    "comas": {
+                        "num_rounds": 1,
+                        "num_references": 1,
+                        "task_name": "math",
+                        "assignment_seed": 7,
+                    },
                 },
             }
         }
@@ -60,6 +66,9 @@ class FakeWorkflowWorker:
         return 7
 
     def _maporl_worker_group_model_path(self, group_id: str) -> str:
+        return f"/models/{group_id}"
+
+    def _worker_group_model_path(self, group_id: str) -> str:
         return f"/models/{group_id}"
 
     def _maporl_agent_ids(self) -> list[str]:
@@ -102,6 +111,25 @@ class FakeWorkflowWorker:
 
     def _agentflow_enabled_tools(self) -> list[str]:
         return ["base_generator"]
+
+    def _comas_agent_ids(self) -> list[str]:
+        return ["agent_0", "agent_1"]
+
+    def _comas_model_ids(self, *, default_agent_ids: list[str]) -> list[str]:
+        assert default_agent_ids == ["agent_0", "agent_1"]
+        return ["group_0", "group_1"]
+
+    def _comas_num_rounds(self) -> int:
+        return 1
+
+    def _comas_num_references(self) -> int:
+        return 1
+
+    def _comas_task_name(self) -> str:
+        return "math"
+
+    def _comas_assignment_seed(self) -> int:
+        return 7
 
 
 def _math_prompt() -> dict:
@@ -290,6 +318,42 @@ def test_hf_gigpo_does_not_let_verifier_approve_a_wrong_math_answer():
     assert len(outputs) == 2
     assert outputs[-1].reward_score == 1.0
     assert outputs[-1].extra_fields["step_reward"] == 1.0
+
+
+def test_hf_comas_emits_source_aligned_interaction_rewards_and_worker_routing():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "Reasoning. \\boxed{2}",
+                "Reasoning. \\boxed{3}",
+                "No fatal issue.",
+                "The answer is incorrect.",
+                "Looks correct. <score>3</score>",
+                "Fatal error. <score>1</score>",
+            ]
+        ),
+        recipe="comas_peer_review_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 6
+    assert [output.extra_fields["comas_stage"] for output in outputs] == [
+        "solver",
+        "solver",
+        "evaluator",
+        "evaluator",
+        "scorer",
+        "scorer",
+    ]
+    assert [output.reward_score for output in outputs] == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    for stage in ("solver", "evaluator", "scorer"):
+        groups = {
+            output.extra_fields["worker_group"] for output in outputs if output.extra_fields["comas_stage"] == stage
+        }
+        assert groups == {"group_0", "group_1"}
+    assert {output.extra_fields["workflow_evaluation_reward"] for output in outputs} == {0.5}
+    assert all(output.extra_fields["reward_source"] == "comas_interaction_only" for output in outputs)
 
 
 def test_agentflow_planner_prompt_uses_the_configured_tool_name():

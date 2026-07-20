@@ -65,6 +65,13 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         runtime_recipe="gigpo_solver_verifier_math",
         aliases=("gigpo_solver_verifier_math", "gigpo.math"),
     ),
+    RecipeDefinition(
+        name="comas.peer_review_math",
+        family="comas",
+        task="math",
+        runtime_recipe="comas_peer_review_math",
+        aliases=("comas_peer_review_math", "comas.math"),
+    ),
 )
 
 

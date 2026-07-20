@@ -652,6 +652,14 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
     if (
+        credit_allocator == "comas_interaction_reward"
+        or recipe == "comas_peer_review_math"
+        or "trajweave_comas_interaction_reinforce" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.comas import CoMASInteractionREINFORCEHooks
+
+        return CoMASInteractionREINFORCEHooks()
+    if (
         credit_allocator == "gigpo_hierarchical_grpo"
         or recipe == "gigpo_solver_verifier_math"
         or "trajweave_gigpo_hierarchical_grpo" in extension_names
