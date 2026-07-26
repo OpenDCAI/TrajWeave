@@ -23,9 +23,13 @@ class MATPORecipePlugin:
         config = context.config
         rollout_cfg = config.get("rollout", {})
         team_cfg = config.get("team", {})
+        matpo_cfg = config.get("matpo", {})
         summary, result = run_smoke(
             rollouts_per_task=int(rollout_cfg.get("rollouts_per_task", 2)),
-            max_turns=int(team_cfg.get("max_turns", config.get("matpo", {}).get("max_turns", 3))),
+            max_turns=int(team_cfg.get("max_turns", matpo_cfg.get("max_turns", 3))),
+            planner_agent=str(matpo_cfg.get("planner_agent", "planner")),
+            worker_agent=str(matpo_cfg.get("worker_agent", "browsing_agent")),
+            tool_name=str(matpo_cfg.get("tool_name", "search_and_browse")),
         )
         context.tracker.log_rollout_result(result, source="matpo_browse")
         output = {

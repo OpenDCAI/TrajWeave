@@ -675,10 +675,11 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | Orchestra   | `PlannerWorkerOrchestra`                                    |
 | Credit      | `MATPOParentBroadcastCreditAssigner` + `MATPOParentBroadcastHooks` |
 | VERL 路径   | 真实 HF workflow + MATPO emitter + parent-broadcast GRPO hooks |
-| 推理流      | question -> planner delegates `search_and_browse` -> browsing_agent evidence -> planner final answer |
+| 推理流      | question -> planner delegates `search_and_browse` -> browsing_agent evidence -> planner decides to delegate again or return `Final answer: ...`, up to `matpo.max_turns` rounds |
 | 训练流      | main-agent outcome reward -> main GRPO advantage -> broadcast `advantages`/`returns` to child rows by `parent_reqs_id -> reqs_id` |
 | 当前状态    | smoke、VERL tiny dry-run、Qwen2.5-0.5B-Instruct 8-step smoke train 已验证；已迁入 lz-dev workflow runtime |
 | 主要配置    | `configs/matpo/browse_smoke.yaml`, `configs/matpo/browse_verl_tiny.yaml`, `configs/matpo/browse_qwen05b_1gpu.yaml` |
+| 可复现步骤  | 仓库内 `configs/matpo/browse_qwen05b_1gpu.yaml` 默认是安全的 dry-run 配置（`verl.execute: false`、`trainer.total_training_steps=1`），不会自动跑出 8 步。要复现历史上的 8-step smoke train，需要手动把 `verl.execute` 改为 `true`，并把 override 中的 `trainer.total_training_steps` 改为 `8`、`trainer.total_epochs` 改为 `4`（与 `outputs/trajweave/runs/20260714-055207-matpo-browse-ab10529d/` 这次历史运行一致）。该目录下的 `metrics/summary.json`（`training/global_step=8`、非零 `critic/advantages`）、`logs/verl_stdout.log`、`trajectories/`、`checkpoints/` 是这次 8-step 训练的产物索引。 |
 | 已知限制    | 当前 browse QA 数据是离线 deterministic smoke；还没有接真实 MCP browsing stack、正式数据集或 paper-scale evaluation。 |
 
 ## 15. 贡献者规则

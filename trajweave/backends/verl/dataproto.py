@@ -72,9 +72,13 @@ class VerlDataProtoAdapter:
             "turn_id": np.array([sample.turn_id for sample in samples], dtype=object),
             "reqs_id": np.array([sample.metadata.get("reqs_id", sample.sample_id) for sample in samples], dtype=object),
             "parent_reqs_id": np.array([sample.metadata.get("parent_reqs_id", "") for sample in samples], dtype=object),
-            "agent_type": np.array([sample.metadata.get("agent_type", sample.agent_name) for sample in samples], dtype=object),
+            "agent_type": np.array(
+                [sample.metadata.get("agent_type", sample.agent_name) for sample in samples], dtype=object
+            ),
             "role_id": np.array([sample.metadata.get("role_id", sample.role) for sample in samples], dtype=object),
-            "shared_model_id": np.array([sample.metadata.get("shared_model_id", sample.policy_group) for sample in samples], dtype=object),
+            "shared_model_id": np.array(
+                [sample.metadata.get("shared_model_id", sample.policy_group) for sample in samples], dtype=object
+            ),
         }
         tensors = {
             "prompts": prompts,
@@ -94,13 +98,18 @@ class VerlDataProtoAdapter:
                 [int(sample.metadata.get("turn_count", sample.turn_id)) for sample in samples],
                 dtype=torch.long,
             ),
-            "matpo_tool_format_valid": torch.tensor(
+        }
+        # matpo_tool_format_valid/matpo_tool_call_count are MATPO-specific fields; only
+        # attach them to the DataProto when at least one sample actually carries them,
+        # so non-MATPO recipes don't pick up MATPO-only tensors.
+        if any("matpo_tool_format_valid" in sample.metadata for sample in samples):
+            tensors["matpo_tool_format_valid"] = torch.tensor(
                 [bool(sample.metadata.get("matpo_tool_format_valid", True)) for sample in samples],
                 dtype=torch.bool,
-            ),
-            "matpo_tool_call_count": torch.tensor(
+            )
+        if any("matpo_tool_call_count" in sample.metadata for sample in samples):
+            tensors["matpo_tool_call_count"] = torch.tensor(
                 [int(sample.metadata.get("matpo_tool_call_count", 0)) for sample in samples],
                 dtype=torch.long,
-            ),
-        }
+            )
         return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors, meta_info={"source": "trajweave"})

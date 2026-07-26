@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
+MATPO_HOOKS_FQN = "trajweave.backends.verl.extensions.matpo.parent_broadcast.MATPOParentBroadcastHooks"
 
 
 def build_matpo_launch_overrides(config: dict[str, Any], *, config_path: str | None) -> tuple[str, ...]:
@@ -14,6 +15,7 @@ def build_matpo_launch_overrides(config: dict[str, Any], *, config_path: str | N
     if agent_loop_backend == "verl_tq":
         raise ValueError("MATPO parent-broadcast training requires synthetic_tq or hf_local_tq, not verl_tq.")
     max_turns = int(matpo_cfg.get("max_turns", team_cfg.get("max_turns", 3)))
+    planner_agent = str(matpo_cfg.get("planner_agent", "planner"))
     worker_agent = str(matpo_cfg.get("worker_agent", "browsing_agent"))
     tool_name = str(matpo_cfg.get("tool_name", "search_and_browse"))
     source_config = config_path or str(Path.cwd())
@@ -21,9 +23,10 @@ def build_matpo_launch_overrides(config: dict[str, Any], *, config_path: str | N
     required = [
         "algorithm.adv_estimator=grpo",
         "++algorithm.group_by_agent_id=false",
-        "++algorithm.extension_hooks_class=trajweave.backends.verl.extensions.common.hooks.MATPOParentBroadcastHooks",
+        f"++algorithm.extension_hooks_class={MATPO_HOOKS_FQN}",
         "+agent.orchestra_type=matpo",
         f"+agent.orchestra.matpo.max_turns={max_turns}",
+        f"+agent.orchestra.matpo.planner_agent={_quote(planner_agent)}",
         f"+agent.orchestra.matpo.worker_agent={_quote(worker_agent)}",
         f"+agent.orchestra.matpo.tool_name={_quote(tool_name)}",
         "+trajweave.recipe=matpo_browse",

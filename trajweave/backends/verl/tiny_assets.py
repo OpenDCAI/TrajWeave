@@ -273,7 +273,9 @@ def _browse_qa_rows(size: int, *, split: str, recipe_name: str | None = None) ->
                 "prompt": [
                     {
                         "role": "system",
-                        "content": "You are a MATPO planner. You may call a browsing agent for focused factual subtasks.",
+                        "content": (
+                            "You are a MATPO planner. You may call a browsing agent for focused factual subtasks."
+                        ),
                     },
                     {
                         "role": "user",

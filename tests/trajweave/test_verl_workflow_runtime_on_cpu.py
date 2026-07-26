@@ -17,7 +17,7 @@ from trajweave.backends.verl.workflow_runtime import build_hf_workflow_outputs
 
 
 class FakeWorkflowWorker:
-    def __init__(self, responses: list[str]):
+    def __init__(self, responses: list[str], *, matpo_overrides: dict | None = None):
         self.responses = list(responses)
         self.tokenizer = StableByteTokenizer()
         self.model_config = SimpleNamespace(local_path="/models/default")
@@ -50,6 +50,7 @@ class FakeWorkflowWorker:
                 },
             }
         }
+        self.config["agent"]["orchestra"]["matpo"].update(matpo_overrides or {})
 
     def _encode_prompt_text(self, text: str) -> list[int]:
         return self.tokenizer.encode(text)
@@ -263,26 +264,123 @@ def test_hf_search_requires_public_documents_and_never_uses_ground_truth_as_evid
 
 def test_hf_matpo_emits_parent_child_metadata_for_planner_worker_browse():
     outputs = build_hf_workflow_outputs(
-        FakeWorkflowWorker([
-            "CALL search_and_browse: capital France",
-            "Evidence summary: France capital is Paris. Suggested final answer: Paris",
-            "Final answer: Paris",
-        ]),
+        FakeWorkflowWorker(
+            [
+                "CALL search_and_browse: capital France",
+                "Evidence summary: France capital is Paris. Suggested final answer: Paris",
+                "Final answer: Paris",
+            ]
+        ),
         recipe="matpo_browse",
         prompt=_search_prompt(),
         session_id=0,
     )
 
     assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "planner",
         "browsing_agent",
         "planner",
     ]
-    assert [output.reward_score for output in outputs] == [1.0, 1.0]
-    child = outputs[0].extra_fields
-    parent_ids = {outputs[1].extra_fields["reqs_id"]}
+    assert [output.reward_score for output in outputs] == [1.0, 1.0, 1.0]
+    delegate, child, final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "capital France"
+    assert delegate["matpo_tool_call_count"] == 1
+    assert delegate["matpo_tool_format_valid"] is True
     assert child["is_from_subagent_tool"] is True
-    assert child["parent_reqs_id"] in parent_ids
-    assert outputs[1].extra_fields["matpo_tool_call_count"] == 1
+    assert child["parent_reqs_id"] == delegate["reqs_id"]
+    # The final response ("Final answer: Paris") issues no further CALL directive,
+    # which is what makes the planner converge instead of delegating another round.
+    assert final["matpo_tool_call_count"] == 0
+    assert final["reqs_id"] != delegate["reqs_id"]
+
+
+def test_hf_matpo_supports_multi_round_delegation_within_max_turns():
+    # FakeWorkflowWorker's default matpo config has max_turns=3, enough for two
+    # delegate/worker rounds plus a converging final turn.
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL search_and_browse: capital France",
+                "Evidence summary: inconclusive",
+                "CALL search_and_browse: capital France Paris",
+                "Evidence summary: France capital is Paris",
+                "Final answer: Paris",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "planner",
+        "browsing_agent",
+        "planner",
+        "browsing_agent",
+        "planner",
+    ]
+    roles = [output.extra_fields.get("matpo_turn_role") for output in outputs]
+    assert roles == ["delegate", "worker", "delegate", "worker", "final"]
+    reqs_ids = [output.extra_fields["reqs_id"] for output in outputs]
+    assert len(reqs_ids) == len(set(reqs_ids)), f"reqs_id must be unique per output, got {reqs_ids}"
+    # Both worker rows resolve their parent_reqs_id to a real (and distinct) planner row.
+    assert outputs[1].extra_fields["parent_reqs_id"] == outputs[0].extra_fields["reqs_id"]
+    assert outputs[3].extra_fields["parent_reqs_id"] == outputs[2].extra_fields["reqs_id"]
+
+
+def test_hf_matpo_worker_follows_planner_delegation_not_dataset_search_query():
+    # extra_info.search_query points at France, but the planner delegates a Germany
+    # subtask instead — the worker must search on the planner's delegated text, not
+    # the dataset's preset search_query.
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL search_and_browse: capital of Germany Berlin",
+                "Evidence summary: Germany capital is Berlin. Suggested final answer: Berlin",
+                "Final answer: Berlin",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    delegate, child, _final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "capital of Germany Berlin"
+    assert child["sub_goal"] == "capital of Germany Berlin"
+    assert child["observation_text"] == "capital of Germany Berlin"
+    assert "Berlin" in child["prompt_text"]
+
+
+def test_hf_matpo_honors_custom_planner_worker_tool_config():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL web_search: capital France",
+                "Evidence summary: France capital is Paris. Suggested final answer: Paris",
+                "Final answer: Paris",
+            ],
+            matpo_overrides={
+                "planner_agent": "lead",
+                "worker_agent": "researcher",
+                "tool_name": "web_search",
+            },
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "lead",
+        "researcher",
+        "lead",
+    ]
+    assert all(output.extra_fields["tool_name"] == "web_search" for output in outputs)
+    delegate, child, _final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "capital France"
+    assert child["is_from_subagent_tool"] is True
+    assert child["parent_reqs_id"] == delegate["reqs_id"]
 
 
 def test_hf_agentflow_projects_only_trainable_planner_and_keeps_frozen_trace():

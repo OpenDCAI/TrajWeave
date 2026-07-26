@@ -159,11 +159,23 @@ def build_hf_workflow_outputs(
             search_query=str(extra_info.get("search_query") or question),
             documents=_search_documents(extra_info),
         )
-        team = default_matpo_team(max_turns=_matpo_max_turns(worker.config))
+        planner_agent = _matpo_planner_agent(worker.config)
+        worker_agent = _matpo_worker_agent(worker.config)
+        tool_name = _matpo_tool_name(worker.config)
+        team = default_matpo_team(
+            max_turns=_matpo_max_turns(worker.config),
+            planner_agent=planner_agent,
+            worker_agent=worker_agent,
+            tool_name=tool_name,
+        )
         trajectory = _run_protocol(
             task=task,
             team=team,
-            protocol=PlannerWorkerOrchestra(),
+            protocol=PlannerWorkerOrchestra(
+                planner_name=planner_agent,
+                worker_name=worker_agent,
+                tool_name=tool_name,
+            ),
             environment=SearchAnswerEnvironment(),
             backend=backend,
             session_id=session_id,
@@ -227,10 +239,16 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
     trainable_agents = {agent.name for agent in team.agents if agent.trainable}
     trainable_turns = [turn for turn in trajectory.turns if turn.agent_name in trainable_agents]
     if trajectory.team_name == "matpo_planner_worker_browse":
+        # Keep the worker's tool-call turns, the planner's converged final-answer turn,
+        # and every planner delegation turn (there can be more than one across rounds
+        # when max_turns > 1) so its delegation text -- which now actually drives the
+        # worker's search query -- receives gradient signal.
         trainable_turns = [
             turn
             for turn in trainable_turns
-            if bool(turn.metadata.get("is_from_subagent_tool")) or bool(turn.done)
+            if bool(turn.metadata.get("is_from_subagent_tool"))
+            or bool(turn.done)
+            or turn.metadata.get("matpo_turn_role") == "delegate"
         ]
     if not trainable_turns:
         raise RuntimeError(f"Workflow {trajectory.team_name} produced no trainable turns.")
@@ -346,11 +364,30 @@ def _drmas_search_max_turns(config: Any) -> int:
     return int(config_get(search_cfg, "max_loop_num", 2))
 
 
-def _matpo_max_turns(config: Any) -> int:
+def _matpo_orchestra_config(config: Any) -> Any:
     agent_cfg = config_get(config, "agent", {}) or {}
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
-    matpo_cfg = config_get(orchestra_cfg, "matpo", {}) or {}
+    return config_get(orchestra_cfg, "matpo", {}) or {}
+
+
+def _matpo_max_turns(config: Any) -> int:
+    matpo_cfg = _matpo_orchestra_config(config)
     return int(config_get(matpo_cfg, "max_turns", 3))
+
+
+def _matpo_planner_agent(config: Any) -> str:
+    matpo_cfg = _matpo_orchestra_config(config)
+    return str(config_get(matpo_cfg, "planner_agent", "planner"))
+
+
+def _matpo_worker_agent(config: Any) -> str:
+    matpo_cfg = _matpo_orchestra_config(config)
+    return str(config_get(matpo_cfg, "worker_agent", "browsing_agent"))
+
+
+def _matpo_tool_name(config: Any) -> str:
+    matpo_cfg = _matpo_orchestra_config(config)
+    return str(config_get(matpo_cfg, "tool_name", "search_and_browse"))
 
 
 def _gigpo_max_steps(config: Any) -> int:
