@@ -32,6 +32,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
         return ("trajweave_agentflow_planner_grpo",)
     if credit_allocator == "gigpo_hierarchical_grpo" or recipe == "gigpo_solver_verifier_math":
         return ("trajweave_gigpo_hierarchical_grpo",)
+    if credit_allocator == "atgrpo_agent_turn_wise_grpo" or recipe == "atgrpo_solver_verifier_math":
+        return ("trajweave_atgrpo_agent_turn_wise_grpo",)
     if credit_allocator == "comas_interaction_reward" or recipe == "comas_peer_review_math":
         return ("trajweave_comas_interaction_reinforce",)
     if credit_allocator in {"maporl_ppo_score_rule", "maporl_full_ppo"} or recipe == "maporl_debate_math":
@@ -59,6 +61,7 @@ def _normalize_names(value: Any) -> tuple[str, ...]:
 
 def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.agentflow import apply_agentflow_planner_grpo_patch
+    from trajweave.backends.verl.extensions.atgrpo import apply_atgrpo_agent_turn_wise_grpo_patch
     from trajweave.backends.verl.extensions.comas import apply_comas_interaction_reinforce_patch
     from trajweave.backends.verl.extensions.common.nested_compat import apply_tq_nested_compat_patch
     from trajweave.backends.verl.extensions.drmas import apply_drmas_agent_wise_grpo_patch
@@ -69,6 +72,7 @@ def _registry() -> dict[str, RuntimeExtension]:
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
         "trajweave_agentflow_planner_grpo": apply_agentflow_planner_grpo_patch,
+        "trajweave_atgrpo_agent_turn_wise_grpo": apply_atgrpo_agent_turn_wise_grpo_patch,
         "trajweave_comas_interaction_reinforce": apply_comas_interaction_reinforce_patch,
         "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,
         "trajweave_matpo_parent_broadcast": apply_matpo_parent_broadcast_patch,

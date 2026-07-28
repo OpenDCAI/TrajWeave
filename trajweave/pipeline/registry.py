@@ -3,6 +3,7 @@ from __future__ import annotations
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.plugin import RecipePlugin
 from trajweave.recipes.agentflow.plugin import AgentFlowRecipePlugin
+from trajweave.recipes.atgrpo.plugin import ATGRPORecipePlugin
 from trajweave.recipes.comas.plugin import CoMASRecipePlugin
 from trajweave.recipes.doctor_mas.plugin import DoctorMASRecipePlugin
 from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
@@ -18,6 +19,7 @@ def recipe_plugins() -> tuple[RecipePlugin, ...]:
         MAPoRLRecipePlugin(),
         AgentFlowRecipePlugin(),
         GiGPORecipePlugin(),
+        ATGRPORecipePlugin(),
         MATPORecipePlugin(),
         DoctorMASRecipePlugin(),
     )

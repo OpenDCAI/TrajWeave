@@ -458,6 +458,123 @@ def test_hf_gigpo_does_not_let_verifier_approve_a_wrong_math_answer():
     assert outputs[-1].extra_fields["step_reward"] == 1.0
 
 
+def test_hf_atgrpo_emits_turn_wise_metadata_and_plain_global_reward_by_default():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["Final answer: 2", "APPROVED"]),
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 2
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == ["solver", "verifier"]
+    # Orchestra's own turn counter, not agent_loop.py's positional index -- see
+    # test_hf_atgrpo_turn_id_survives_a_non_trainable_agent_between_solver_and_verifier
+    # for the case where the two indices would otherwise diverge.
+    assert [output.extra_fields["turn_id"] for output in outputs] == [0, 1]
+    # mixed_reward defaults to disabled -- both agents share the plain global reward.
+    assert [output.reward_score for output in outputs] == [1.0, 1.0]
+
+
+def test_hf_atgrpo_mixed_reward_gives_verifier_a_local_judgment_signal():
+    worker = FakeWorkflowWorker(["Final answer: 2", "APPROVED"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {
+        "max_turns": 3,
+        "mixed_reward": {"enabled": True, "alpha": 1.0, "verifier_local_reward": 1.0},
+    }
+
+    outputs = build_hf_workflow_outputs(
+        worker,
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    solver_reward, verifier_reward = (output.reward_score for output in outputs)
+    # Solver keeps the plain global reward; verifier's reward is now alpha*global + local,
+    # where local is +1 because the verifier correctly approved a correct answer.
+    assert solver_reward == 1.0
+    assert verifier_reward == pytest.approx(2.0)
+    assert outputs[1].extra_fields["mixed_reward"]["model_approved"] is True
+
+
+def test_hf_atgrpo_mixed_reward_penalizes_a_wrong_verifier_judgment():
+    worker = FakeWorkflowWorker(["Final answer: 0", "APPROVED", "Final answer: 2"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {
+        "max_turns": 3,
+        "mixed_reward": {"enabled": True, "alpha": 1.0, "verifier_local_reward": 1.0},
+    }
+
+    outputs = build_hf_workflow_outputs(
+        worker,
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    # The verifier wrongly APPROVED a wrong first answer ("Final answer: 0" != ground
+    # truth "2"), so the episode's global reward is 0 but the verifier's local judgment
+    # was incorrect -- its mixed reward must diverge from (and be lower than) the
+    # solver's plain global reward.
+    solver_reward = outputs[0].reward_score
+    verifier_reward = outputs[1].reward_score
+    assert solver_reward == 0.0
+    assert verifier_reward == pytest.approx(-1.0)
+    assert outputs[1].extra_fields["mixed_reward"]["model_approved"] is True
+    assert outputs[1].extra_fields["mixed_reward"]["actual_correct"] is False
+
+
+def test_hf_atgrpo_turn_id_survives_a_non_trainable_agent_between_solver_and_verifier():
+    """Regression test for the turn_id misalignment risk: agent_loop.py's default
+    turn_id is the *position* within trainable turns, which would silently diverge
+    from the orchestra's absolute turn_id if a non-trainable agent were ever inserted
+    into the AT-GRPO team. build_hf_workflow_outputs must emit the orchestra's turn_id
+    for this recipe so ATGRPOHooks' (rollout_group, turn_id, agent_id) grouping stays
+    correct regardless of team composition.
+    """
+    from trajweave.backends.verl.workflow_runtime import _trajectory_to_outputs
+    from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
+    from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
+
+    team = TeamSpec(
+        name="atgrpo_solver_verifier_math",
+        agents=(
+            AgentSpec(name="solver", role="solver", policy_group="shared", trainable=True),
+            AgentSpec(name="judge", role="judge", policy_group="shared", trainable=False),
+            AgentSpec(name="verifier", role="verifier", policy_group="shared", trainable=True),
+        ),
+        policy_groups=(PolicyGroupSpec(name="shared", backend="local", trainable=True),),
+        orchestra="solver_verifier",
+        reward="math_exact_match",
+        credit="atgrpo_agent_turn_wise_grpo",
+        max_turns=2,
+    )
+    trajectory = MultiAgentTrajectory(episode_id="ep-x", task_id="task", rollout_group="task", team_name=team.name)
+    for turn_id, name in enumerate(["solver", "judge", "verifier"]):
+        trajectory.add_turn(
+            AgentTurn(
+                episode_id="ep-x",
+                task_id="task",
+                turn_id=turn_id,
+                agent_name=name,
+                role=name,
+                policy_group="shared",
+                observation="q",
+                prompt="p",
+                action_text="a",
+                action_token_ids=[1, 2],
+            )
+        )
+    trajectory.global_reward = 1.0
+
+    outputs = _trajectory_to_outputs(FakeWorkflowWorker([]), trajectory=trajectory, team=team)
+
+    # Trainable turns are solver (turn_id=0) and verifier (turn_id=2); the judge turn
+    # (turn_id=1) is skipped, so the position-within-trainable-turns index (0, 1) would
+    # misreport the verifier's turn_id as 1 instead of 2 without the fix.
+    assert [output.extra_fields["turn_id"] for output in outputs] == [0, 2]
+
+
 def test_hf_comas_emits_source_aligned_interaction_rewards_and_worker_routing():
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(

@@ -253,7 +253,14 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             field["worker_group_model_path"] = output.extra_fields.get("worker_group_model_path") or ""
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
-            field["turn_id"] = index
+            # `index` is the position within the *trainable* turns of this session, which
+            # most recipes intentionally rely on (e.g. GiGPO's step-transition tracking
+            # expects a dense 0..N-1 sequence over its trainable solver turns even though
+            # the verifier is non-trainable). Recipes that need the orchestra's absolute
+            # turn index instead (e.g. AT-GRPO's turn-wise credit grouping, which mixes
+            # trainable and -- in principle -- non-trainable agents) can opt in by setting
+            # `turn_id` in extra_fields; see workflow_runtime.py's `_trajectory_to_outputs`.
+            field["turn_id"] = output.extra_fields.get("turn_id", index)
             for mas_field in MAS_EXTRA_FIELDS:
                 if mas_field in output.extra_fields:
                     field[mas_field] = output.extra_fields[mas_field]

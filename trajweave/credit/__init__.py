@@ -1,4 +1,5 @@
 from trajweave.credit.agentflow import FlowGRPOPlannerOnlyCreditAssigner
+from trajweave.credit.atgrpo import ATGRPOCreditAssigner
 from trajweave.credit.base import CreditAssigner
 from trajweave.credit.comas import CoMASInteractionCreditAssigner
 from trajweave.credit.doctor_mas import DoctorMASCreditAssigner
@@ -13,6 +14,7 @@ from trajweave.credit.matpo import MATPOParentBroadcastCreditAssigner
 
 __all__ = [
     "CreditAssigner",
+    "ATGRPOCreditAssigner",
     "CoMASInteractionCreditAssigner",
     "DoctorMASCreditAssigner",
     "FlowGRPOPlannerOnlyCreditAssigner",
@@ -23,3 +25,4 @@ __all__ = [
     "MAPoRLScoreBonusCreditAssigner",
     "shape_maporl_reward",
 ]
+

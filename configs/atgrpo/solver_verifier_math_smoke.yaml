@@ -1,0 +1,13 @@
+recipe: atgrpo.solver_verifier_math
+mode: smoke
+
+atgrpo:
+  max_turns: 3
+  normalize_by_std: true
+
+backend:
+  type: rule
+  device: cpu
+
+rollout:
+  rollouts_per_task: 4

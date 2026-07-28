@@ -14,9 +14,14 @@ class GlobalBroadcastCreditAssigner:
         trainable = {agent.name for agent in team.trainable_agents()}
         samples: list[TrainingSample] = []
         for trajectory in trajectories:
-            reward = float(trajectory.global_reward or 0.0)
+            global_reward = float(trajectory.global_reward or 0.0)
             for turn in trajectory.trainable_turns(trainable):
-                turn.reward = reward
+                # Respect a reward already assigned upstream (e.g. AT-GRPO's mixed
+                # global+local verifier reward) instead of unconditionally overwriting it
+                # with the trajectory-level global reward.
+                if turn.reward is None:
+                    turn.reward = global_reward
+                reward = turn.reward
                 sample = TrainingSample(
                     sample_id=f"{trajectory.episode_id}:{turn.turn_id}:{turn.agent_name}",
                     episode_id=trajectory.episode_id,

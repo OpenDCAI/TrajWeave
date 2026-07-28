@@ -227,6 +227,39 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
 
 
 @dataclass(frozen=True)
+class ATGRPOHooks(AgentWiseGRPOHooks):
+    """Agent- and Turn-wise GRPO (AT-GRPO) advantage grouping.
+
+    Extends :class:`AgentWiseGRPOHooks` by adding the turn dimension to the
+    advantage grouping key, so trajectories are normalized within
+    ``(rollout_group, turn_id, agent_id)`` buckets instead of only
+    ``(rollout_group, agent_id)``. This mirrors PettingLLMs' AT-GRPO, which
+    computes baselines jointly across the agent-role and turn dimensions.
+    """
+
+    name: str = "atgrpo_agent_turn_wise_grpo"
+
+    def build_advantage_groups(self, data: Any) -> Any:
+        import numpy as np
+
+        missing = [field for field in ("agent_id", "turn_id") if field not in data.non_tensor_batch]
+        if missing:
+            raise KeyError(f"AT-GRPO requires non_tensor_batch fields: {missing}.")
+        return np.array(
+            [
+                f"{uid}_{turn_id}_{agent_id}"
+                for uid, turn_id, agent_id in zip(
+                    data.non_tensor_batch["uid"],
+                    data.non_tensor_batch["turn_id"],
+                    data.non_tensor_batch["agent_id"],
+                    strict=True,
+                )
+            ],
+            dtype=object,
+        )
+
+
+@dataclass(frozen=True)
 class GiGPOHooks(PPOExtensionHooks):
     name: str = "gigpo_hierarchical_grpo"
 
@@ -685,6 +718,12 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
         or "trajweave_maporl_full_ppo" in extension_names
     ):
         return MAPoRLFullPPOHooks()
+    if (
+        credit_allocator == "atgrpo_agent_turn_wise_grpo"
+        or recipe == "atgrpo_solver_verifier_math"
+        or "trajweave_atgrpo_agent_turn_wise_grpo" in extension_names
+    ):
+        return ATGRPOHooks()
     if (
         credit_allocator in {"drmas_agent_wise_grpo", "maporl_score_bonus"}
         or recipe in {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math"}

@@ -9,6 +9,7 @@ from trajweave.backends.verl.runtime_config import config_get
 from trajweave.backends.verl.schema import to_python
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
+from trajweave.credit.atgrpo import apply_mixed_reward
 from trajweave.credit.comas import CoMASInteractionCreditAssigner
 from trajweave.envs.base import evaluate_trajectory
 from trajweave.envs.comas import CoMASMathEnvironment
@@ -22,6 +23,7 @@ from trajweave.orchestration.matpo import PlannerWorkerOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
+from trajweave.recipes.atgrpo.solver_verifier_math import default_atgrpo_team
 from trajweave.recipes.comas.peer_review_math import CoMASRulePolicyBackend, default_comas_team
 from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
@@ -192,6 +194,25 @@ def build_hf_workflow_outputs(
             session_id=session_id,
         )
         _annotate_sparse_step_rewards(trajectory, team=team)
+    elif recipe == "atgrpo_solver_verifier_math":
+        task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
+        team = default_atgrpo_team(max_turns=_atgrpo_max_turns(worker.config))
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=SolverVerifierOrchestra(),
+            environment=SolverVerifierMathEnvironment(),
+            backend=backend,
+            session_id=session_id,
+        )
+        mixed_reward = _atgrpo_mixed_reward_settings(worker.config)
+        if mixed_reward["enabled"]:
+            apply_mixed_reward(
+                trajectory,
+                team,
+                alpha=mixed_reward["alpha"],
+                verifier_local_reward_scale=mixed_reward["verifier_local_reward"],
+            )
     elif recipe == "comas_peer_review_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         team, protocol, environment = _comas_runtime_components(worker)
@@ -287,6 +308,13 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
             metadata["next_obs"] = _canonical_transition_value(turn.next_observation)
             metadata["step_reward"] = float(turn.step_reward or 0.0)
             metadata["active_mask"] = 1.0
+        if trajectory.team_name == "atgrpo_solver_verifier_math":
+            # AT-GRPO's ATGRPOHooks groups advantages by (rollout_group, turn_id, agent_id),
+            # so turn_id must be the orchestra's absolute turn index (SolverVerifierOrchestra's
+            # own counter), not agent_loop.py's default of "position within trainable turns".
+            # Both agents are currently trainable so the two indices happen to coincide, but
+            # this keeps the field correct if a non-trainable agent is ever added to the team.
+            metadata["turn_id"] = turn.turn_id
         if trajectory.team_name == "agentflow_planner_tool":
             step_id = metadata.get("step_id")
             metadata["agentflow_trace"] = [
@@ -395,6 +423,25 @@ def _gigpo_max_steps(config: Any) -> int:
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
     gigpo_cfg = config_get(orchestra_cfg, "gigpo", {}) or {}
     return int(config_get(gigpo_cfg, "max_steps", 2))
+
+
+def _atgrpo_max_turns(config: Any) -> int:
+    agent_cfg = config_get(config, "agent", {}) or {}
+    orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
+    atgrpo_cfg = config_get(orchestra_cfg, "atgrpo", {}) or {}
+    return int(config_get(atgrpo_cfg, "max_turns", 3))
+
+
+def _atgrpo_mixed_reward_settings(config: Any) -> dict[str, Any]:
+    agent_cfg = config_get(config, "agent", {}) or {}
+    orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
+    atgrpo_cfg = config_get(orchestra_cfg, "atgrpo", {}) or {}
+    mixed_reward_cfg = config_get(atgrpo_cfg, "mixed_reward", {}) or {}
+    return {
+        "enabled": bool(config_get(mixed_reward_cfg, "enabled", False)),
+        "alpha": float(config_get(mixed_reward_cfg, "alpha", 1.0)),
+        "verifier_local_reward": float(config_get(mixed_reward_cfg, "verifier_local_reward", 1.0)),
+    }
 
 
 def build_rule_comas_workflow_outputs(
