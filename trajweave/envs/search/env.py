@@ -37,6 +37,12 @@ class SearchAnswerEnvironment:
     def initial_observation(self, task: SearchTask) -> str:
         return task.question
 
+    def execute_tool(self, tool_name: str, task: SearchTask, request: str) -> str:
+        normalized = normalize_answer(tool_name).replace(" ", "_")
+        if normalized not in {"search", "browse", "web_search", "search_and_browse"}:
+            raise ValueError(f"Unsupported search environment tool: {tool_name!r}.")
+        return self.search(task, request)
+
     def search(self, task: SearchTask, query: str) -> str:
         query_terms = set(normalize_answer(query).split())
         best_doc = task.documents[0]

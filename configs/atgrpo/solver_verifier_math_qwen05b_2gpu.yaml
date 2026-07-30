@@ -5,6 +5,10 @@ atgrpo:
   agent_loop_backend: hf_local_tq
   max_turns: 3
   normalize_by_std: true
+  mixed_reward:
+    enabled: true
+    alpha: 1.0
+    verifier_local_reward: 1.0
 
 prepare:
   tiny_verl_assets:
@@ -65,7 +69,9 @@ verl:
     - actor_rollout_ref.model.use_remove_padding=false
     - actor_rollout_ref.model.enable_gradient_checkpointing=false
     - actor_rollout_ref.rollout.name=hf
+    # Training uses one selected-spine tree with four siblings per shared observation.
     - actor_rollout_ref.rollout.n=4
+    # Validation runs four independent branch-factor-1 sessions (no best-of-N selection).
     - actor_rollout_ref.rollout.val_kwargs.n=4
     - actor_rollout_ref.rollout.prompt_length=128
     - actor_rollout_ref.rollout.response_length=32

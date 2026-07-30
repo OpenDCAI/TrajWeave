@@ -15,46 +15,38 @@ def apply_mixed_reward(
     *,
     alpha: float = 1.0,
     verifier_local_reward_scale: float = 1.0,
+    solver_name: str = "solver",
     verifier_name: str = "verifier",
 ) -> None:
-    """Give the verifier agent a reward that mixes the shared global outcome with a
-    local, agent-specific signal: whether the verifier's own approval judgment agreed
-    with the ground-truth correctness of the episode.
-
-    Mirrors PettingLLMs' AT-GRPO mixed reward (``final_reward = alpha * global_reward +
-    local_reward``). Solver turns are left untouched (``turn.reward`` stays ``None``) so
-    :class:`GlobalBroadcastCreditAssigner` falls back to the plain global reward for
-    them, since the solver has no independent local signal beyond the shared outcome.
-
-    The verifier's judgment (``model_approved``/``approved``) is already computed and
-    stored in turn metadata by ``SolverVerifierOrchestra`` (see
-    ``trajweave/orchestration/solver_verifier/protocol.py``) but was previously
-    discarded by the credit assigner -- this function is what actually consumes it.
-
-    Mutates ``turn.reward`` in place on the trajectory's verifier turns. Called by both
-    the local smoke path (:class:`ATGRPOCreditAssigner`) and the VERL training path
-    (``trajweave/backends/verl/workflow_runtime.py``) so the reward formula cannot
-    silently diverge between the two.
-    """
+    """Apply ``alpha * global_reward + role_local_reward`` to every AT-GRPO sibling."""
 
     trainable = {agent.name for agent in team.trainable_agents()}
-    actual_correct = bool(trajectory.success) if trajectory.success is not None else float(
-        trajectory.global_reward or 0.0
-    ) > 0
+    final_correct = (
+        bool(trajectory.success) if trajectory.success is not None else float(trajectory.global_reward or 0.0) > 0
+    )
     global_reward = float(trajectory.global_reward or 0.0)
     for turn in trajectory.trainable_turns(trainable):
-        if turn.agent_name != verifier_name:
+        if turn.agent_name not in {solver_name, verifier_name}:
             continue
-        model_approved = bool(turn.metadata.get("model_approved", turn.metadata.get("approved", False)))
-        judged_correctly = model_approved == actual_correct
-        local_reward = verifier_local_reward_scale if judged_correctly else -verifier_local_reward_scale
-        turn.reward = alpha * global_reward + local_reward
+
+        if turn.local_score is not None:
+            local_score = float(turn.local_score)
+        elif turn.agent_name == solver_name:
+            local_score = float(bool(turn.metadata.get("local_correct", False)))
+        else:
+            model_approved = bool(turn.metadata.get("model_approved", turn.metadata.get("approved", False)))
+            local_solver_correct = bool(turn.metadata.get("local_solver_correct", final_correct))
+            local_score = 1.0 if model_approved == local_solver_correct else -1.0
+
+        role_local_reward = (
+            local_score * verifier_local_reward_scale if turn.agent_name == verifier_name else local_score
+        )
+        turn.reward = alpha * global_reward + role_local_reward
         turn.metadata["mixed_reward"] = {
             "alpha": alpha,
             "global_reward": global_reward,
-            "local_reward": local_reward,
-            "model_approved": model_approved,
-            "actual_correct": actual_correct,
+            "local_score": local_score,
+            "role_local_reward": role_local_reward,
         }
 
 
@@ -90,30 +82,30 @@ class ATGRPOCreditAssigner(GlobalBroadcastCreditAssigner):
         samples = super().assign(trajectories, team)
         groups: dict[str, list[TrainingSample]] = defaultdict(list)
         for sample in samples:
-            groups[f"{sample.rollout_group}:{sample.turn_id}:{sample.agent_name}"].append(sample)
+            group_id = sample.observation_group_id or sample.metadata.get("observation_group_id")
+            if group_id is None:
+                group_id = f"legacy:{sample.rollout_group}:{sample.turn_id}:{sample.agent_name}"
+            groups[str(group_id)].append(sample)
 
-        for group_samples in groups.values():
+        max_group_size = max((len(group_samples) for group_samples in groups.values()), default=0)
+        for group_id, group_samples in groups.items():
             rewards = [sample.reward for sample in group_samples]
             if len(rewards) > 1:
                 mean = sum(rewards) / len(rewards)
                 variance = sum((reward - mean) ** 2 for reward in rewards) / (len(rewards) - 1)
                 std = sqrt(variance)
-            else:
-                # Singleton groups have no sibling to compare against. Match VERL's native
-                # GRPO convention (verl/trainer/ppo/core_algos.py: id2mean=0, id2std=1 for
-                # groups of size 1) instead of self-centering (which would silently zero out
-                # the advantage). This keeps the local smoke path consistent with
-                # ATGRPOHooks.compute_grpo_outcome_advantage used on the VERL training path.
+            elif max_group_size == 1:
                 mean = 0.0
                 std = 1.0
-            if std < self.epsilon:
-                std = 1.0
+            else:
+                mean = rewards[0]
+                std = 0.0
             for sample in group_samples:
                 advantage = sample.reward - mean
                 if self.normalize_by_std:
                     advantage = advantage / (std + self.epsilon)
                 sample.advantage = advantage
-                sample.metadata["advantage_group"] = f"{sample.rollout_group}:{sample.turn_id}:{sample.agent_name}"
+                sample.metadata["advantage_group"] = group_id
                 sample.metadata["reward_mean"] = mean
                 sample.metadata["reward_std"] = std
         return samples

@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路径：
+TrajWeave 现在接入了八条可运行的 MASRL 路径（部分论文方向含多个任务变体）：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -19,10 +19,13 @@ TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路
 | MAPoRL Debate Math    | multiple agents debate until consensus        | 两个独立 0.5B Actor Worker Group、shared critic、双卡 PPO 已验证    |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
 | GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
+| AT-GRPO SolverVerifier | selected-spine solver/verifier tree | sibling 分组、训练/验证拓扑、标准 clipped-PPO 和 tiny Trainer 2-step 已验证；随机 HF tiny 仍可能出现组内零方差 |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
-| MATPO Browse          | planner -> browsing agent -> planner final    | planner-worker、parent-broadcast credit、Qwen2.5-0.5B-Instruct 8-step smoke 已验证 |
+| MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
 
 当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MATPO 是在此基线之后迁入 lz-dev 的新增路径，目前重点验收 parent-child credit 和 Qwen2.5-0.5B-Instruct smoke train。
+
+验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
 最新严格验收基线：
 
@@ -32,9 +35,9 @@ TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路
 | Runtime 加固提交  | `45168dc feat: harden MASRL training runtime`                                               |
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
-| 训练步数          | 六条链路均完成 `2/2` step，return code 均为 `0`                                            |
-| 单元与集成测试    | `162 passed`                                                                               |
-| 代码边界          | `git status --short -- verl` 为空，当前 MASRL runtime 加固没有修改 `verl/` 源码            |
+| 训练步数          | MATPO/AT-GRPO 修复后 synthetic 与 HF tiny 均完成 `2/2` step、return code `0`               |
+| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`222 passed`（含 AT-GRPO 训练/验证 TQ bridge）            |
+| 代码边界          | 仅在 `verl/trainer/ppo/core_algos.py` 增加可复用的非 dual-clip 标准 PPO loss mode           |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
 | --------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | -----: |
@@ -158,6 +161,7 @@ configs/                         按算法归档的 YAML 启动入口。
   maporl/                        MAPoRL debate 配置。
   agentflow/                     AgentFlow planner-tool 配置。
   gigpo/                         GiGPO solver-verifier step-credit 配置。
+  atgrpo/                        AT-GRPO selected-spine solver-verifier 配置。
   comas/                         CoMAS peer-review interaction-reward 配置。
   matpo/                         MATPO planner-worker browse 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
@@ -176,6 +180,7 @@ trajweave/
     maporl_debate/               MAPoRL debate 和 consensus protocol。
     agentflow/                   AgentFlow planner/tool/verifier protocol。
     gigpo/                       GiGPO 的可验证 Solver/Frozen-Verifier protocol。
+    atgrpo/                      AT-GRPO selected-spine solver/verifier 树采样 protocol。
     comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
     matpo/                       MATPO planner/worker parent-child protocol。
   credit/                        Reward propagation 和 credit assignment。
@@ -184,6 +189,7 @@ trajweave/
     doctor_mas/                  Agent-wise DrMAS normalization。
     maporl/                      MAPoRL score 和 bonus rules。
     gigpo/                       GiGPO episode + step hierarchical credit。
+    atgrpo/                      AT-GRPO observation-group advantage 与 solver/verifier role-local mixed reward。
     comas/                       CoMAS score parser 和 interaction reward 真值表。
     matpo/                       MATPO parent-broadcast credit。
   recipes/                       按论文隔离的可执行组合。
@@ -191,11 +197,12 @@ trajweave/
     maporl/                      MAPoRL debate recipe。
     agentflow/                   AgentFlow planner-tool recipe。
     gigpo/                       GiGPO solver-verifier recipe。
+    atgrpo/                      AT-GRPO tree sampling、credit、VERL override 和 plugin。
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、CoMAS、MATPO 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -204,7 +211,7 @@ trajweave/
     verl/weight_sync.py          导出更新后权重，并生成下一轮 rollout snapshot。
     verl/launcher.py             构造、启动和严格校验 VERL 子进程。
     verl/emitters/               Recipe -> AgentLoop output 和训练字段映射。
-    verl/extensions/common/      共享 hook 和 nested TransferQueue compatibility。
+    verl/extensions/common/      共享 hook、AT-GRPO observation-group GRPO 和 nested TransferQueue compatibility。
     verl/extensions/drmas/       DrMAS agent-wise GRPO hooks。
     verl/extensions/maporl/      MAPoRL PPO hooks。
     verl/extensions/agentflow/   AgentFlow planner-only GRPO hooks。

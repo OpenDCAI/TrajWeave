@@ -126,6 +126,7 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         epsilon: float = 1e-6,
         norm_adv_by_std_in_grpo: bool = True,
         group_by_agent_id: bool = False,
+        pettingllms_singleton_semantics: bool = False,
     ) -> tuple[Any, Any]:
         import numpy as np
         import torch
@@ -158,10 +159,15 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
                 for row in range(batch_size):
                     scores[row] = traj2avg[(index[row], traj_index[row])]
 
+            max_group_size = max((len(group_scores) for group_scores in id2score.values()), default=0)
             for group_id, group_scores in id2score.items():
                 if len(group_scores) == 1:
-                    id2mean[group_id] = scores.new_tensor(0.0)
-                    id2std[group_id] = scores.new_tensor(1.0)
+                    if pettingllms_singleton_semantics and max_group_size > 1:
+                        id2mean[group_id] = group_scores[0]
+                        id2std[group_id] = scores.new_tensor(0.0)
+                    else:
+                        id2mean[group_id] = scores.new_tensor(0.0)
+                        id2std[group_id] = scores.new_tensor(1.0)
                 elif len(group_scores) > 1:
                     scores_tensor = torch.stack(group_scores)
                     id2mean[group_id] = torch.mean(scores_tensor)
@@ -239,15 +245,70 @@ class ATGRPOHooks(AgentWiseGRPOHooks):
 
     name: str = "atgrpo_agent_turn_wise_grpo"
 
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
+        if stage != "advantage":
+            return ()
+        return (
+            "agent_id",
+            "traj_uid",
+            "turn_id",
+            "root_id",
+            "node_id",
+            "parent_node_id",
+            "observation_group_id",
+        )
+
+    def tq_select_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...] | None = None,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
+        fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
+        if stage == "advantage":
+            fields.extend(self.batch_schema_fields(stage, config=config))
+        return tuple(dict.fromkeys(fields))
+
+    def compute_grpo_outcome_advantage(
+        self,
+        *,
+        token_level_rewards: Any,
+        response_mask: Any,
+        index: Any,
+        traj_index: Any | None = None,
+        epsilon: float = 1e-6,
+        norm_adv_by_std_in_grpo: bool = True,
+        group_by_agent_id: bool = False,
+    ) -> tuple[Any, Any]:
+        return super().compute_grpo_outcome_advantage(
+            token_level_rewards=token_level_rewards,
+            response_mask=response_mask,
+            index=index,
+            traj_index=traj_index,
+            epsilon=epsilon,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            group_by_agent_id=group_by_agent_id,
+            pettingllms_singleton_semantics=True,
+        )
+
     def build_advantage_groups(self, data: Any) -> Any:
         import numpy as np
+
+        observation_groups = data.non_tensor_batch.get("observation_group_id")
+        if observation_groups is not None:
+            empty_rows = [row for row, value in enumerate(observation_groups) if not str(value)]
+            if empty_rows:
+                raise KeyError(f"AT-GRPO tree rows require observation_group_id; missing rows: {empty_rows}.")
+            return np.array([str(value) for value in observation_groups], dtype=object)
 
         missing = [field for field in ("agent_id", "turn_id") if field not in data.non_tensor_batch]
         if missing:
             raise KeyError(f"AT-GRPO requires non_tensor_batch fields: {missing}.")
         return np.array(
             [
-                f"{uid}_{turn_id}_{agent_id}"
+                f"legacy:{uid}_{turn_id}_{agent_id}"
                 for uid, turn_id, agent_id in zip(
                     data.non_tensor_batch["uid"],
                     data.non_tensor_batch["turn_id"],

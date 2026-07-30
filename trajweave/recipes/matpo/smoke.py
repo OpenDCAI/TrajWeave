@@ -45,8 +45,13 @@ class RuleBasedMATPOPolicyBackend:
             self._rollout_counts[task_id] = attempt + 1
             self._current_attempt[task_id] = attempt
             query = request.metadata.get("search_query") or request.observation
-            text = f"CALL search_and_browse: {query}"
-        elif role == "worker":
+            worker_agent = request.metadata.get("worker_agent", "browsing_agent")
+            text = f"CALL {worker_agent}: {query}"
+        elif role == "worker" and stage == "worker_call":
+            query = request.metadata.get("search_query") or request.observation
+            tool_name = request.metadata.get("tool_name", "search_and_browse")
+            text = f"CALL {tool_name}: {query}"
+        elif role == "worker" and stage == "worker_summary":
             evidence = str(request.metadata.get("evidence", request.team_context))
             answer = self._answer_for(task_id, request.metadata.get("answer", "unknown"))
             text = f"Evidence summary: {evidence}\nSuggested final answer: {answer}"
@@ -73,8 +78,8 @@ def default_team(
     return TeamSpec(
         name="matpo_planner_worker_browse",
         agents=(
-            AgentSpec(name=planner_agent, role="planner", policy_group="shared_qwen_tiny", tools=(tool_name,)),
-            AgentSpec(name=worker_agent, role="worker", policy_group="shared_qwen_tiny"),
+            AgentSpec(name=planner_agent, role="planner", policy_group="shared_qwen_tiny", tools=(worker_agent,)),
+            AgentSpec(name=worker_agent, role="worker", policy_group="shared_qwen_tiny", tools=(tool_name,)),
         ),
         policy_groups=(PolicyGroupSpec(name="shared_qwen_tiny", backend="local", trainable=True),),
         orchestra="planner_worker_agent_tool",
@@ -117,6 +122,8 @@ def build_matpo_engine(
     planner_agent: str = "planner",
     worker_agent: str = "browsing_agent",
     tool_name: str = "search_and_browse",
+    accuracy_reward_weight: float = 0.9,
+    tool_format_reward_weight: float = 0.1,
 ) -> RolloutEngine:
     return RolloutEngine(
         team=default_team(
@@ -132,7 +139,10 @@ def build_matpo_engine(
         ),
         environment=SearchAnswerEnvironment(),
         policy_backend=RuleBasedMATPOPolicyBackend(),
-        credit_assigner=MATPOParentBroadcastCreditAssigner(),
+        credit_assigner=MATPOParentBroadcastCreditAssigner(
+            accuracy_reward_weight=accuracy_reward_weight,
+            tool_format_reward_weight=tool_format_reward_weight,
+        ),
     )
 
 
@@ -143,12 +153,16 @@ def run_smoke(
     planner_agent: str = "planner",
     worker_agent: str = "browsing_agent",
     tool_name: str = "search_and_browse",
+    accuracy_reward_weight: float = 0.9,
+    tool_format_reward_weight: float = 0.1,
 ) -> tuple[MATPOSmokeSummary, RolloutResult]:
     engine = build_matpo_engine(
         max_turns=max_turns,
         planner_agent=planner_agent,
         worker_agent=worker_agent,
         tool_name=tool_name,
+        accuracy_reward_weight=accuracy_reward_weight,
+        tool_format_reward_weight=tool_format_reward_weight,
     )
     result = engine.run(default_tasks(), rollouts_per_task=rollouts_per_task)
     dataproto_rows: int | None = None

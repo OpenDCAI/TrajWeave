@@ -6,7 +6,7 @@ from trajweave.backends.local import RuleBasedMathPolicyBackend, TinyTorchPolicy
 from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
 from trajweave.credit.atgrpo import ATGRPOCreditAssigner
 from trajweave.envs.math import SolverVerifierMathEnvironment
-from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
+from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
 from trajweave.recipes.doctor_mas.math_smoke import default_math_tasks
 from trajweave.rollout.engine import RolloutEngine, RolloutResult
 
@@ -59,7 +59,7 @@ def run_atgrpo_smoke(
 
     engine = RolloutEngine(
         team=default_atgrpo_team(max_turns=max_turns),
-        orchestra=SolverVerifierOrchestra(),
+        orchestra=SelectedSpineSolverVerifierOrchestra(),
         environment=SolverVerifierMathEnvironment(),
         policy_backend=policy_backend,
         credit_assigner=ATGRPOCreditAssigner(

@@ -1,7 +1,10 @@
+import pytest
+
 from trajweave.backends.policy import PolicyRequest, PolicyResponse, StableByteTokenizer
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
 from trajweave.orchestration.matpo import PlannerWorkerOrchestra
 from trajweave.recipes.matpo import run_smoke
+from trajweave.recipes.matpo.config import build_matpo_launch_overrides
 from trajweave.recipes.matpo.smoke import default_team
 from trajweave.recipes.registry import resolve_recipe
 from trajweave.runner import run_from_config
@@ -17,10 +20,7 @@ def test_matpo_smoke_builds_parent_child_samples():
     summary, result = run_smoke(rollouts_per_task=2, max_turns=3)
 
     assert summary.trajectories == 4
-    assert summary.samples == 12
-    # The smoke backend alternates correct/incorrect answers per task so the batch
-    # has real reward variance, exercising both success and failure rollouts instead
-    # of an all-success, zero-advantage batch.
+    assert summary.samples == 16
     assert summary.success_rate == 0.5
     assert all(sample.metadata["credit"] == "matpo_parent_broadcast_grpo" for sample in result.samples)
 
@@ -31,9 +31,15 @@ def test_matpo_smoke_builds_parent_child_samples():
     parent_ids = {sample.metadata["reqs_id"] for sample in main_samples}
     assert all(sample.metadata["parent_reqs_id"] in parent_ids for sample in child_samples)
     assert all(sample.metadata.get("parent_advantage_broadcast") for sample in child_samples)
-    # With reward variance present, GRPO advantages must not collapse to all-zero.
     assert any(sample.advantage not in (None, 0.0) for sample in main_samples)
     assert any(sample.advantage not in (None, 0.0) for sample in child_samples)
+    for trajectory in result.trajectories:
+        trajectory_samples = [sample for sample in result.samples if sample.episode_id == trajectory.episode_id]
+        assert len({sample.advantage for sample in trajectory_samples}) == 1
+        assert len({sample.reward for sample in trajectory_samples}) == 1
+        expected_reward = 1.0 if trajectory.success else 0.1
+        assert trajectory.metadata["matpo_combined_reward"] == pytest.approx(expected_reward)
+        assert trajectory_samples[0].reward == pytest.approx(expected_reward)
 
 
 def test_matpo_smoke_honors_custom_planner_worker_tool_names():
@@ -50,7 +56,7 @@ def test_matpo_smoke_honors_custom_planner_worker_tool_names():
     assert all(sample.metadata["tool_name"] == "web_search" for sample in result.samples)
 
 
-def test_matpo_verl_config_wires_planner_worker_tool_overrides():
+def test_matpo_verl_config_wires_explicit_reward_weights_and_replaces_conflicts():
     result = run_from_config(
         {
             "recipe": "matpo.browse_qa.parent_broadcast",
@@ -66,7 +72,11 @@ def test_matpo_verl_config_wires_planner_worker_tool_overrides():
             "verl": {
                 "enabled": True,
                 "execute": False,
-                "overrides": ["trainer.use_v1=true"],
+                "overrides": [
+                    "trainer.use_v1=true",
+                    "+agent.orchestra.matpo.accuracy_reward_weight=0.2",
+                    "+agent.orchestra.matpo.tool_format_reward_weight=0.8",
+                ],
             },
         },
         config_path="configs/matpo/browse_verl_tiny.yaml",
@@ -76,12 +86,45 @@ def test_matpo_verl_config_wires_planner_worker_tool_overrides():
     assert '+agent.orchestra.matpo.planner_agent="lead"' in command
     assert '+agent.orchestra.matpo.worker_agent="researcher"' in command
     assert '+agent.orchestra.matpo.tool_name="web_search"' in command
+    assert sum("agent.orchestra.matpo.accuracy_reward_weight=" in item for item in command) == 1
+    assert sum("agent.orchestra.matpo.tool_format_reward_weight=" in item for item in command) == 1
+    assert "+agent.orchestra.matpo.accuracy_reward_weight=0.9" in command
+    assert "+agent.orchestra.matpo.tool_format_reward_weight=0.1" in command
+    assert "tool_format_reward_scale" not in command
     assert "+agent.orchestra.matpo.max_turns=2" in command
 
 
-def _scripted_policy_backend(planner_delegation: str, worker_text: str, planner_final: str):
+def test_matpo_config_rejects_removed_reward_scale_and_invalid_weights():
+    with pytest.raises(ValueError, match="tool_format_reward_scale"):
+        build_matpo_launch_overrides(
+            {"matpo": {"tool_format_reward_scale": 1.0}},
+            config_path="configs/matpo/browse_verl_tiny.yaml",
+        )
+    with pytest.raises(ValueError, match="must sum to 1.0"):
+        build_matpo_launch_overrides(
+            {"matpo": {"accuracy_reward_weight": 0.8, "tool_format_reward_weight": 0.1}},
+            config_path="configs/matpo/browse_verl_tiny.yaml",
+        )
+    with pytest.raises(ValueError, match="tool_name must be one of"):
+        build_matpo_launch_overrides(
+            {"matpo": {"tool_name": "shell"}},
+            config_path="configs/matpo/browse_verl_tiny.yaml",
+        )
+
+
+def _scripted_policy_backend(
+    planner_delegation: str,
+    worker_call: str,
+    worker_summary: str,
+    planner_final: str,
+):
     tokenizer = StableByteTokenizer()
-    responses = {"delegate": planner_delegation, "worker": worker_text, "final": planner_final}
+    responses = {
+        "delegate": planner_delegation,
+        "worker_call": worker_call,
+        "worker_summary": worker_summary,
+        "final": planner_final,
+    }
 
     class _ScriptedBackend:
         def generate(self, request: PolicyRequest) -> PolicyResponse:
@@ -97,8 +140,6 @@ def _germany_capital_task() -> SearchTask:
         task_id="matpo_capital_task",
         question="What is the capital of France?",
         answer="Berlin",
-        # search_query intentionally points at the wrong (France) topic so we can prove
-        # the worker follows the planner's delegation instead of this preset value.
         search_query="capital France",
         documents=(
             SearchDocument(title="France", text="France is a country in Europe. Its capital city is Paris."),
@@ -107,110 +148,218 @@ def _germany_capital_task() -> SearchTask:
     )
 
 
-def test_planner_worker_orchestra_worker_follows_parsed_planner_delegation():
+def test_planner_worker_orchestra_runs_worker_call_offline_tool_and_summary():
     task = _germany_capital_task()
-    team = default_team(max_turns=3)
-    orchestra = PlannerWorkerOrchestra()
     backend = _scripted_policy_backend(
-        planner_delegation="CALL search_and_browse: capital of Germany",
-        worker_text="Evidence summary: Germany capital is Berlin.\nSuggested final answer: Berlin",
+        planner_delegation="CALL browsing_agent: capital of Germany",
+        worker_call="CALL search_and_browse: capital of Germany",
+        worker_summary="Evidence summary: Germany capital is Berlin.",
         planner_final="Final answer: Berlin",
     )
-
-    trajectory = orchestra.run(
+    trajectory = PlannerWorkerOrchestra().run(
         episode_id="ep-1",
         rollout_group=task.task_id,
         task=task,
-        team=team,
+        team=default_team(max_turns=3),
         observation=task.question,
         policy_backend=backend,
         environment=SearchAnswerEnvironment(),
     )
 
-    delegate_turn, worker_turn, final_turn = trajectory.turns
+    delegate_turn, worker_call_turn, worker_summary_turn, final_turn = trajectory.turns
+    assert [turn.metadata["matpo_turn_role"] for turn in trajectory.turns] == [
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "final",
+    ]
     assert delegate_turn.metadata["sub_goal"] == "capital of Germany"
-    assert delegate_turn.metadata["matpo_tool_call_count"] == 1
-    assert delegate_turn.metadata["matpo_tool_format_valid"] is True
-    # The worker's observation/prompt must reflect the planner's parsed delegation,
-    # not the task's preset (and here deliberately misleading) search_query.
-    assert worker_turn.observation == "capital of Germany"
-    assert "Germany" in worker_turn.prompt
-    assert "Berlin" in worker_turn.prompt
+    assert worker_call_turn.observation == "capital of Germany"
+    assert worker_call_turn.metadata["tool_request"] == "capital of Germany"
+    assert "Berlin" in worker_summary_turn.prompt
+    assert worker_summary_turn.metadata["tool_observation"].startswith("Evidence: Germany")
+    assert "Planner: CALL browsing_agent" in final_turn.prompt
+    assert "Worker tool call: CALL search_and_browse" in final_turn.prompt
+    assert "Offline tool observation: Evidence: Germany" in final_turn.prompt
+    assert "Worker summary: Evidence summary" in final_turn.prompt
 
 
-def test_planner_worker_orchestra_falls_back_to_search_query_on_malformed_delegation():
+def test_planner_worker_orchestra_does_not_invoke_worker_without_valid_planner_action():
     task = _germany_capital_task()
-    team = default_team(max_turns=3)
-    orchestra = PlannerWorkerOrchestra()
     backend = _scripted_policy_backend(
         planner_delegation="I will look into this.",
-        worker_text="Evidence summary: France capital is Paris.\nSuggested final answer: Paris",
+        worker_call="CALL search_and_browse: capital France",
+        worker_summary="Evidence summary: France capital is Paris.",
         planner_final="Final answer: Paris",
     )
-
-    trajectory = orchestra.run(
+    trajectory = PlannerWorkerOrchestra().run(
         episode_id="ep-2",
         rollout_group=task.task_id,
         task=task,
-        team=team,
+        team=default_team(max_turns=3),
         observation=task.question,
         policy_backend=backend,
         environment=SearchAnswerEnvironment(),
     )
 
-    delegate_turn, worker_turn, _final_turn = trajectory.turns
-    assert delegate_turn.metadata["matpo_tool_call_count"] == 0
-    assert delegate_turn.metadata["matpo_tool_format_valid"] is False
-    assert worker_turn.observation == task.search_query
+    assert len(trajectory.turns) == 1
+    final_turn = trajectory.turns[0]
+    assert final_turn.metadata["matpo_tool_call_count"] == 0
+    assert final_turn.metadata["matpo_tool_format_valid"] is False
+    assert final_turn.metadata["matpo_turn_role"] == "invalid_planner_call"
 
 
-def test_planner_worker_orchestra_supports_multi_round_delegation():
-    # Round 0's evidence is insufficient, so the planner delegates a second, more
-    # specific subtask instead of answering immediately. Only after round 1's
-    # worker turn does the planner converge with "Final answer: ...".
+def test_planner_worker_orchestra_rejects_same_line_duplicate_planner_call():
     task = _germany_capital_task()
-    team = default_team(max_turns=5)
-    orchestra = PlannerWorkerOrchestra()
-    tokenizer = StableByteTokenizer()
-    calls: list[str] = []
+    trajectory = PlannerWorkerOrchestra().run(
+        episode_id="ep-duplicate-planner",
+        rollout_group=task.task_id,
+        task=task,
+        team=default_team(max_turns=3),
+        observation=task.question,
+        policy_backend=_scripted_policy_backend(
+            planner_delegation="CALL browsing_agent: Germany CALL browsing_agent: France",
+            worker_call="CALL search_and_browse: capital France",
+            worker_summary="Evidence summary: France capital is Paris.",
+            planner_final="Final answer: Paris",
+        ),
+        environment=SearchAnswerEnvironment(),
+    )
 
-    class _TwoRoundBackend:
+    assert len(trajectory.turns) == 1
+    assert trajectory.turns[0].metadata["matpo_turn_role"] == "invalid_planner_call"
+    assert trajectory.turns[0].metadata["matpo_tool_call_count"] == 2
+
+
+def test_planner_worker_orchestra_rejects_same_line_duplicate_worker_call_without_executing_tool():
+    task = _germany_capital_task()
+    executed: list[str] = []
+
+    class _RecordingEnvironment(SearchAnswerEnvironment):
+        def execute_tool(self, tool_name, task, request):
+            executed.append(request)
+            return super().execute_tool(tool_name, task, request)
+
+    trajectory = PlannerWorkerOrchestra().run(
+        episode_id="ep-duplicate-worker",
+        rollout_group=task.task_id,
+        task=task,
+        team=default_team(max_turns=3),
+        observation=task.question,
+        policy_backend=_scripted_policy_backend(
+            planner_delegation="CALL browsing_agent: capital of Germany",
+            worker_call="CALL search_and_browse: Germany CALL search_and_browse: France",
+            worker_summary="Evidence summary: Germany capital is Berlin.",
+            planner_final="Final answer: Berlin",
+        ),
+        environment=_RecordingEnvironment(),
+    )
+
+    assert executed == []
+    assert [turn.metadata["matpo_turn_role"] for turn in trajectory.turns] == [
+        "delegate",
+        "invalid_worker_call",
+        "final",
+    ]
+    assert trajectory.turns[1].metadata["matpo_tool_call_count"] == 2
+
+
+def test_planner_worker_orchestra_invalid_worker_call_executes_no_tool():
+    task = _germany_capital_task()
+    tokenizer = StableByteTokenizer()
+    executed: list[str] = []
+
+    class _RecordingEnvironment(SearchAnswerEnvironment):
+        def execute_tool(self, tool_name, task, request):
+            executed.append(request)
+            return super().execute_tool(tool_name, task, request)
+
+    class _InvalidWorkerBackend:
         def generate(self, request: PolicyRequest) -> PolicyResponse:
-            stage = request.metadata["stage"]
-            calls.append(stage)
-            if stage == "delegate":
-                text = "CALL search_and_browse: capital of Germany"
-            elif stage == "worker":
-                text = "Evidence summary: inconclusive, need more detail"
-            elif stage == "final" and calls.count("final") == 1:
-                text = "CALL search_and_browse: capital of Germany Berlin"
+            if request.metadata["stage"] == "delegate":
+                text = "CALL browsing_agent: capital of Germany"
+            elif request.metadata["stage"] == "worker_call":
+                text = "search for capital of Germany"
             else:
                 text = "Final answer: Berlin"
             token_ids = tokenizer.encode(text)
             return PolicyResponse(text=text, token_ids=token_ids, logprobs=[0.0] * len(token_ids))
 
-    trajectory = orchestra.run(
+    trajectory = PlannerWorkerOrchestra().run(
+        episode_id="ep-invalid-worker",
+        rollout_group=task.task_id,
+        task=task,
+        team=default_team(max_turns=3),
+        observation=task.question,
+        policy_backend=_InvalidWorkerBackend(),
+        environment=_RecordingEnvironment(),
+    )
+
+    assert executed == []
+    assert [turn.metadata["matpo_turn_role"] for turn in trajectory.turns] == [
+        "delegate",
+        "invalid_worker_call",
+        "final",
+    ]
+    assert "Worker tool call: search for capital" in trajectory.turns[-1].prompt
+    assert "Offline tool observation:" not in trajectory.turns[-1].prompt
+
+
+def test_planner_worker_orchestra_supports_multi_round_delegation_with_complete_history():
+    task = _germany_capital_task()
+    tokenizer = StableByteTokenizer()
+    planner_contexts: list[str] = []
+    planner_calls = 0
+
+    class _TwoRoundBackend:
+        def generate(self, request: PolicyRequest) -> PolicyResponse:
+            nonlocal planner_calls
+            stage = request.metadata["stage"]
+            if stage in {"delegate", "final"}:
+                planner_calls += 1
+                planner_contexts.append(request.team_context)
+                if planner_calls == 1:
+                    text = "CALL browsing_agent: capital of Germany"
+                elif planner_calls == 2:
+                    text = "CALL browsing_agent: capital of Germany Berlin"
+                else:
+                    text = "Final answer: Berlin"
+            elif stage == "worker_call":
+                text = f"CALL search_and_browse: {request.metadata['search_query']}"
+            else:
+                text = "Evidence summary: Germany capital is Berlin"
+            token_ids = tokenizer.encode(text)
+            return PolicyResponse(text=text, token_ids=token_ids, logprobs=[0.0] * len(token_ids))
+
+    trajectory = PlannerWorkerOrchestra().run(
         episode_id="ep-multi",
         rollout_group=task.task_id,
         task=task,
-        team=team,
+        team=default_team(max_turns=5),
         observation=task.question,
         policy_backend=_TwoRoundBackend(),
         environment=SearchAnswerEnvironment(),
     )
 
-    assert len(trajectory.turns) == 5
-    roles = [turn.metadata.get("matpo_turn_role") for turn in trajectory.turns]
-    assert roles == ["delegate", "worker", "delegate", "worker", "final"]
+    assert [turn.metadata["matpo_turn_role"] for turn in trajectory.turns] == [
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "final",
+    ]
     reqs_ids = [turn.metadata["reqs_id"] for turn in trajectory.turns]
-    assert len(reqs_ids) == len(set(reqs_ids)), f"reqs_id must be unique per turn, got {reqs_ids}"
+    assert len(reqs_ids) == len(set(reqs_ids))
     assert trajectory.turns[-1].done is True
     assert trajectory.final_answer == "Final answer: Berlin"
+    assert "capital of Germany" in planner_contexts[1]
+    assert "Offline tool observation: Evidence:" in planner_contexts[1]
+    assert planner_contexts[2].count("Worker summary:") == 2
 
 
 def test_planner_worker_orchestra_forces_final_answer_when_max_turns_exhausted():
-    # A planner that never stops delegating must still be cut off at team.max_turns,
-    # with one extra forced final turn appended so the trajectory always converges.
     task = _germany_capital_task()
     tokenizer = StableByteTokenizer()
 
@@ -218,19 +367,22 @@ def test_planner_worker_orchestra_forces_final_answer_when_max_turns_exhausted()
         def generate(self, request: PolicyRequest) -> PolicyResponse:
             if request.metadata.get("forced"):
                 text = "Final answer: Berlin"
-            else:
+            elif request.metadata["stage"] == "worker_call":
                 text = "CALL search_and_browse: capital of Germany"
+            elif request.metadata["stage"] == "worker_summary":
+                text = "Evidence summary: Germany capital is Berlin"
+            else:
+                text = "CALL browsing_agent: capital of Germany"
             token_ids = tokenizer.encode(text)
             return PolicyResponse(text=text, token_ids=token_ids, logprobs=[0.0] * len(token_ids))
 
     turn_counts = {}
     for max_turns in (1, 3, 8):
-        team = default_team(max_turns=max_turns)
         trajectory = PlannerWorkerOrchestra().run(
             episode_id=f"ep-nc-{max_turns}",
             rollout_group=task.task_id,
             task=task,
-            team=team,
+            team=default_team(max_turns=max_turns),
             observation=task.question,
             policy_backend=_NeverConvergeBackend(),
             environment=SearchAnswerEnvironment(),
@@ -241,9 +393,7 @@ def test_planner_worker_orchestra_forces_final_answer_when_max_turns_exhausted()
         assert trajectory.turns[-1].done is True
         assert trajectory.final_answer == "Final answer: Berlin"
 
-    # max_turns must actually change the amount of rollout work performed: each
-    # additional round adds one delegate + one worker turn, plus one forced final turn.
-    assert turn_counts[1] == 3
-    assert turn_counts[3] == 7
-    assert turn_counts[8] == 17
+    assert turn_counts[1] == 4
+    assert turn_counts[3] == 10
+    assert turn_counts[8] == 25
     assert turn_counts[1] < turn_counts[3] < turn_counts[8]

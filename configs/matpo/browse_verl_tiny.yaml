@@ -7,6 +7,8 @@ matpo:
   planner_agent: planner
   worker_agent: browsing_agent
   tool_name: search_and_browse
+  accuracy_reward_weight: 0.9
+  tool_format_reward_weight: 0.1
 
 prepare:
   tiny_verl_assets:

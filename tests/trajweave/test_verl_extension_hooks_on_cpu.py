@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 from trajweave.backends.verl.extensions.common.hooks import (
     AgentFlowPlannerGRPOHooks,
     AgentWiseGRPOHooks,
+    ATGRPOHooks,
     MAPoRLFullPPOHooks,
     PPOExtensionHooks,
     extension_hooks_for_config,
@@ -85,6 +86,50 @@ def test_agent_wise_hook_declares_stable_batch_contract():
     assert hooks.batch_schema_fields("advantage", config={}) == ("agent_id", "traj_uid", "turn_id")
     assert hooks.tq_select_fields("advantage", config={"group_by_agent_id": True})[-2:] == ("agent_id", "traj_uid")
     assert "agent_id" not in hooks.tq_select_fields("advantage", config={"group_by_agent_id": False})
+
+
+def test_atgrpo_hook_selects_turn_and_tree_fields_from_transfer_queue():
+    fields = ATGRPOHooks().tq_select_fields("advantage", config={"group_by_agent_id": True})
+
+    for field in ("agent_id", "traj_uid", "turn_id", "root_id", "node_id", "parent_node_id", "observation_group_id"):
+        assert field in fields
+
+
+def test_only_atgrpo_hook_uses_strict_pettingllms_singleton_semantics():
+    rewards = torch.tensor([[2.0], [0.0], [2.0]])
+    mask = torch.ones(3, 1)
+    groups = np.array(["singleton", "siblings", "siblings"], dtype=object)
+
+    atgrpo_advantages, _ = ATGRPOHooks().compute_grpo_outcome_advantage(
+        token_level_rewards=rewards,
+        response_mask=mask,
+        index=groups,
+        norm_adv_by_std_in_grpo=False,
+        group_by_agent_id=True,
+    )
+    agent_wise_advantages, _ = AgentWiseGRPOHooks().compute_grpo_outcome_advantage(
+        token_level_rewards=rewards,
+        response_mask=mask,
+        index=groups,
+        norm_adv_by_std_in_grpo=False,
+        group_by_agent_id=True,
+    )
+
+    torch.testing.assert_close(atgrpo_advantages.squeeze(-1), torch.tensor([0.0, -1.0, 1.0]))
+    torch.testing.assert_close(agent_wise_advantages.squeeze(-1), torch.tensor([2.0, -1.0, 1.0]))
+
+
+def test_atgrpo_hook_keeps_raw_advantages_when_all_groups_are_singletons():
+    rewards = torch.tensor([[2.0], [-3.0]])
+    advantages, _ = ATGRPOHooks().compute_grpo_outcome_advantage(
+        token_level_rewards=rewards,
+        response_mask=torch.ones(2, 1),
+        index=np.array(["a", "b"], dtype=object),
+        norm_adv_by_std_in_grpo=False,
+        group_by_agent_id=True,
+    )
+
+    torch.testing.assert_close(advantages.squeeze(-1), rewards.squeeze(-1))
 
 
 def test_agent_wise_hook_builds_agent_advantage_groups():

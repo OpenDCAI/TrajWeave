@@ -9,7 +9,7 @@ import torch
 import yaml
 
 from trajweave.backends.verl.extensions.common.hooks import ATGRPOHooks
-from trajweave.credit.atgrpo import ATGRPOCreditAssigner
+from trajweave.credit.atgrpo import ATGRPOCreditAssigner, apply_mixed_reward
 from trajweave.recipes.atgrpo.config import build_atgrpo_launch_overrides, resolve_atgrpo_settings
 from trajweave.recipes.registry import resolve_recipe
 from verl import DataProto
@@ -30,6 +30,7 @@ def test_atgrpo_registry_and_qwen_config_are_exposed():
     assert "algorithm.adv_estimator=grpo" in overrides
     assert "algorithm.norm_adv_by_std_in_grpo=true" in overrides
     assert "++algorithm.group_by_agent_id=true" in overrides
+    assert "++actor_rollout_ref.actor.policy_loss.loss_mode=vanilla_no_dual_clip" in overrides
     assert any("ATGRPOHooks" in item for item in overrides)
     assert any("trajweave_atgrpo_agent_turn_wise_grpo" in item for item in overrides)
 
@@ -111,12 +112,7 @@ def test_atgrpo_credit_assigner_normalizes_within_rollout_turn_and_agent():
     assert high_reward_sample.advantage > low_reward_sample.advantage
 
 
-def test_atgrpo_credit_assigner_singleton_group_matches_verl_hooks_convention():
-    """A (turn, agent) group with only one sample (e.g. an extra retry turn that only
-    one trajectory reaches) must not be silently zeroed out. It should behave like
-    VERL's native GRPO singleton convention (mean=0, std=1 -> advantage == reward),
-    matching ATGRPOHooks.compute_grpo_outcome_advantage on the VERL training path.
-    """
+def test_atgrpo_credit_assigner_zeros_singleton_beside_multi_row_groups():
     from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
     from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 
@@ -165,11 +161,14 @@ def test_atgrpo_credit_assigner_singleton_group_matches_verl_hooks_convention():
     samples = ATGRPOCreditAssigner(normalize_by_std=True).assign(trajectories, team)
     singleton = next(s for s in samples if s.turn_id == 2 and s.agent_name == "solver")
     assert singleton.reward == 1.0
-    # advantage == reward / (std + epsilon) == reward - mean, with mean=0, std=1 (matches
-    # ATGRPOHooks/core_algos.py's singleton convention rather than self-centering to zero).
-    assert singleton.advantage == pytest.approx(singleton.reward, abs=1e-4)
-    assert singleton.metadata["reward_mean"] == 0.0
-    assert singleton.metadata["reward_std"] == 1.0
+    assert singleton.advantage == 0.0
+    assert singleton.metadata["reward_mean"] == 1.0
+    assert singleton.metadata["reward_std"] == 0.0
+
+    all_singletons = ATGRPOCreditAssigner(normalize_by_std=False).assign([_trajectory("only", 1.0, 3)], team)
+    assert [sample.advantage for sample in all_singletons] == [1.0, 1.0, 1.0]
+    assert all(sample.metadata["reward_mean"] == 0.0 for sample in all_singletons)
+    assert all(sample.metadata["reward_std"] == 1.0 for sample in all_singletons)
 
 
 def _mixed_reward_team() -> Any:
@@ -205,6 +204,8 @@ def _mixed_reward_trajectory(episode_id: str, *, global_reward: float, model_app
             observation="q",
             prompt="p",
             action_text="a",
+            local_score=1.0,
+            metadata={"local_correct": True},
         )
     )
     trajectory.add_turn(
@@ -218,6 +219,7 @@ def _mixed_reward_trajectory(episode_id: str, *, global_reward: float, model_app
             observation="q",
             prompt="p",
             action_text="a",
+            local_score=1.0 if model_approved else -1.0,
             metadata={"model_approved": model_approved, "approved": model_approved},
         )
     )
@@ -227,11 +229,7 @@ def _mixed_reward_trajectory(episode_id: str, *, global_reward: float, model_app
 
 
 def test_atgrpo_mixed_reward_gives_verifier_agent_specific_signal():
-    """With mixed_reward enabled, a verifier that judged incorrectly must receive a
-    different (lower) reward than one that judged correctly, even when both episodes
-    share the same global_reward. Solver reward stays tied to the global outcome only,
-    since it has no independent local signal in this environment.
-    """
+    """Mixed reward applies the role-local signal to both solver and verifier turns."""
     team = _mixed_reward_team()
     correct_judgment = _mixed_reward_trajectory("ep-correct", global_reward=1.0, model_approved=True)
     wrong_judgment = _mixed_reward_trajectory("ep-wrong", global_reward=1.0, model_approved=False)
@@ -243,17 +241,10 @@ def test_atgrpo_mixed_reward_gives_verifier_agent_specific_signal():
     solver_rewards = {s.episode_id: s.reward for s in samples if s.agent_name == "solver"}
     verifier_rewards = {s.episode_id: s.reward for s in samples if s.agent_name == "verifier"}
 
-    # Solver reward is untouched by mixed reward -- both episodes share the same outcome.
-    assert solver_rewards["ep-correct"] == solver_rewards["ep-wrong"] == 1.0
-
-    # Verifier reward now diverges: alpha*global + local, local=+1 if judged correctly else -1.
-    assert verifier_rewards["ep-correct"] == pytest.approx(1.0 * 1.0 + 1.0)
-    assert verifier_rewards["ep-wrong"] == pytest.approx(1.0 * 1.0 - 1.0)
+    assert solver_rewards["ep-correct"] == solver_rewards["ep-wrong"] == pytest.approx(2.0)
+    assert verifier_rewards["ep-correct"] == pytest.approx(2.0)
+    assert verifier_rewards["ep-wrong"] == pytest.approx(0.0)
     assert verifier_rewards["ep-correct"] != verifier_rewards["ep-wrong"]
-    # Before this fix, solver and verifier rewards within the same episode were forced
-    # identical (both == global_reward). Now the verifier's reward differs from the
-    # solver's when its judgment was correct/incorrect relative to the global outcome.
-    assert verifier_rewards["ep-wrong"] != solver_rewards["ep-wrong"]
 
 
 def test_atgrpo_mixed_reward_disabled_preserves_legacy_behavior():
@@ -301,3 +292,118 @@ def test_atgrpo_verl_hook_groups_by_rollout_turn_and_agent():
     assert advantages[1].item() < 0  # verifier, reward=0.0, group mean=5.0
     assert advantages[3].item() > 0  # verifier, reward=10.0, group mean=5.0
 
+
+def test_atgrpo_selected_spine_keeps_sibling_lineage_and_expands_one_child():
+    from trajweave.backends.policy import PolicyRequest, PolicyResponse
+    from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
+    from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
+    from trajweave.recipes.atgrpo.solver_verifier_math import default_atgrpo_team
+
+    class _BranchBackend:
+        def generate(self, request: PolicyRequest) -> PolicyResponse:
+            branch_index = request.metadata["branch_index"]
+            if request.agent.name == "solver":
+                text = "Final answer: 4" if branch_index == 0 else "Final answer: 9"
+            else:
+                text = "REVISE"
+            return PolicyResponse(text=text, token_ids=[branch_index + 1], logprobs=[0.0])
+
+    team = default_atgrpo_team(max_turns=3)
+    trajectory = SelectedSpineSolverVerifierOrchestra().run_tree(
+        episode_id="tree-0",
+        rollout_group="task",
+        task=MathTask(task_id="task", question="2 + 2", answer=4),
+        team=team,
+        observation="2 + 2",
+        policy_backend=_BranchBackend(),
+        environment=SolverVerifierMathEnvironment(),
+        branch_factor=3,
+    )
+
+    groups: dict[str, list] = {}
+    for turn in trajectory.turns:
+        groups.setdefault(turn.observation_group_id, []).append(turn)
+    assert [len(turns) for turns in groups.values()] == [3, 3, 3, 3, 3]
+    for turns in groups.values():
+        assert len({turn.node_id for turn in turns}) == 3
+        assert len({turn.parent_node_id for turn in turns}) == 1
+        assert sum(turn.selected_for_expansion for turn in turns) == 1
+
+    selected_ids = {turn.node_id for turn in trajectory.turns if turn.selected_for_expansion}
+    rejected_ids = {turn.node_id for turn in trajectory.turns if not turn.selected_for_expansion}
+    parent_ids = {turn.parent_node_id for turn in trajectory.turns if turn.parent_node_id}
+    assert parent_ids <= selected_ids
+    assert not (parent_ids & rejected_ids)
+    assert all(turn.reward is None for turn in trajectory.turns)
+    assert {turn.local_score for turn in trajectory.turns if turn.agent_name == "solver"} == {0.0, 1.0}
+    assert {turn.local_score for turn in trajectory.turns if turn.agent_name == "verifier"} == {-1.0}
+
+    trajectory.global_reward = 1.0
+    plain_samples = ATGRPOCreditAssigner().assign([trajectory], team)
+    assert {sample.reward for sample in plain_samples} == {1.0}
+
+    for turn in trajectory.turns:
+        turn.reward = None
+    apply_mixed_reward(trajectory, team, alpha=1.0, verifier_local_reward_scale=1.0)
+    assert all(turn.reward == pytest.approx(1.0 + float(turn.local_score)) for turn in trajectory.turns)
+
+
+def test_atgrpo_hook_groups_only_true_observation_siblings():
+    data = DataProto.from_dict(
+        tensors={"token_level_rewards": torch.tensor([[1.0], [0.0], [10.0], [0.0]]), "response_mask": torch.ones(4, 1)},
+        non_tensors={
+            "uid": np.array(["task"] * 4, dtype=object),
+            "agent_id": np.array(["solver"] * 4, dtype=object),
+            "traj_uid": np.array(["tree"] * 4, dtype=object),
+            "turn_id": np.array([2] * 4, dtype=object),
+            "observation_group_id": np.array(["parent-a", "parent-a", "parent-b", "parent-b"], dtype=object),
+        },
+    )
+    hooks = ATGRPOHooks()
+    assert hooks.build_advantage_groups(data).tolist() == ["parent-a", "parent-a", "parent-b", "parent-b"]
+
+
+def test_atgrpo_mixed_reward_uses_each_verifiers_local_solver_state():
+    from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
+
+    team = _mixed_reward_team()
+    trajectory = MultiAgentTrajectory(episode_id="ep", task_id="task", rollout_group="task", team_name=team.name)
+    trajectory.turns = [
+        AgentTurn("ep", "task", 0, "solver", "solver", "shared", "q", "p", "Final answer: 9", local_score=0.0),
+        AgentTurn(
+            "ep",
+            "task",
+            1,
+            "verifier",
+            "verifier",
+            "shared",
+            "q",
+            "p",
+            "REVISE",
+            local_score=1.0,
+            metadata={"model_approved": False, "local_solver_correct": False},
+        ),
+        AgentTurn("ep", "task", 2, "solver", "solver", "shared", "q", "p", "Final answer: 4", local_score=1.0),
+        AgentTurn(
+            "ep",
+            "task",
+            3,
+            "verifier",
+            "verifier",
+            "shared",
+            "q",
+            "p",
+            "APPROVED",
+            local_score=1.0,
+            metadata={"model_approved": True, "local_solver_correct": True},
+        ),
+    ]
+    trajectory.global_reward = 1.0
+    trajectory.success = True
+
+    apply_mixed_reward(trajectory, team, alpha=1.0, verifier_local_reward_scale=1.0)
+
+    solver_rewards = [turn.reward for turn in trajectory.turns if turn.agent_name == "solver"]
+    verifier_rewards = [turn.reward for turn in trajectory.turns if turn.agent_name == "verifier"]
+    assert solver_rewards == [1.0, 2.0]
+    assert verifier_rewards == [2.0, 2.0]

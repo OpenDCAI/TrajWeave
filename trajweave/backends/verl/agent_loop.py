@@ -13,6 +13,7 @@ import transfer_queue as tq
 from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
+    ATGRPOEmitterMixin,
     CoMASEmitterMixin,
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
@@ -120,6 +121,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
+    ATGRPOEmitterMixin,
     CoMASEmitterMixin,
     MATPOEmitterMixin,
     MAPoRLEmitterMixin,
@@ -174,17 +176,33 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 _to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
             )
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
-            for session_id in range(n):
-                use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
+            use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
+            if runtime.recipe == "atgrpo_solver_verifier_math" and not trajectory["validate"]:
+                tree_prompt = dict(prompt)
+                tree_prompt["__atgrpo_branch_factor__"] = n
                 outputs = build_recipe_outputs(
                     self,
                     recipe=runtime.recipe,
                     use_hf_local=use_hf_local,
-                    prompt=prompt,
-                    session_id=session_id,
-                    validate=trajectory["validate"],
+                    prompt=tree_prompt,
+                    session_id=0,
+                    validate=False,
                 )
-                await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
+                await self._put_outputs(outputs, validate=False, session_id=0, **prompt)
+            else:
+                for session_id in range(n):
+                    session_prompt = dict(prompt)
+                    if runtime.recipe == "atgrpo_solver_verifier_math":
+                        session_prompt["__atgrpo_branch_factor__"] = 1
+                    outputs = build_recipe_outputs(
+                        self,
+                        recipe=runtime.recipe,
+                        use_hf_local=use_hf_local,
+                        prompt=session_prompt,
+                        session_id=session_id,
+                        validate=trajectory["validate"],
+                    )
+                    await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception:
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
@@ -290,7 +308,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     "recipe": runtime.recipe,
                     "uid": uid,
                     "session_id": session_id,
-                    "turn_id": index,
+                    "turn_id": _to_python(field["turn_id"]),
                     "validate": validate,
                     "agent_name": _to_python(field["agent_name"]),
                     "role": _to_python(field["role"]),

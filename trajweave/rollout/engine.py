@@ -36,6 +36,25 @@ class RolloutEngine:
         trajectories: list[MultiAgentTrajectory] = []
         for task in tasks:
             observation = self.environment.initial_observation(task)
+            run_tree = getattr(self.orchestra, "run_tree", None)
+            if run_tree is not None:
+                episode_id = str(uuid4())
+                trajectory = run_tree(
+                    episode_id=episode_id,
+                    rollout_group=task.task_id,
+                    task=task,
+                    team=self.team,
+                    observation=observation,
+                    policy_backend=self.policy_backend,
+                    environment=self.environment,
+                    branch_factor=rollouts_per_task,
+                )
+                reward, success = evaluate_trajectory(self.environment, task, trajectory)
+                trajectory.global_reward = reward
+                trajectory.success = success
+                trajectory.metadata["rollout_idx"] = 0
+                trajectories.append(trajectory)
+                continue
             for rollout_idx in range(rollouts_per_task):
                 episode_id = str(uuid4())
                 trajectory = self.orchestra.run(

@@ -26,6 +26,7 @@ MAS_EXTRA_FIELDS = (
     "tool_name",
     "sub_goal",
     "tool_result",
+    "tool_observation",
     "verifier_decision",
     "memory_snapshot",
     "step_id",
@@ -38,6 +39,7 @@ MAS_EXTRA_FIELDS = (
     "shared_model_id",
     "matpo_tool_format_valid",
     "matpo_tool_call_count",
+    "matpo_tool_format_reward",
     "policy_version",
     "plan_valid",
     "anchor_obs",
@@ -55,6 +57,13 @@ MAS_EXTRA_FIELDS = (
     "normalized_score",
     "intrinsic_reward",
     "reward_source",
+    "root_id",
+    "node_id",
+    "parent_node_id",
+    "observation_group_id",
+    "branch_index",
+    "selected_for_expansion",
+    "local_score",
 )
 
 

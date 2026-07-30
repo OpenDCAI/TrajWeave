@@ -11,11 +11,13 @@ from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.credit.atgrpo import apply_mixed_reward
 from trajweave.credit.comas import CoMASInteractionCreditAssigner
+from trajweave.credit.matpo.parent_broadcast import apply_matpo_trajectory_reward
 from trajweave.envs.base import evaluate_trajectory
 from trajweave.envs.comas import CoMASMathEnvironment
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
+from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
 from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
@@ -182,6 +184,7 @@ def build_hf_workflow_outputs(
             backend=backend,
             session_id=session_id,
         )
+        _apply_matpo_training_reward(trajectory, config=worker.config)
     elif recipe == "gigpo_solver_verifier_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         team = default_gigpo_team(max_steps=_gigpo_max_steps(worker.config))
@@ -197,13 +200,14 @@ def build_hf_workflow_outputs(
     elif recipe == "atgrpo_solver_verifier_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         team = default_atgrpo_team(max_turns=_atgrpo_max_turns(worker.config))
-        trajectory = _run_protocol(
+        branch_factor = int(to_python(prompt.get("__atgrpo_branch_factor__", 1)))
+        trajectory = _run_atgrpo_selected_spine(
             task=task,
             team=team,
-            protocol=SolverVerifierOrchestra(),
             environment=SolverVerifierMathEnvironment(),
             backend=backend,
             session_id=session_id,
+            branch_factor=branch_factor,
         )
         mixed_reward = _atgrpo_mixed_reward_settings(worker.config)
         if mixed_reward["enabled"]:
@@ -229,6 +233,32 @@ def build_hf_workflow_outputs(
         raise ValueError(f"Unsupported HF workflow recipe: {recipe}")
 
     return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
+
+
+def _run_atgrpo_selected_spine(
+    *,
+    task: MathTask,
+    team: TeamSpec,
+    environment: SolverVerifierMathEnvironment,
+    backend: Any,
+    session_id: int,
+    branch_factor: int,
+) -> MultiAgentTrajectory:
+    observation = environment.initial_observation(task)
+    trajectory = SelectedSpineSolverVerifierOrchestra().run_tree(
+        episode_id=f"{task.task_id}_{session_id}",
+        rollout_group=task.task_id,
+        task=task,
+        team=team,
+        observation=observation,
+        policy_backend=backend,
+        environment=environment,
+        branch_factor=branch_factor,
+    )
+    reward, success = evaluate_trajectory(environment, task, trajectory)
+    trajectory.global_reward = float(reward)
+    trajectory.success = bool(success)
+    return trajectory
 
 
 def _run_protocol(
@@ -308,6 +338,18 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
             metadata["next_obs"] = _canonical_transition_value(turn.next_observation)
             metadata["step_reward"] = float(turn.step_reward or 0.0)
             metadata["active_mask"] = 1.0
+        if turn.root_id is not None:
+            metadata.update(
+                {
+                    "root_id": turn.root_id,
+                    "node_id": turn.node_id,
+                    "parent_node_id": turn.parent_node_id or "",
+                    "observation_group_id": turn.observation_group_id,
+                    "branch_index": int(turn.branch_index or 0),
+                    "selected_for_expansion": bool(turn.selected_for_expansion),
+                    "local_score": float(turn.local_score or 0.0),
+                }
+            )
         if trajectory.team_name == "atgrpo_solver_verifier_math":
             # AT-GRPO's ATGRPOHooks groups advantages by (rollout_group, turn_id, agent_id),
             # so turn_id must be the orchestra's absolute turn index (SolverVerifierOrchestra's
@@ -322,12 +364,13 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                 for item in trajectory.turns
                 if item.agent_name not in trainable_agents and item.metadata.get("step_id") == step_id
             ]
+        reward_score = _turn_training_reward(turn, trajectory=trajectory)
         outputs.append(
             AgentLoopOutput(
                 prompt_ids=prompt_ids,
                 response_ids=[int(item) for item in turn.action_token_ids],
                 response_mask=[1] * len(turn.action_token_ids),
-                reward_score=_turn_training_reward(turn, trajectory=trajectory),
+                reward_score=reward_score,
                 num_turns=output_index + 1,
                 metrics=metrics,
                 extra_fields=metadata,
@@ -418,6 +461,36 @@ def _matpo_tool_name(config: Any) -> str:
     return str(config_get(matpo_cfg, "tool_name", "search_and_browse"))
 
 
+def _apply_matpo_training_reward(trajectory: MultiAgentTrajectory, *, config: Any) -> None:
+    matpo_cfg = _matpo_orchestra_config(config)
+    combined_reward = apply_matpo_trajectory_reward(
+        trajectory,
+        accuracy_reward_weight=float(config_get(matpo_cfg, "accuracy_reward_weight", 0.9)),
+        tool_format_reward_weight=float(config_get(matpo_cfg, "tool_format_reward_weight", 0.1)),
+    )
+    final_planner = next(
+        (
+            turn
+            for turn in reversed(trajectory.turns)
+            if not bool(turn.metadata.get("is_from_subagent_tool", False))
+            and bool(turn.done)
+            and turn.metadata.get("matpo_turn_role") in {"final", "invalid_planner_call", "invalid_tool"}
+        ),
+        None,
+    )
+    if final_planner is None:
+        raise RuntimeError("MATPO workflow did not produce exactly one final planner row.")
+    reward_metadata = {
+        "matpo_accuracy_reward": trajectory.metadata["matpo_accuracy_reward"],
+        "matpo_planner_format": trajectory.metadata["matpo_planner_format"],
+        "matpo_worker_formats": trajectory.metadata["matpo_worker_formats"],
+        "matpo_combined_reward": combined_reward,
+    }
+    for turn in trajectory.turns:
+        turn.reward = combined_reward
+        turn.metadata.update(reward_metadata)
+
+
 def _gigpo_max_steps(config: Any) -> int:
     agent_cfg = config_get(config, "agent", {}) or {}
     orchestra_cfg = config_get(agent_cfg, "orchestra", {}) or {}
@@ -505,9 +578,7 @@ def _comas_runtime_components(worker: Any) -> tuple[TeamSpec, CoMASPeerReviewOrc
 
 
 def _turn_training_reward(turn: AgentTurn, *, trajectory: MultiAgentTrajectory) -> float:
-    if turn.reward is not None:
-        return float(turn.reward)
-    return float(trajectory.global_reward or 0.0)
+    return float(turn.reward) if turn.reward is not None else float(trajectory.global_reward or 0.0)
 
 
 def _annotate_sparse_step_rewards(trajectory: MultiAgentTrajectory, *, team: TeamSpec) -> None:

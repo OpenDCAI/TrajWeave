@@ -23,7 +23,7 @@ class GlobalBroadcastCreditAssigner:
                     turn.reward = global_reward
                 reward = turn.reward
                 sample = TrainingSample(
-                    sample_id=f"{trajectory.episode_id}:{turn.turn_id}:{turn.agent_name}",
+                    sample_id=turn.node_id or f"{trajectory.episode_id}:{turn.turn_id}:{turn.agent_name}",
                     episode_id=trajectory.episode_id,
                     task_id=trajectory.task_id,
                     rollout_group=trajectory.rollout_group,
@@ -36,7 +36,24 @@ class GlobalBroadcastCreditAssigner:
                     response_token_ids=turn.action_token_ids,
                     response_logprobs=turn.action_logprobs,
                     reward=reward,
-                    metadata={"credit": self.name, **turn.metadata},
+                    root_id=turn.root_id,
+                    node_id=turn.node_id,
+                    parent_node_id=turn.parent_node_id,
+                    observation_group_id=turn.observation_group_id,
+                    branch_index=turn.branch_index,
+                    selected_for_expansion=turn.selected_for_expansion,
+                    local_score=turn.local_score,
+                    metadata={
+                        "credit": self.name,
+                        "root_id": turn.root_id,
+                        "node_id": turn.node_id,
+                        "parent_node_id": turn.parent_node_id,
+                        "observation_group_id": turn.observation_group_id,
+                        "branch_index": turn.branch_index,
+                        "selected_for_expansion": turn.selected_for_expansion,
+                        "local_score": turn.local_score,
+                        **turn.metadata,
+                    },
                 )
                 samples.append(sample)
         return samples

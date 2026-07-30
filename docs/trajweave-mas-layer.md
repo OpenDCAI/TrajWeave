@@ -251,8 +251,12 @@ flowchart TD
 | --- | --- | --- |
 | `PPOExtensionHooks` | Default fallback. | Standard VERL fields and prompt-level grouping. |
 | `AgentWiseGRPOHooks` | DrMAS. | Requires `agent_id`, `traj_uid`, and `turn_id`; builds agent-wise GRPO groups for DrMAS-style normalization. |
+| `ATGRPOHooks` | AT-GRPO. | Fetches `turn_id` and tree lineage (`root_id`, `node_id`, `parent_node_id`, `observation_group_id`); normalizes only sibling actions from one shared observation. |
+| `MATPOParentBroadcastHooks` | MATPO. | Validates unique `reqs_id`/`parent_reqs_id`, computes main-row credit, then broadcasts scalar advantage/return to child rows. |
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 | `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
+
+AT-GRPO uses selected-spine sampling during training: each parent observation produces `K` sibling actions, only the locally selected child is expanded, and all siblings retain parent/node/observation-group lineage. Validation runs independent branch-factor-1 sessions instead of best-of-N selection. MATPO computes one parent-rollout reward before GRPO using `0.9 * accuracy + 0.1 * 0.5 * (planner_format + mean(worker_format))`, then broadcasts the resulting parent advantage to planner and worker generations.
 
 The runtime patch files should stay thin: they install compatibility shims, select hook objects, and avoid copying trainer logic. New MASRL algorithms should add or compose hooks first; edit `verl/` only for stable extension points or general backend fixes that are useful beyond one paper.
 
@@ -283,6 +287,10 @@ Current configs:
 | `maporl/debate_math_verl_tiny.yaml` | MAPoRL full PPO tiny VERL launch. |
 | `agentflow/flow_grpo_smoke.yaml` | AgentFlow planner-tool smoke with planner-only credit. |
 | `agentflow/flow_grpo_verl_tiny.yaml` | AgentFlow planner-only GRPO tiny VERL launch. |
+| `atgrpo/solver_verifier_math_smoke.yaml` | AT-GRPO CPU selected-spine rollout and observation-group credit check. |
+| `atgrpo/solver_verifier_math_qwen05b_2gpu.yaml` | AT-GRPO real Trainer entrypoint; `rollout.n` is sibling branch factor. |
+| `matpo/browse_smoke.yaml` | MATPO deterministic parent-child smoke. |
+| `matpo/browse_verl_tiny.yaml` | MATPO VERL bridge/command dry-run with planner tool-format shaping. |
 | `drmas/math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
 | `drmas/math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |

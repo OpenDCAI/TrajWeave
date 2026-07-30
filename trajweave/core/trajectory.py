@@ -23,6 +23,13 @@ class AgentTurn:
     reward: float | None = None
     advantage: float | None = None
     done: bool = False
+    root_id: str | None = None
+    node_id: str | None = None
+    parent_node_id: str | None = None
+    observation_group_id: str | None = None
+    branch_index: int | None = None
+    selected_for_expansion: bool = False
+    local_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -61,4 +68,11 @@ class TrainingSample:
     response_logprobs: list[float]
     reward: float
     advantage: float | None = None
+    root_id: str | None = None
+    node_id: str | None = None
+    parent_node_id: str | None = None
+    observation_group_id: str | None = None
+    branch_index: int | None = None
+    selected_for_expansion: bool = False
+    local_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

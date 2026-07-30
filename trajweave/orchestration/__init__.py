@@ -1,4 +1,5 @@
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
+from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
 from trajweave.orchestration.base import TeamContext
 from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
@@ -8,6 +9,7 @@ from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 
 __all__ = [
     "AgentFlowPlannerToolOrchestra",
+    "SelectedSpineSolverVerifierOrchestra",
     "CoMASPeerReviewOrchestra",
     "GiGPOSolverVerifierOrchestra",
     "MAPoRLDebateOrchestra",

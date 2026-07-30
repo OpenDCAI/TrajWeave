@@ -266,6 +266,7 @@ def test_hf_matpo_emits_parent_child_metadata_for_planner_worker_browse():
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(
             [
+                "CALL browsing_agent: capital France",
                 "CALL search_and_browse: capital France",
                 "Evidence summary: France capital is Paris. Suggested final answer: Paris",
                 "Final answer: Paris",
@@ -279,29 +280,33 @@ def test_hf_matpo_emits_parent_child_metadata_for_planner_worker_browse():
     assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
         "planner",
         "browsing_agent",
+        "browsing_agent",
         "planner",
     ]
-    assert [output.reward_score for output in outputs] == [1.0, 1.0, 1.0]
-    delegate, child, final = (output.extra_fields for output in outputs)
+    assert [output.reward_score for output in outputs] == [1.0, 1.0, 1.0, 1.0]
+    delegate, worker_call, worker_summary, final = (output.extra_fields for output in outputs)
     assert delegate["sub_goal"] == "capital France"
     assert delegate["matpo_tool_call_count"] == 1
     assert delegate["matpo_tool_format_valid"] is True
-    assert child["is_from_subagent_tool"] is True
-    assert child["parent_reqs_id"] == delegate["reqs_id"]
-    # The final response ("Final answer: Paris") issues no further CALL directive,
-    # which is what makes the planner converge instead of delegating another round.
+    assert worker_call["matpo_turn_role"] == "worker_call"
+    assert worker_call["is_from_subagent_tool"] is True
+    assert worker_call["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["tool_observation"]
     assert final["matpo_tool_call_count"] == 0
+    assert final["matpo_combined_reward"] == 1.0
+    assert final["matpo_accuracy_reward"] == 1.0
     assert final["reqs_id"] != delegate["reqs_id"]
 
 
 def test_hf_matpo_supports_multi_round_delegation_within_max_turns():
-    # FakeWorkflowWorker's default matpo config has max_turns=3, enough for two
-    # delegate/worker rounds plus a converging final turn.
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(
             [
+                "CALL browsing_agent: capital France",
                 "CALL search_and_browse: capital France",
                 "Evidence summary: inconclusive",
+                "CALL browsing_agent: capital France Paris",
                 "CALL search_and_browse: capital France Paris",
                 "Evidence summary: France capital is Paris",
                 "Final answer: Paris",
@@ -312,29 +317,31 @@ def test_hf_matpo_supports_multi_round_delegation_within_max_turns():
         session_id=0,
     )
 
-    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
-        "planner",
-        "browsing_agent",
-        "planner",
-        "browsing_agent",
-        "planner",
-    ]
     roles = [output.extra_fields.get("matpo_turn_role") for output in outputs]
-    assert roles == ["delegate", "worker", "delegate", "worker", "final"]
+    assert roles == [
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "final",
+    ]
     reqs_ids = [output.extra_fields["reqs_id"] for output in outputs]
     assert len(reqs_ids) == len(set(reqs_ids)), f"reqs_id must be unique per output, got {reqs_ids}"
-    # Both worker rows resolve their parent_reqs_id to a real (and distinct) planner row.
     assert outputs[1].extra_fields["parent_reqs_id"] == outputs[0].extra_fields["reqs_id"]
-    assert outputs[3].extra_fields["parent_reqs_id"] == outputs[2].extra_fields["reqs_id"]
+    assert outputs[2].extra_fields["parent_reqs_id"] == outputs[0].extra_fields["reqs_id"]
+    assert outputs[4].extra_fields["parent_reqs_id"] == outputs[3].extra_fields["reqs_id"]
+    assert outputs[5].extra_fields["parent_reqs_id"] == outputs[3].extra_fields["reqs_id"]
+    assert "Evidence summary: inconclusive" in outputs[-1].extra_fields["prompt_text"]
+    assert "France capital is Paris" in outputs[-1].extra_fields["prompt_text"]
 
 
 def test_hf_matpo_worker_follows_planner_delegation_not_dataset_search_query():
-    # extra_info.search_query points at France, but the planner delegates a Germany
-    # subtask instead — the worker must search on the planner's delegated text, not
-    # the dataset's preset search_query.
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(
             [
+                "CALL browsing_agent: investigate Germany",
                 "CALL search_and_browse: capital of Germany Berlin",
                 "Evidence summary: Germany capital is Berlin. Suggested final answer: Berlin",
                 "Final answer: Berlin",
@@ -345,17 +352,19 @@ def test_hf_matpo_worker_follows_planner_delegation_not_dataset_search_query():
         session_id=0,
     )
 
-    delegate, child, _final = (output.extra_fields for output in outputs)
-    assert delegate["sub_goal"] == "capital of Germany Berlin"
-    assert child["sub_goal"] == "capital of Germany Berlin"
-    assert child["observation_text"] == "capital of Germany Berlin"
-    assert "Berlin" in child["prompt_text"]
+    delegate, worker_call, worker_summary, _final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "investigate Germany"
+    assert worker_call["tool_request"] == "capital of Germany Berlin"
+    assert worker_summary["tool_request"] == "capital of Germany Berlin"
+    assert "Berlin" in worker_summary["tool_observation"]
+    assert "Berlin" in worker_summary["prompt_text"]
 
 
 def test_hf_matpo_honors_custom_planner_worker_tool_config():
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(
             [
+                "CALL researcher: capital France",
                 "CALL web_search: capital France",
                 "Evidence summary: France capital is Paris. Suggested final answer: Paris",
                 "Final answer: Paris",
@@ -374,13 +383,50 @@ def test_hf_matpo_honors_custom_planner_worker_tool_config():
     assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
         "lead",
         "researcher",
+        "researcher",
         "lead",
     ]
     assert all(output.extra_fields["tool_name"] == "web_search" for output in outputs)
-    delegate, child, _final = (output.extra_fields for output in outputs)
+    delegate, worker_call, worker_summary, _final = (output.extra_fields for output in outputs)
     assert delegate["sub_goal"] == "capital France"
-    assert child["is_from_subagent_tool"] is True
-    assert child["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_call["is_from_subagent_tool"] is True
+    assert worker_call["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["parent_reqs_id"] == delegate["reqs_id"]
+
+
+def test_hf_matpo_invalid_tool_format_gets_zero_format_reward_without_worker_fallback():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["CALL wrong_tool: capital France"]),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 1
+    assert outputs[0].extra_fields["matpo_turn_role"] == "invalid_planner_call"
+    assert outputs[0].extra_fields["matpo_tool_format_valid"] is False
+    assert outputs[0].extra_fields["matpo_combined_reward"] == 0.0
+    assert outputs[0].reward_score == 0.0
+
+
+def test_hf_matpo_valid_format_wrong_answer_retains_only_format_reward():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL browsing_agent: capital France",
+                "CALL search_and_browse: capital France",
+                "Evidence summary: France capital is Paris",
+                "Final answer: London",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.reward_score for output in outputs] == [0.1, 0.1, 0.1, 0.1]
+    assert outputs[-1].extra_fields["matpo_accuracy_reward"] == 0.0
+    assert outputs[-1].extra_fields["matpo_combined_reward"] == pytest.approx(0.1)
 
 
 def test_hf_agentflow_projects_only_trainable_planner_and_keeps_frozen_trace():
@@ -476,7 +522,7 @@ def test_hf_atgrpo_emits_turn_wise_metadata_and_plain_global_reward_by_default()
     assert [output.reward_score for output in outputs] == [1.0, 1.0]
 
 
-def test_hf_atgrpo_mixed_reward_gives_verifier_a_local_judgment_signal():
+def test_hf_atgrpo_mixed_reward_applies_role_local_signal_to_all_agents():
     worker = FakeWorkflowWorker(["Final answer: 2", "APPROVED"])
     worker.config["agent"]["orchestra"]["atgrpo"] = {
         "max_turns": 3,
@@ -491,11 +537,10 @@ def test_hf_atgrpo_mixed_reward_gives_verifier_a_local_judgment_signal():
     )
 
     solver_reward, verifier_reward = (output.reward_score for output in outputs)
-    # Solver keeps the plain global reward; verifier's reward is now alpha*global + local,
-    # where local is +1 because the verifier correctly approved a correct answer.
-    assert solver_reward == 1.0
+    assert solver_reward == pytest.approx(2.0)
     assert verifier_reward == pytest.approx(2.0)
-    assert outputs[1].extra_fields["mixed_reward"]["model_approved"] is True
+    assert outputs[0].extra_fields["mixed_reward"]["role_local_reward"] == 1.0
+    assert outputs[1].extra_fields["mixed_reward"]["role_local_reward"] == 1.0
 
 
 def test_hf_atgrpo_mixed_reward_penalizes_a_wrong_verifier_judgment():
@@ -512,16 +557,12 @@ def test_hf_atgrpo_mixed_reward_penalizes_a_wrong_verifier_judgment():
         session_id=0,
     )
 
-    # The verifier wrongly APPROVED a wrong first answer ("Final answer: 0" != ground
-    # truth "2"), so the episode's global reward is 0 but the verifier's local judgment
-    # was incorrect -- its mixed reward must diverge from (and be lower than) the
-    # solver's plain global reward.
     solver_reward = outputs[0].reward_score
     verifier_reward = outputs[1].reward_score
     assert solver_reward == 0.0
     assert verifier_reward == pytest.approx(-1.0)
-    assert outputs[1].extra_fields["mixed_reward"]["model_approved"] is True
-    assert outputs[1].extra_fields["mixed_reward"]["actual_correct"] is False
+    assert outputs[0].extra_fields["mixed_reward"]["role_local_reward"] == 0.0
+    assert outputs[1].extra_fields["mixed_reward"]["role_local_reward"] == -1.0
 
 
 def test_hf_atgrpo_turn_id_survives_a_non_trainable_agent_between_solver_and_verifier():

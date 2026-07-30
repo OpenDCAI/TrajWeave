@@ -32,6 +32,10 @@ def _validate_matpo_parent_child_links(
             ``traj_uid`` (when available) identifying the offending row(s).
     """
     row_count = len(reqs_ids)
+    if len(parent_reqs_ids) != row_count or len(is_child) != row_count:
+        raise MATPOParentChildIntegrityError(
+            "MATPO reqs_id, parent_reqs_id, and is_from_subagent_tool arrays must all match the batch size."
+        )
 
     def traj_uid_for(row: int) -> str:
         if traj_uids is None or row >= len(traj_uids):
@@ -42,7 +46,9 @@ def _validate_matpo_parent_child_links(
     for row in range(row_count):
         reqs_id = str(reqs_ids[row])
         if not reqs_id:
-            continue
+            raise MATPOParentChildIntegrityError(
+                f"Missing reqs_id at row {row} (traj_uid={traj_uid_for(row)!r}); every MATPO row needs an ID."
+            )
         if reqs_id in seen_reqs_ids:
             other_row = seen_reqs_ids[reqs_id]
             raise MATPOParentChildIntegrityError(
@@ -107,6 +113,18 @@ def _validate_matpo_parent_child_links(
                 break
 
 
+def _child_marker(value: Any, *, row: int) -> bool:
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    raise MATPOParentChildIntegrityError(
+        f"Invalid is_from_subagent_tool marker at row {row}: expected bool or 0/1, got {value!r}."
+    )
+
+
 @dataclass(frozen=True)
 class MATPOParentBroadcastHooks(PPOExtensionHooks):
     name: str = "matpo_parent_broadcast"
@@ -157,45 +175,47 @@ class MATPOParentBroadcastHooks(PPOExtensionHooks):
 
         if fallback is None:
             raise ValueError("MATPOParentBroadcastHooks requires a fallback advantage implementation.")
+        row_count = int(data.batch.batch_size[0])
         is_child_values = data.non_tensor_batch.get("is_from_subagent_tool")
         if is_child_values is None and "is_from_subagent_tool" in data.batch.keys():
             is_child_values = data.batch["is_from_subagent_tool"].detach().cpu().tolist()
         if is_child_values is None:
-            return fallback(
-                data,
-                batch_keys=batch_keys,
-                adv_estimator=adv_estimator,
-                gamma=gamma,
-                lam=lam,
-                num_repeat=num_repeat,
-                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                config=config,
+            raise MATPOParentChildIntegrityError(
+                "MATPO batch is missing the is_from_subagent_tool marker array; refusing unsafe fallback."
             )
+        if len(is_child_values) != row_count:
+            raise MATPOParentChildIntegrityError("MATPO is_from_subagent_tool marker array must match the batch size.")
+        is_child = np.array([_child_marker(value, row=row) for row, value in enumerate(is_child_values)])
 
-        is_child = np.array([bool(value) for value in is_child_values])
-        if not is_child.any():
-            return fallback(
-                data,
-                batch_keys=batch_keys,
-                adv_estimator=adv_estimator,
-                gamma=gamma,
-                lam=lam,
-                num_repeat=num_repeat,
-                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                config=config,
+        raw_reqs_ids = data.non_tensor_batch.get("reqs_id")
+        raw_parent_reqs_ids = data.non_tensor_batch.get("parent_reqs_id")
+        if raw_reqs_ids is None or raw_parent_reqs_ids is None:
+            raise MATPOParentChildIntegrityError(
+                "MATPO batch is missing reqs_id or parent_reqs_id arrays; refusing unsafe fallback."
             )
-
-        main_mask = ~is_child
-        if not main_mask.any():
-            data.batch["advantages"] = torch.zeros_like(data.batch["token_level_rewards"])
-            data.batch["returns"] = torch.zeros_like(data.batch["token_level_rewards"])
-            return data
-
-        reqs_ids = np.array([str(value) for value in data.non_tensor_batch.get("reqs_id", [])], dtype=object)
-        parent_reqs_ids = np.array(
-            [str(value) for value in data.non_tensor_batch.get("parent_reqs_id", [])], dtype=object
+        if len(raw_reqs_ids) != row_count or len(raw_parent_reqs_ids) != row_count:
+            raise MATPOParentChildIntegrityError("MATPO reqs_id and parent_reqs_id arrays must match the batch size.")
+        reqs_ids = np.array([str(value) for value in raw_reqs_ids], dtype=object)
+        parent_reqs_ids = np.array([str(value) for value in raw_parent_reqs_ids], dtype=object)
+        if is_child.all():
+            raise MATPOParentChildIntegrityError(
+                "MATPO batch contains only child rows and has no main planner row for advantage assignment."
+            )
+        raw_traj_uids = data.non_tensor_batch.get("traj_uid")
+        raw_turn_counts = data.non_tensor_batch.get("turn_count")
+        if raw_turn_counts is None and "turn_count" in data.batch.keys():
+            raw_turn_counts = data.batch["turn_count"].detach().cpu().tolist()
+        if raw_traj_uids is None or raw_turn_counts is None:
+            raise MATPOParentChildIntegrityError(
+                "MATPO batch is missing traj_uid or turn_count arrays required for "
+                "trajectory-level advantage assignment."
+            )
+        if len(raw_traj_uids) != row_count or len(raw_turn_counts) != row_count:
+            raise MATPOParentChildIntegrityError("MATPO traj_uid and turn_count arrays must match the batch size.")
+        traj_uids = np.array([str(value) for value in raw_traj_uids], dtype=object)
+        turn_counts = np.array(
+            [int(value.item() if hasattr(value, "item") else value) for value in raw_turn_counts], dtype=np.int64
         )
-        traj_uids = data.non_tensor_batch.get("traj_uid")
         _validate_matpo_parent_child_links(
             reqs_ids=reqs_ids,
             parent_reqs_ids=parent_reqs_ids,
@@ -203,12 +223,22 @@ class MATPOParentBroadcastHooks(PPOExtensionHooks):
             traj_uids=traj_uids,
         )
 
-        main_indices = np.where(main_mask)[0]
-        main_batch_keys = [batch_keys[int(index)] for index in main_indices] if batch_keys is not None else None
-        main_data = data[main_mask]
-        main_data = fallback(
-            main_data,
-            batch_keys=main_batch_keys,
+        main_indices = np.where(~is_child)[0]
+        representative_by_traj: dict[str, int] = {}
+        for row in main_indices:
+            traj_uid = traj_uids[row]
+            previous = representative_by_traj.get(traj_uid)
+            if previous is None or turn_counts[row] > turn_counts[previous]:
+                representative_by_traj[traj_uid] = int(row)
+        representative_indices = np.array(list(representative_by_traj.values()), dtype=np.int64)
+        representative_mask = np.zeros(row_count, dtype=bool)
+        representative_mask[representative_indices] = True
+        representative_batch_keys = (
+            [batch_keys[int(index)] for index in representative_indices] if batch_keys is not None else None
+        )
+        representative_data = fallback(
+            data[representative_mask],
+            batch_keys=representative_batch_keys,
             adv_estimator=adv_estimator,
             gamma=gamma,
             lam=lam,
@@ -219,9 +249,22 @@ class MATPOParentBroadcastHooks(PPOExtensionHooks):
 
         advantages = torch.zeros_like(data.batch["token_level_rewards"])
         returns = torch.zeros_like(data.batch["token_level_rewards"])
-        for output_row, source_row in enumerate(main_indices):
-            advantages[source_row] = main_data.batch["advantages"][output_row]
-            returns[source_row] = main_data.batch["returns"][output_row]
+        trajectory_scalars: dict[str, tuple[Any, Any]] = {}
+        for output_row, source_row in enumerate(representative_indices):
+            response_mask = representative_data.batch["response_mask"][output_row].bool()
+            if response_mask.any():
+                advantage_scalar = representative_data.batch["advantages"][output_row][response_mask][0]
+                return_scalar = representative_data.batch["returns"][output_row][response_mask][0]
+            else:
+                advantage_scalar = advantages.new_zeros(())
+                return_scalar = returns.new_zeros(())
+            trajectory_scalars[traj_uids[source_row]] = (advantage_scalar, return_scalar)
+
+        for row in main_indices:
+            advantage_scalar, return_scalar = trajectory_scalars[traj_uids[row]]
+            response_mask = data.batch["response_mask"][row]
+            advantages[row] = advantage_scalar * response_mask
+            returns[row] = return_scalar * response_mask
 
         req_to_row = {reqs_ids[row]: row for row in main_indices if row < len(reqs_ids)}
         for row in np.where(is_child)[0]:

@@ -4,7 +4,7 @@ from typing import Any
 
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
-from trajweave.recipes.matpo.config import build_matpo_launch_overrides
+from trajweave.recipes.matpo.config import build_matpo_launch_overrides, matpo_reward_settings
 from trajweave.recipes.matpo.smoke import run_smoke
 
 
@@ -24,12 +24,15 @@ class MATPORecipePlugin:
         rollout_cfg = config.get("rollout", {})
         team_cfg = config.get("team", {})
         matpo_cfg = config.get("matpo", {})
+        accuracy_weight, tool_format_weight = matpo_reward_settings(config)
         summary, result = run_smoke(
             rollouts_per_task=int(rollout_cfg.get("rollouts_per_task", 2)),
-            max_turns=int(team_cfg.get("max_turns", matpo_cfg.get("max_turns", 3))),
+            max_turns=int(matpo_cfg.get("max_turns", team_cfg.get("max_turns", 3))),
             planner_agent=str(matpo_cfg.get("planner_agent", "planner")),
             worker_agent=str(matpo_cfg.get("worker_agent", "browsing_agent")),
             tool_name=str(matpo_cfg.get("tool_name", "search_and_browse")),
+            accuracy_reward_weight=accuracy_weight,
+            tool_format_reward_weight=tool_format_weight,
         )
         context.tracker.log_rollout_result(result, source="matpo_browse")
         output = {
@@ -67,6 +70,7 @@ class MATPORecipePlugin:
 
 def matpo_summary(config: dict[str, Any]) -> dict[str, Any]:
     matpo_cfg = config.get("matpo", {})
+    accuracy_weight, tool_format_weight = matpo_reward_settings(config)
     return {
         "task": "browse_qa",
         "runtime_recipe": "matpo_browse",
@@ -74,6 +78,8 @@ def matpo_summary(config: dict[str, Any]) -> dict[str, Any]:
         "planner_agent": str(matpo_cfg.get("planner_agent", "planner")),
         "worker_agent": str(matpo_cfg.get("worker_agent", "browsing_agent")),
         "tool_name": str(matpo_cfg.get("tool_name", "search_and_browse")),
+        "accuracy_reward_weight": accuracy_weight,
+        "tool_format_reward_weight": tool_format_weight,
         "credit_allocator": "matpo_parent_broadcast_grpo",
         "training_backend": "verl_v1_single_actor_wg",
     }
