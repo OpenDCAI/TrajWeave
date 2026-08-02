@@ -58,6 +58,13 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         runtime_recipe="agentflow_planner_tool",
         aliases=("agentflow_planner_tool", "agentflow.flow_grpo"),
     ),
+    RecipeDefinition(
+        name="marti_mars2.single_mcts.smoke",
+        family="marti_mars2",
+        task="code",
+        runtime_recipe="marti_mars2_single_mcts",
+        aliases=("marti_mars2_single_mcts", "marti-mars2-single-mcts", "mars2.single_mcts"),
+    ),
 )
 
 
