@@ -81,6 +81,14 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("comas_peer_review_math", "comas.math"),
     ),
+    RecipeDefinition(
+        name="marti_mars2.single_mcts.smoke",
+        family="marti_mars2",
+        task="code",
+        runtime_recipe="marti_mars2_single_mcts",
+        allowed_modes=("smoke", "verl_train", "verl_plan", "marti_eval"),
+        aliases=("marti_mars2_single_mcts", "marti-mars2-single-mcts", "mars2.single_mcts"),
+    ),
 )
 
 

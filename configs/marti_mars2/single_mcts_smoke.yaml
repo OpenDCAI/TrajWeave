@@ -1,0 +1,11 @@
+recipe: marti_mars2.single_mcts.smoke
+mode: smoke
+
+marti_mars2:
+  max_num_nodes: 2
+  agent_ids: ["generator"]
+  model_ids: ["shared"]
+  enable_vllm_is_correction: false
+
+rollout:
+  rollouts_per_task: 1
