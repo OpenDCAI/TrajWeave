@@ -49,7 +49,10 @@ class TrainableTinyMathPolicyBackend:
         self._torch = torch
         self._requested_device = self.device
         if self.device.startswith("cuda") and not torch.cuda.is_available():
-            self.device = "cpu"
+            raise RuntimeError(
+                f"TrainableTinyMathPolicyBackend requested device {self.device!r}, but CUDA is unavailable. "
+                "Use device='cpu' explicitly for a CPU run."
+            )
         torch.manual_seed(self.seed)
         self._rng = random.Random(self.seed)
         self.solver = torch.nn.Sequential(

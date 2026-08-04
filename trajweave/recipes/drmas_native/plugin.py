@@ -14,6 +14,8 @@ class DrMASNativeRecipePlugin:
         return context.recipe_definition.family == "drmas_native"
 
     def run(self, context: RunContext) -> dict:
+        if context.mode not in {"verl_train", "verl_plan"}:
+            raise ValueError(f"Unsupported DrMAS native mode: {context.mode!r}.")
         output: dict[str, Any] = context.base_output()
         output["drmas_native"] = self._summary(context)
         overrides = build_drmas_native_launch_overrides(context.config, config_path=context.config_path)
@@ -24,6 +26,7 @@ class DrMASNativeRecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         return output
 

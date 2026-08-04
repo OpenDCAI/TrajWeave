@@ -162,6 +162,8 @@ class ExperimentTracker:
     def finalize(self, status: str, *, error: str | None = None) -> None:
         if status == "completed":
             self.log_event("run_completed", "TrajWeave run completed.")
+        elif status == "planned":
+            self.log_event("run_planned", "TrajWeave launch plan generated without executing training.")
         elif status == "failed":
             self.log_event(
                 "run_failed_finalized", "TrajWeave run finalized as failed.", {"error": error}, level="ERROR"

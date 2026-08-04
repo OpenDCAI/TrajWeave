@@ -14,6 +14,7 @@ class TrajWeaveAgentLoopRuntimeConfig:
     agent_loop_backend: str = "verl_tq"
     hf_local_dtype: str = "fp32"
     hf_local_model_cache_size: int = 0
+    allow_plain_text_prompt_fallback: bool = False
     run_id: str | None = None
     run_dir: str | None = None
     capture_online_turns: bool = False
@@ -36,6 +37,7 @@ class TrajWeaveAgentLoopRuntimeConfig:
             agent_loop_backend=str(config_get(trajweave, "agent_loop_backend", "verl_tq")),
             hf_local_dtype=hf_local_dtype,
             hf_local_model_cache_size=hf_local_model_cache_size,
+            allow_plain_text_prompt_fallback=as_bool(config_get(trajweave, "allow_plain_text_prompt_fallback", False)),
             run_id=config_get(trajweave, "run_id"),
             run_dir=config_get(trajweave, "run_dir"),
             capture_online_turns=as_bool(config_get(trajweave, "capture_online_turns", False)),
@@ -61,6 +63,7 @@ class TrajWeaveAgentLoopRuntimeConfig:
             "trajweave.agent_loop_backend": self.agent_loop_backend,
             "trajweave.hf_local_dtype": self.hf_local_dtype,
             "trajweave.hf_local_model_cache_size": str(self.hf_local_model_cache_size),
+            "trajweave.allow_plain_text_prompt_fallback": str(self.allow_plain_text_prompt_fallback).lower(),
             "trajweave.run_id": self.run_id,
             "trajweave.run_dir": self.run_dir,
             "trajweave.capture_online_turns": str(self.capture_online_turns).lower(),

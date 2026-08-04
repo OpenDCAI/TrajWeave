@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from trajweave.backends.verl.runtime_config import config_get
-from trajweave.backends.verl.schema import to_python
+from trajweave.backends.verl.schema import required_ground_truth, to_python
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
@@ -16,8 +16,7 @@ class AgentFlowEmitterMixin:
     ) -> list[AgentLoopOutput]:
         raw_prompt = to_python(prompt.get("raw_prompt", []))
         prompt_ids = self._encode_prompt(raw_prompt)
-        reward_model = to_python(prompt.get("reward_model", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "2"))
+        ground_truth = required_ground_truth(prompt)
         is_correct = session_id % 2 == 0
         reward = 1.0 if is_correct else 0.0
         max_steps = self._agentflow_max_steps()

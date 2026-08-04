@@ -14,9 +14,11 @@ class GiGPORecipePlugin:
         return context.recipe_definition.family == "gigpo"
 
     def run(self, context: RunContext) -> dict[str, Any]:
-        if context.mode == "verl_train":
+        if context.mode in {"verl_train", "verl_plan"}:
             return self._run_verl_train(context)
-        return self._run_smoke(context)
+        if context.mode == "smoke":
+            return self._run_smoke(context)
+        raise ValueError(f"Unsupported GiGPO mode: {context.mode!r}.")
 
     def _run_smoke(self, context: RunContext) -> dict[str, Any]:
         settings = resolve_gigpo_settings(context.config)
@@ -52,6 +54,7 @@ class GiGPORecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         return output
 

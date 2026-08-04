@@ -1,5 +1,5 @@
 recipe: doctor_mas_math
-mode: smoke
+mode: verl_train
 
 prepare:
   tiny_verl_assets:

@@ -220,30 +220,22 @@ def test_sync_metadata_unknown_status_raises(tq_init, partition_id):
 # --------------------------------------------------------------------------- #
 
 
-def test_sample_returns_finished_and_failure_trajectories(tq_init, partition_id):
-    """sample picks trajectories belonging to finished/failure prompts and clears
-    the sampled prompt keys from TransferQueue."""
+def test_sample_rejects_failure_trajectories(tq_init, partition_id):
+    """任一失败 prompt 都会终止采样，且失败数据保留用于审计。"""
     finished = PromptSpec(uid=_uid(), status="finished", sessions=2)
     failure = PromptSpec(uid=_uid(), status="failure", sessions=1)
     # Running prompt's trajectory must NOT be sampled.
     running = PromptSpec(uid=_uid(), status="running", sessions=1)
 
     _produce(partition_id, [finished, failure, running]).join_and_check()
-    expected_keys = set(finished.trajectory_keys) | set(failure.trajectory_keys)
-
     rb = ReplayBuffer(poll_interval=POLL_INTERVAL)
     try:
-        batch = rb.sample(partition_id, batch_size=2)
+        with pytest.raises(RuntimeError, match="refusing to train on incomplete trajectories"):
+            rb.sample(partition_id, batch_size=2)
 
-        assert batch.partition_id == partition_id
-        assert set(batch.keys) == expected_keys
-        assert len(batch.tags) == len(batch.keys)
-
-        # The two sampled prompt keys are consumed from TransferQueue; the running
-        # prompt and all trajectory values remain.
         remaining = tq.kv_list(partition_id=partition_id).get(partition_id, {})
-        assert finished.uid not in remaining
-        assert failure.uid not in remaining
+        assert finished.uid in remaining
+        assert failure.uid in remaining
         assert running.uid in remaining
     finally:
         _clear_partition(partition_id)
@@ -271,6 +263,20 @@ def test_sample_blocks_until_enough_then_unblocks(tq_init, partition_id):
         assert len(batch.keys) == 2
     finally:
         consumer.join(timeout=10.0)
+        _clear_partition(partition_id)
+
+
+def test_sample_times_out_when_rollout_never_finishes(tq_init, partition_id):
+    """丢失的 rollout 必须给出可诊断超时，不能让 Trainer 永久轮询。"""
+    pending = PromptSpec(uid=_uid(), status="pending", sessions=0)
+    running = PromptSpec(uid=_uid(), status="running", sessions=1)
+    _produce(partition_id, [pending, running]).join_and_check()
+
+    rb = ReplayBuffer(poll_interval=0.01, max_wait_seconds=0.05)
+    try:
+        with pytest.raises(TimeoutError, match="pending=1, running=1"):
+            rb.sample(partition_id, batch_size=1)
+    finally:
         _clear_partition(partition_id)
 
 

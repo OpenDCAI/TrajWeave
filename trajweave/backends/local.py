@@ -61,14 +61,15 @@ class TinyTorchPolicyBackend(RuleBasedMathPolicyBackend):
     def __post_init__(self) -> None:
         try:
             import torch
-        except Exception:
-            self._torch = None
-            self._model = None
-            return
+        except Exception as exc:
+            raise RuntimeError("TinyTorchPolicyBackend requires a working PyTorch installation.") from exc
         self._torch = torch
         self._requested_device = self.device
         if self.device.startswith("cuda") and not torch.cuda.is_available():
-            self.device = "cpu"
+            raise RuntimeError(
+                f"TinyTorchPolicyBackend requested device {self.device!r}, but CUDA is unavailable. "
+                "Use device='cpu' explicitly for a CPU run."
+            )
         self._model = torch.nn.Sequential(
             torch.nn.Embedding(257, self.hidden_size),
             torch.nn.Linear(self.hidden_size, 1),
@@ -77,8 +78,6 @@ class TinyTorchPolicyBackend(RuleBasedMathPolicyBackend):
 
     def generate(self, request: PolicyRequest) -> PolicyResponse:
         response = super().generate(request)
-        if self._torch is None or self._model is None:
-            return response
         ids = self._torch.tensor(response.token_ids, dtype=self._torch.long, device=self.device).clamp(max=256)
         with self._torch.no_grad():
             scores = self._model(ids).squeeze(-1)

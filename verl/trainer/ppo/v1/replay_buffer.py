@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 VERL_REPLAY_BUFFER_DEBUG_INTERVAL_SECONDS = int(os.getenv("VERL_REPLAY_BUFFER_DEBUG_INTERVAL_SECONDS", "60"))
+VERL_REPLAY_BUFFER_MAX_WAIT_SECONDS = float(os.getenv("VERL_REPLAY_BUFFER_MAX_WAIT_SECONDS", "1800"))
 
 
 # TODO: Pass custom sampler to TransferQueue:
@@ -58,14 +59,19 @@ class ReplayBuffer:
     - running: all sessions of the prompt are running.
     - finished: all sessions of the prompt are finished without error.
     - failure: all sessions of the prompt are finished, but at least one session failed.
-    Only prompt with status `finished` or `failure`, its trajectories can be sampled by replay buffer.
+    A failed prompt aborts sampling. It is never converted into a partial training group.
 
     Args:
         poll_interval (float, optional): Poll interval in seconds. Defaults to 2.0.
     """
 
-    def __init__(self, poll_interval: float = 2.0):
+    def __init__(self, poll_interval: float = 2.0, max_wait_seconds: float | None = None):
         self.poll_interval = poll_interval
+        self.max_wait_seconds = (
+            VERL_REPLAY_BUFFER_MAX_WAIT_SECONDS if max_wait_seconds is None else float(max_wait_seconds)
+        )
+        if self.max_wait_seconds <= 0:
+            raise ValueError("ReplayBuffer max_wait_seconds must be positive.")
 
         # partition_id => {key: tag}
         self.partitions: dict[str, dict[str, dict]] = defaultdict(dict)
@@ -119,11 +125,22 @@ class ReplayBuffer:
         Returns:
             KVBatchMeta: A batch of data.
         """
+        started_at = time.monotonic()
         last_debug_time = time.time()
         self._sync_metadata_from_transfer_queue()
-        while len(self.finished_keys[partition_id]) + len(self.failure_keys[partition_id]) < batch_size:
+        self._raise_on_failed_prompts(partition_id)
+        while len(self.finished_keys[partition_id]) < batch_size:
             time.sleep(self.poll_interval)
             self._sync_metadata_from_transfer_queue()
+            self._raise_on_failed_prompts(partition_id)
+            if time.monotonic() - started_at >= self.max_wait_seconds:
+                raise TimeoutError(
+                    "Timed out waiting for complete rollout groups: "
+                    f"partition={partition_id!r}, expected={batch_size}, "
+                    f"finished={len(self.finished_keys[partition_id])}, "
+                    f"pending={len(self.pending_keys[partition_id])}, "
+                    f"running={len(self.running_keys[partition_id])}."
+                )
 
             if time.time() - last_debug_time > VERL_REPLAY_BUFFER_DEBUG_INTERVAL_SECONDS:
                 logger.info(
@@ -134,10 +151,8 @@ class ReplayBuffer:
                 )
                 last_debug_time = time.time()
 
-        # TODO: should we filter out samples with some of their sessions failed?
         finished_keys = self.finished_keys[partition_id]
-        failure_keys = self.failure_keys[partition_id]
-        selected_prompt_uids = list(finished_keys.union(failure_keys))[:batch_size]
+        selected_prompt_uids = list(finished_keys)[:batch_size]
         tq.kv_clear(partition_id=partition_id, keys=selected_prompt_uids)
 
         keys, tags = [], []
@@ -148,3 +163,13 @@ class ReplayBuffer:
                 keys.append(key)
                 tags.append(tag)
         return KVBatchMeta(partition_id=partition_id, keys=keys, tags=tags)
+
+    def _raise_on_failed_prompts(self, partition_id: str) -> None:
+        failed = sorted(self.failure_keys[partition_id])
+        if not failed:
+            return
+        preview = failed[:8]
+        suffix = "" if len(failed) <= len(preview) else f" (+{len(failed) - len(preview)} more)"
+        raise RuntimeError(
+            f"Rollout failed for prompt groups; refusing to train on incomplete trajectories: {preview}{suffix}."
+        )

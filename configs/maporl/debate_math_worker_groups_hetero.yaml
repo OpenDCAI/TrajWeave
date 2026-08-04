@@ -1,5 +1,5 @@
 recipe: maporl.debate_math.full_verl_tiny
-mode: verl_train
+mode: verl_plan
 
 maporl:
   agent_count: 2

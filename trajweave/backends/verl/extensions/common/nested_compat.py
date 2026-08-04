@@ -8,15 +8,80 @@ import torch
 def apply_tq_nested_compat_patch(config: Any = None) -> None:
     """Install small TensorDict/NestedTensor shims needed by TransferQueue smoke runs."""
 
-    install_worker_nested_tensor_compat()
-    _patch_trainer_base_padding_helpers()
+    snapshot = _capture_compat_patch_state(include_trainer=True)
+    try:
+        install_worker_nested_tensor_compat()
+        _patch_trainer_base_padding_helpers()
+    except BaseException:
+        _restore_compat_patch_state(snapshot)
+        raise
 
 
 def install_worker_nested_tensor_compat() -> None:
-    _patch_nested_sum()
-    _patch_nested_to_padded_tensor()
-    _patch_worker_losses()
-    _patch_fsdp_response_outputs()
+    snapshot = _capture_compat_patch_state(include_trainer=False)
+    try:
+        _patch_nested_sum()
+        _patch_nested_to_padded_tensor()
+        _patch_worker_losses()
+        _patch_fsdp_response_outputs()
+    except BaseException:
+        _restore_compat_patch_state(snapshot)
+        raise
+
+
+def _capture_compat_patch_state(*, include_trainer: bool) -> dict[str, Any]:
+    try:
+        import verl.workers.engine_workers as engine_workers
+        from verl.workers.engine.fsdp import transformer_impl as ti
+        from verl.workers.utils import losses
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("TrajWeave could not import the VERL modules required by nested compatibility.") from exc
+
+    state: dict[str, Any] = {
+        "tensor_sum": torch.Tensor.sum,
+        "tensor_sum_marker_exists": "_trajweave_nested_sum_patch" in torch.Tensor.__dict__,
+        "tensor_sum_marker": getattr(torch.Tensor, "_trajweave_nested_sum_patch", None),
+        "to_padded_tensor": torch.nested.to_padded_tensor,
+        "losses_module": losses,
+        "losses_ppo_loss": losses.ppo_loss,
+        "engine_workers_module": engine_workers,
+        "engine_workers_ppo_loss": engine_workers.ppo_loss,
+        "fsdp_class": ti.FSDPEngineWithLMHead,
+        "fsdp_prepare_model_outputs": ti.FSDPEngineWithLMHead.prepare_model_outputs,
+    }
+    if include_trainer:
+        from verl.trainer.ppo.v1 import trainer_base as tb
+
+        state.update(
+            {
+                "trainer_class": tb.PPOTrainer,
+                "trainer_old_log_prob": tb.PPOTrainer._compute_old_log_prob,
+                "trainer_metrics": tb.PPOTrainer._compute_metrics,
+                "trainer_marker_exists": "_trajweave_nested_compat_patch" in tb.PPOTrainer.__dict__,
+                "trainer_marker": getattr(tb.PPOTrainer, "_trajweave_nested_compat_patch", None),
+            }
+        )
+    return state
+
+
+def _restore_compat_patch_state(state: dict[str, Any]) -> None:
+    torch.Tensor.sum = state["tensor_sum"]
+    if state["tensor_sum_marker_exists"]:
+        torch.Tensor._trajweave_nested_sum_patch = state["tensor_sum_marker"]
+    elif "_trajweave_nested_sum_patch" in torch.Tensor.__dict__:
+        del torch.Tensor._trajweave_nested_sum_patch
+    torch.nested.to_padded_tensor = state["to_padded_tensor"]
+    state["losses_module"].ppo_loss = state["losses_ppo_loss"]
+    state["engine_workers_module"].ppo_loss = state["engine_workers_ppo_loss"]
+    state["fsdp_class"].prepare_model_outputs = state["fsdp_prepare_model_outputs"]
+    trainer_class = state.get("trainer_class")
+    if trainer_class is not None:
+        trainer_class._compute_old_log_prob = state["trainer_old_log_prob"]
+        trainer_class._compute_metrics = state["trainer_metrics"]
+        if state["trainer_marker_exists"]:
+            trainer_class._trajweave_nested_compat_patch = state["trainer_marker"]
+        elif "_trajweave_nested_compat_patch" in trainer_class.__dict__:
+            del trainer_class._trajweave_nested_compat_patch
 
 
 def _patch_nested_sum() -> None:
@@ -60,7 +125,14 @@ def _patch_nested_to_padded_tensor() -> None:
 def _patch_worker_losses() -> None:
     from verl.workers.utils import losses
 
+    try:
+        import verl.workers.engine_workers as engine_workers
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("TrajWeave nested compatibility patch could not import VERL engine_workers.") from exc
+
     if getattr(losses.ppo_loss, "_trajweave_nested_compat_patch", False):
+        if engine_workers.ppo_loss is not losses.ppo_loss:
+            raise RuntimeError("TrajWeave detected a partially installed VERL PPO loss compatibility patch.")
         return
 
     def patched_ppo_loss(config, model_output, data, dp_group=None):
@@ -175,13 +247,17 @@ def _patch_worker_losses() -> None:
         return policy_loss, metrics
 
     patched_ppo_loss._trajweave_nested_compat_patch = True  # type: ignore[attr-defined]
-    losses.ppo_loss = patched_ppo_loss
+    original_losses_ppo_loss = losses.ppo_loss
+    original_engine_ppo_loss = engine_workers.ppo_loss
     try:
-        import verl.workers.engine_workers as engine_workers
-
+        losses.ppo_loss = patched_ppo_loss
         engine_workers.ppo_loss = patched_ppo_loss
-    except Exception:
-        return
+        if losses.ppo_loss is not patched_ppo_loss or engine_workers.ppo_loss is not patched_ppo_loss:
+            raise RuntimeError("TrajWeave failed to install the VERL worker PPO loss compatibility patch.")
+    except BaseException:
+        losses.ppo_loss = original_losses_ppo_loss
+        engine_workers.ppo_loss = original_engine_ppo_loss
+        raise
 
 
 def _patch_fsdp_response_outputs() -> None:

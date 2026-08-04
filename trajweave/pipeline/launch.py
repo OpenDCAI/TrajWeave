@@ -18,9 +18,23 @@ def maybe_run_verl_launch(
     default_enabled: bool = False,
     default_module: str = "verl.trainer.main_ppo",
     tracker: ExperimentTracker | None = None,
+    mode: str | None = None,
 ) -> None:
     verl_cfg = config.get("verl", {})
-    if not verl_cfg.get("enabled", default_enabled):
+    enabled = bool(verl_cfg.get("enabled", default_enabled))
+    execute = bool(verl_cfg.get("execute", False))
+    if enabled and mode not in {"verl_train", "verl_plan"}:
+        raise ValueError(
+            f"mode={mode!r} cannot enable VERL; use mode='verl_plan' to generate a command "
+            "or mode='verl_train' to execute training."
+        )
+    if mode in {"verl_train", "verl_plan"} and not enabled:
+        raise ValueError(f"mode={mode!r} requires verl.enabled=true.")
+    if mode == "verl_train" and not execute:
+        raise ValueError("mode='verl_train' requires verl.execute=true; use mode='verl_plan' for command-only runs.")
+    if mode == "verl_plan" and execute:
+        raise ValueError("mode='verl_plan' requires verl.execute=false.")
+    if not enabled:
         if default_enabled:
             output["verl_launch"] = {"status": "disabled"}
         return
@@ -36,7 +50,7 @@ def maybe_run_verl_launch(
         )
     stdout_path = verl_cfg.get("stdout_path")
     stderr_path = verl_cfg.get("stderr_path")
-    if tracker is not None and bool(verl_cfg.get("execute", False)):
+    if tracker is not None and execute:
         stdout_path = str(tracker.run_dir / "logs" / "verl_stdout.log")
         stderr_path = str(tracker.run_dir / "logs" / "verl_stderr.log")
     launch_config = VerlTrainerLaunchConfig(
@@ -45,7 +59,7 @@ def maybe_run_verl_launch(
         overrides=launch_overrides,
         env=_with_runtime_env(dict(verl_cfg.get("env", {})), tracker=tracker),
         cwd=verl_cfg.get("cwd"),
-        execute=bool(verl_cfg.get("execute", False)),
+        execute=execute,
         stdout_path=stdout_path,
         stderr_path=stderr_path,
     )
@@ -59,7 +73,11 @@ def maybe_run_verl_launch(
         if tracker is not None:
             tracker.artifacts.copy_file(name="run_verl_ppo.sh", source=command_path, kind="command")
     launch_result = launcher.run()
-    _validate_training_progress(launch_result, launch_overrides)
+    _validate_training_progress(
+        launch_result,
+        launch_overrides,
+        require_explicit_steps=mode == "verl_train",
+    )
     output["verl_launch"] = launch_result
     if tracker is not None:
         tracker.log_verl_result(output["verl_launch"])
@@ -106,13 +124,23 @@ def _override_key(override: str) -> str | None:
     return override.split("=", 1)[0].lstrip("+")
 
 
-def _validate_training_progress(result: dict[str, Any], overrides: tuple[str, ...]) -> None:
+def _validate_training_progress(
+    result: dict[str, Any],
+    overrides: tuple[str, ...],
+    *,
+    require_explicit_steps: bool = False,
+) -> None:
     """拒绝“进程返回 0，但实际训练步数不足”的假成功。"""
 
     if result.get("status") != "ok":
         return
     expected = _integer_override(overrides, "trainer.total_training_steps")
     if expected is None or expected <= 0:
+        if require_explicit_steps:
+            result["status"] = "failed"
+            result["validation_error"] = (
+                "mode='verl_train' requires a positive integer trainer.total_training_steps override."
+            )
         return
     result["expected_training_steps"] = expected
     stdout_path = result.get("stdout_path")
