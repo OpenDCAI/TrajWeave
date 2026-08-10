@@ -53,3 +53,55 @@ def test_trajweave_maporl_multi_actor_trainer_is_registered():
 
     trainer_cls = get_trainer_cls("trajweave_maporl_multi_actor_sync")
     assert trainer_cls.__name__ == "TrajWeaveMAPoRLMultiActorSyncTrainer"
+
+
+def test_marti_multi_actor_summary_selects_multi_actor_backend():
+    from trajweave.recipes.marti_mars2.plugin import marti_mars2_summary
+
+    summary = marti_mars2_summary(
+        {
+            "marti_mars2": {
+                "agent_ids": ["generator", "critic"],
+                "model_ids": ["policy_a", "policy_b"],
+                "multi_actor_training": True,
+            }
+        }
+    )
+
+    assert summary["training_backend"] == "trajweave_maporl_multi_actor_sync"
+
+
+def test_async_buffer_rows_preserve_tree_identity_and_rollout_versions():
+    pytest.importorskip("transfer_queue")
+    from trajweave.backends.verl.trainers.maporl_multi_actor import _buffer_rows_from_fields
+
+    rows = _buffer_rows_from_fields(
+        ["k0", "k1"],
+        {
+            "worker_group": ["policy_a", "policy_b"],
+            "tree_id": ["tree-0", "tree-0"],
+            "raw_score": [1.0, 0.0],
+            "rollout_policy_step": [3, 2],
+            "rollout_global_step": [3, 3],
+        },
+        global_step=3,
+    )
+
+    assert [row["_tq_key"] for row in rows] == ["k0", "k1"]
+    assert {row["tree_id"] for row in rows} == {"tree-0"}
+    assert [row["policy_group"] for row in rows] == ["policy_a", "policy_b"]
+    assert [row["rollout_policy_step"] for row in rows] == [3, 2]
+
+
+def test_async_buffer_rows_default_missing_tree_to_unique_key():
+    pytest.importorskip("transfer_queue")
+    from trajweave.backends.verl.trainers.maporl_multi_actor import _buffer_rows_from_fields
+
+    rows = _buffer_rows_from_fields(
+        ["k0", "k1"],
+        {"worker_group": "policy_a", "raw_score": [0.5, 0.25]},
+        global_step=1,
+    )
+
+    assert [row["tree_id"] for row in rows] == ["k0", "k1"]
+    assert [row["rollout_policy_step"] for row in rows] == [1, 1]

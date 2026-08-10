@@ -77,6 +77,11 @@ def _write_tiny_model(model_path: Path) -> None:
         "Guido": 30,
         "van": 31,
         "Rossum": 32,
+        "Implement": 33,
+        "add_one": 34,
+        "square": 35,
+        "x": 36,
+        "return": 37,
     }
     tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
@@ -181,11 +186,79 @@ def _search_rows(size: int, *, split: str, recipe_name: str | None = None) -> li
     return rows
 
 
+def _code_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
+    seeds = [
+        (
+            "Implement add_one(x).",
+            "return x + 1",
+            {"fn_name": "add_one", "inputs": ["1", "2", "5"], "outputs": ["2", "3", "6"]},
+        ),
+        (
+            "Implement square(x).",
+            "return x * x",
+            {"fn_name": "square", "inputs": ["1", "2", "5"], "outputs": ["1", "4", "25"]},
+        ),
+    ]
+    rows = []
+    for index in range(size):
+        prompt, answer, test_cases = seeds[index % len(seeds)]
+        rows.append(
+            {
+                "data_source": "trajweave_tiny_code",
+                "prompt": [{"role": "user", "content": prompt}],
+                "ability": "code",
+                "reward_model": {"style": "code", "ground_truth": answer, "test_cases": test_cases},
+                "extra_info": {
+                    "index": index,
+                    "split": split,
+                    "trajweave_recipe": recipe_name or "marti_mars2_single_mcts",
+                },
+            }
+        )
+    return rows
+
+
+def _controlled_code_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
+    prompt = (
+        "Write a complete Python function named zigzag_code for an integer x. Return -1 if x is negative. "
+        "Otherwise return 6 if x is divisible by 6, else 3 if divisible by 3, else 2 if divisible by 2, "
+        "else 1. Return only executable Python code. Required signature: def zigzag_code(x):"
+    )
+    test_cases = {
+        "fn_name": "zigzag_code",
+        "inputs": ["-2", "0", "1", "2", "3", "4", "6", "9", "12"],
+        "outputs": ["-1", "6", "1", "2", "3", "2", "6", "3", "6"],
+    }
+    return [
+        {
+            "data_source": "trajweave_controlled_code",
+            "prompt": [{"role": "user", "content": prompt}],
+            "ability": "code",
+            "reward_model": {
+                "style": "code",
+                "ground_truth": "return min(10, max(0, x))",
+                "test_cases": test_cases,
+            },
+            "extra_info": {
+                "index": index,
+                "split": split,
+                "trajweave_recipe": recipe_name or "marti_mars2_single_mcts_fidelity",
+                "acceptance_target": "mixed_verifier_rewards_within_tree",
+            },
+        }
+        for index in range(size)
+    ]
+
+
 def _rows(size: int, *, split: str, task_family: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
     if task_family == "math":
         return _math_rows(size, split=split, recipe_name=recipe_name)
     if task_family == "search":
         return _search_rows(size, split=split, recipe_name=recipe_name)
+    if task_family == "code":
+        return _code_rows(size, split=split, recipe_name=recipe_name)
+    if task_family == "controlled_code":
+        return _controlled_code_rows(size, split=split, recipe_name=recipe_name)
     raise ValueError(f"Unknown tiny VERL task_family: {task_family}")
 
 
@@ -194,6 +267,10 @@ def _default_recipe_name(task_family: str) -> str:
         return "doctor_mas_math"
     if task_family == "search":
         return "doctor_mas_search"
+    if task_family == "code":
+        return "marti_mars2_single_mcts"
+    if task_family == "controlled_code":
+        return "marti_mars2_single_mcts_fidelity"
     return task_family
 
 

@@ -1,0 +1,104 @@
+recipe: marti_mars2.single_mcts.fidelity
+mode: verl_train
+
+marti_mars2:
+  max_num_nodes: 4
+  initial_candidates: 2
+  agent_ids: [generator, critic]
+  model_ids: [policy_a, policy_b]
+  agent_loop_backend: synthetic_tq
+  multi_actor_training: true
+  enable_vllm_is_correction: false
+  fixture_candidates:
+    - "def zigzag_code(x):\n    if x < 0:\n        return -1\n    if x % 6 == 0:\n        return 6\n    if x % 3 == 0:\n        return 3\n    if x % 2 == 0:\n        return 2\n    return 1"
+    - "def zigzag_code(x):\n    return 0"
+    - "def zigzag_code(x):\n    if x < 0:\n        return -1\n    if x % 6 == 0:\n        return 6\n    if x % 3 == 0:\n        return 3\n    if x % 2 == 0:\n        return 2\n    return 1"
+    - "def zigzag_code(x):\n    return 0"
+
+credit:
+  mode: fidelity
+  type: marti_mars2_fidelity_group_grpo
+
+acceptance:
+  enabled: true
+  require_learning_signal: true
+  require_multi_agent_routing: true
+
+prepare:
+  tiny_verl_assets:
+    enabled: true
+    output_dir: outputs/marti_mars2_stage1e_fixture_assets
+    task_family: controlled_code
+    recipe_name: marti_mars2_stage1e_fixture
+    train_size: 1
+    val_size: 1
+    overwrite: true
+
+verl:
+  enabled: true
+  execute: true
+  python: /data/chenxingyan/conda_envs/pettingllms-atgrpo/bin/python
+  cwd: /data/chenxingyan/TrajWeave
+  command_file: outputs/marti_mars2_stage1e_fixture/verl_ppo.sh
+  stdout_path: outputs/marti_mars2_stage1e_fixture/verl_stdout.log
+  stderr_path: outputs/marti_mars2_stage1e_fixture/verl_stderr.log
+  module: trajweave.backends.verl.main_ppo
+  env:
+    CUDA_VISIBLE_DEVICES: "2"
+    HF_HOME: outputs/.hf_cache
+    HF_DATASETS_CACHE: outputs/.hf_cache/datasets
+    TRANSFORMERS_CACHE: outputs/.hf_cache/transformers
+    NO_PROXY: localhost,127.0.0.1,::1
+    TOKENIZERS_PARALLELISM: "false"
+    RAY_DEDUP_LOGS: "0"
+    PYTHONPATH: /tmp/trajweave-tq-runtime:/data/chenxingyan/TrajWeave
+  overrides:
+    - trainer.use_v1=true
+    - trainer.v1.trainer_mode=sync
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=marti_mars2_stage1e_fixture
+    - trainer.nnodes=1
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=1
+    - trainer.total_training_steps=1
+    - trainer.save_freq=1
+    - trainer.test_freq=-1
+    - trainer.val_before_train=false
+    - trainer.logger=[console]
+    - trainer.resume_mode=disable
+    - trainer.default_local_dir=${oc.env:TRAJWEAVE_RUN_DIR}/checkpoints
+    - data.train_files=outputs/marti_mars2_stage1e_fixture_assets/train.jsonl
+    - data.val_files=outputs/marti_mars2_stage1e_fixture_assets/val.jsonl
+    - data.train_batch_size=1
+    - data.val_batch_size=1
+    - data.max_prompt_length=128
+    - data.max_response_length=128
+    - data.dataloader_num_workers=0
+    - data.filter_overlong_prompts=false
+    - data.truncation=right
+    - data.shuffle=false
+    - actor_rollout_ref.model.path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+    - actor_rollout_ref.model.tokenizer_path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+    - +actor_rollout_ref.model.override_config.attn_implementation=eager
+    - actor_rollout_ref.model.use_remove_padding=false
+    - actor_rollout_ref.model.enable_gradient_checkpointing=false
+    - actor_rollout_ref.rollout.name=hf
+    - actor_rollout_ref.rollout.prompt_length=128
+    - actor_rollout_ref.rollout.response_length=128
+    - actor_rollout_ref.rollout.calculate_log_probs=false
+    - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=256
+    - actor_rollout_ref.rollout.agent.num_workers=1
+    - actor_rollout_ref.actor.ppo_mini_batch_size=1
+    - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.actor.ppo_max_token_len_per_gpu=256
+    - actor_rollout_ref.actor.use_torch_compile=false
+    - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
+    - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
+    - actor_rollout_ref.actor.optim.lr=1e-6
+    - algorithm.norm_adv_by_std_in_grpo=true
+    - algorithm.use_kl_in_reward=false
+    - critic.enable=false
+    - reward.num_workers=1
+    - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
+    - ray_kwargs.ray_init.num_cpus=8

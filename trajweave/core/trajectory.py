@@ -20,6 +20,9 @@ class AgentTurn:
     reward: float | None = None
     advantage: float | None = None
     done: bool = False
+    rollout_policy_step: int | None = None
+    rollout_global_step: int | None = None
+    policy_lag: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,4 +61,7 @@ class TrainingSample:
     response_logprobs: list[float]
     reward: float
     advantage: float | None = None
+    rollout_policy_step: int | None = None
+    rollout_global_step: int | None = None
+    policy_lag: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

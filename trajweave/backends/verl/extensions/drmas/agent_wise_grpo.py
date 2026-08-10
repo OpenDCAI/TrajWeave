@@ -232,9 +232,13 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
         if tb.OmegaConf.select(self.config.global_profiler, "steps") is not None:
             wg_kwargs["profile_steps"] = tb.OmegaConf.select(self.config.global_profiler, "steps")
             if tb.OmegaConf.select(self.config.global_profiler, "tool") == "nsys":
-                assert tb.OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options") is not None
+                worker_nsight_options = tb.OmegaConf.select(
+                    self.config.global_profiler.global_tool_config.nsys,
+                    "worker_nsight_options",
+                )
+                assert worker_nsight_options is not None
                 wg_kwargs["worker_nsight_options"] = tb.OmegaConf.to_container(
-                    tb.OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
+                    worker_nsight_options
                 )
         wg_kwargs["device_name"] = self.config.trainer.device
 
@@ -290,7 +294,9 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
                 worker_group=self.actor_rollout_wg,
                 rollout_resource_pool=actor_rollout_resource_pool,
             )
-            checkpoint_engine_config = tb.omega_conf_to_dataclass(self.config.actor_rollout_ref.rollout.checkpoint_engine)
+            checkpoint_engine_config = tb.omega_conf_to_dataclass(
+                self.config.actor_rollout_ref.rollout.checkpoint_engine
+            )
             checkpoint_engine_config.backend = "naive"
             self.checkpoint_manager = tb.CheckpointEngineManager(
                 config=checkpoint_engine_config,
@@ -367,6 +373,8 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
         else:
             data.batch["token_level_rewards"] = data.batch["token_level_scores"]
 
+        data = hooks.process_rewards(data)
+
         rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
         bypass_recomputing_logprobs = rollout_corr_config and rollout_corr_config.get("bypass_mode", False)
         rollout_correction = (
@@ -386,6 +394,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             norm_adv_by_std_in_grpo=self.config.algorithm.get("norm_adv_by_std_in_grpo", True),
             config=self.config.algorithm,
         )
+        hooks.update_metrics(data, metrics, stage="advantage", config=self.config.algorithm)
 
         output_fields = ["advantages", "returns"]
         if self.config.algorithm.use_kl_in_reward:
@@ -394,6 +403,9 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             output_fields.append("response_mask")
             if "rollout_is_weights" in data.batch:
                 output_fields.append("rollout_is_weights")
+        output_fields = list(
+            hooks.output_fields("advantage", tuple(output_fields), data, config=self.config.algorithm)
+        )
 
         output = {}
         for field in output_fields:
@@ -444,7 +456,7 @@ def _nested_to_padded_tensor_compat(nested_tensor: torch.Tensor, padding: int | 
         padded = torch.full((batch_size, max_len), padding, dtype=values.dtype, device=values.device)
         lengths = offsets.diff().tolist()
         starts = offsets[:-1].tolist()
-        for row, (start, length) in enumerate(zip(starts, lengths)):
+        for row, (start, length) in enumerate(zip(starts, lengths, strict=True)):
             padded[row, :length] = values[start : start + length]
         return padded
 

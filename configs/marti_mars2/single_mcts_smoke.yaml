@@ -7,5 +7,8 @@ marti_mars2:
   model_ids: ["shared"]
   enable_vllm_is_correction: false
 
+credit:
+  mode: fidelity
+
 rollout:
   rollouts_per_task: 1

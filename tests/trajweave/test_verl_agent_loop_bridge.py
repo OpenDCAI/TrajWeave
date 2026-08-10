@@ -44,6 +44,7 @@ def test_verl_can_load_trajweave_agent_loop_manager_by_fqn():
 
 def test_trajweave_pads_rm_scores_to_response_mask_length():
     torch = pytest.importorskip("torch")
+    pytest.importorskip("transfer_queue")
 
     from trajweave.backends.verl.agent_loop import _padded_rm_scores
 
@@ -63,6 +64,7 @@ def test_trajweave_agent_loop_accepts_agentflow_recipe_and_rejects_native_backen
 
     _validate_agent_loop_backend("agentflow_planner_tool", "synthetic_tq")
     _validate_agent_loop_backend("agentflow_planner_tool", "hf_local_tq")
+    _validate_agent_loop_backend("marti_mars2_single_mcts", "vllm_marti_tq")
     with pytest.raises(ValueError, match="verl_tq"):
         _validate_agent_loop_backend("agentflow_planner_tool", "verl_tq")
 
@@ -91,3 +93,22 @@ def test_trajweave_agent_loop_to_python_supports_omegaconf_lists():
             "tokenizer_path": "/models/tokenizer",
         }
     ]
+
+
+def test_native_vllm_sampling_params_only_include_policy_marker_for_grouped_client():
+    pytest.importorskip("torch")
+    pytest.importorskip("transfer_queue")
+
+    from trajweave.backends.verl.agent_loop import _marti_vllm_sampling_params
+
+    base = {"temperature": 0.7}
+    single = _marti_vllm_sampling_params({}, base, policy_group="shared")
+    grouped = _marti_vllm_sampling_params(
+        {"trajweave": {"multi_actor": {"vllm": {"enabled": True}}}},
+        base,
+        policy_group="policy_b",
+    )
+
+    assert single == {"temperature": 0.7}
+    assert grouped == {"temperature": 0.7, "trajweave_policy_group": "policy_b"}
+    assert base == {"temperature": 0.7}

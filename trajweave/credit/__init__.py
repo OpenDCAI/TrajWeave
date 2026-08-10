@@ -9,6 +9,12 @@ from trajweave.credit.tree_grouping import (
     importance_correction_weights,
     rewards_from_nodes,
 )
+from trajweave.credit.tree_path import (
+    TreePathCreditAllocator,
+    TreeGroupCreditAllocator,
+    discounted_path_returns,
+    parent_sibling_shaped_rewards,
+)
 
 __all__ = [
     "CreditAssigner",
@@ -18,8 +24,12 @@ __all__ = [
     "MAPoRLPPOScoreRuleCreditAssigner",
     "MAPoRLScoreBonusCreditAssigner",
     "TreeGroupBuilder",
+    "TreePathCreditAllocator",
+    "TreeGroupCreditAllocator",
+    "discounted_path_returns",
     "group_normalized_advantages",
     "importance_correction_weights",
+    "parent_sibling_shaped_rewards",
     "rewards_from_nodes",
     "shape_maporl_reward",
 ]

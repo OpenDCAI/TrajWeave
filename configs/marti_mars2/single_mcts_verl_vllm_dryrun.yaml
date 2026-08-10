@@ -1,0 +1,53 @@
+recipe: marti_mars2.single_mcts.smoke
+mode: verl_train
+
+marti_mars2:
+  max_num_nodes: 3
+  initial_candidates: 2
+  agent_ids: ["generator"]
+  model_ids: ["shared"]
+  agent_loop_backend: synthetic_tq
+  enable_vllm_is_correction: true
+  vllm_is_level: token
+  vllm_is_truncated_threshold: 2.0
+
+credit:
+  mode: fidelity
+  type: marti_mars2_fidelity_group_grpo
+  parent_sibling_gamma: 0.3
+  sibling_mix: 0.5
+  path_discount: 0.3
+
+verl:
+  enabled: true
+  execute: false
+  command_file: outputs/marti_mars2_verl_vllm_dryrun/run_verl_ppo.sh
+  module: trajweave.backends.verl.main_ppo
+  overrides:
+    - trainer.use_v1=true
+    - trainer.v1.trainer_mode=sync
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=marti_mars2_single_mcts_vllm_dryrun
+    - trainer.nnodes=1
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=1
+    - trainer.total_training_steps=1
+    - trainer.logger=[console]
+    - data.train_files=/path/to/code_train.parquet
+    - data.val_files=/path/to/code_val.parquet
+    - data.train_batch_size=1
+    - data.max_prompt_length=128
+    - data.max_response_length=64
+    - actor_rollout_ref.model.path=/path/to/model
+    - actor_rollout_ref.rollout.name=vllm
+    - actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    - actor_rollout_ref.rollout.gpu_memory_utilization=0.5
+    - actor_rollout_ref.rollout.calculate_log_probs=true
+    - actor_rollout_ref.rollout.agent.num_workers=1
+    - actor_rollout_ref.actor.ppo_mini_batch_size=3
+    - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+    - algorithm.use_kl_in_reward=false
+    - critic.enable=false
+    - reward.num_workers=1
+    - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
+    - ray_kwargs.ray_init.num_cpus=8

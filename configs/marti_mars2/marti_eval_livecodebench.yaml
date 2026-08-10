@@ -1,0 +1,17 @@
+recipe: marti_mars2.single_mcts.fidelity
+mode: marti_eval
+
+eval:
+  execute: false
+  dataset_revision: livecodebench-v5
+  task_count: 12
+  model_paths:
+    policy_a: /path/to/policy_a
+    policy_b: /path/to/policy_b
+  aggregation: verifier-best
+  budget:
+    greedy_nodes: 1
+    best_of_n_nodes: 8
+    mcts_nodes: 8
+    initial_candidates: 2
+    refinement_concurrency: 2

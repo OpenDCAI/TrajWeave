@@ -9,6 +9,7 @@ from typing import Any
 import ray
 import torch
 import transfer_queue as tq
+from tensordict import NonTensorData, NonTensorStack
 
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopMetrics,
@@ -19,11 +20,17 @@ from verl.experimental.agent_loop.agent_loop import (
 from verl.trainer.ppo.v1.agent_loop_tq import AgentLoopManagerTQ
 from verl.utils.tensordict_utils import list_of_dict_to_tensordict
 
-from trajweave.backends.verl.emitters import AgentFlowEmitterMixin, DrMASEmitterMixin, MAPoRLEmitterMixin
+from trajweave.backends.verl.emitters import (
+    AgentFlowEmitterMixin,
+    DrMASEmitterMixin,
+    MAPoRLEmitterMixin,
+    MARTIMARS2EmitterMixin,
+)
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
 from trajweave.backends.verl.runtime_config import (
     TrajWeaveAgentLoopRuntimeConfig,
+    as_bool as _as_bool,
     config_get as _get,
     validate_agent_loop_backend as _validate_agent_loop_backend,
 )
@@ -52,6 +59,8 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
         self.trajweave_runtime_config = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
         if self.trajweave_runtime_config.agent_loop_backend in {"synthetic_tq", "hf_local_tq"}:
             self.agent_loop_workers_class = TrajWeaveSyntheticAgentLoopWorkerTQ
+        if self.trajweave_runtime_config.agent_loop_backend == "vllm_marti_tq":
+            self.agent_loop_workers_class = TrajWeaveVLLMAgentLoopWorkerTQ
         if self.trajweave_runtime_config.recipe:
             logger.info("TrajWeave AgentLoopManager loaded for %s", self.trajweave_runtime_config.recipe)
 
@@ -69,6 +78,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
+    MARTIMARS2EmitterMixin,
     MAPoRLEmitterMixin,
     DrMASEmitterMixin,
     HFLocalGenerationMixin,
@@ -117,10 +127,190 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     session_id=session_id,
                 )
                 await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
+                if any(
+                    bool(output.extra_fields.get("verifier_terminal"))
+                    or bool(output.extra_fields.get("search_stop"))
+                    for output in outputs
+                ):
+                    break
+            if hasattr(self, "_trajweave_marti_tree_records"):
+                self._trajweave_marti_tree_records.pop(uid, None)
+            if hasattr(self, "_trajweave_marti_tree_controllers"):
+                self._trajweave_marti_tree_controllers.pop(uid, None)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception:
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+
+    async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
+        # Keep the established synthetic/HF writer while sharing its
+        # implementation with the native-vLLM worker below.
+        await _TrajWeaveVLLMAgentLoopWorkerTQ._put_outputs(self, outputs, validate, **kwargs)
+
+    def _write_online_turns(self, runtime, rows) -> None:
+        _TrajWeaveVLLMAgentLoopWorkerTQ._write_online_turns(self, runtime, rows)
+
+
+class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
+    """Native VERL/vLLM agent-loop worker with MARTI tree bookkeeping.
+
+    Generation itself remains VERL's native AgentLoop (and therefore uses the
+    configured vLLM server).  This worker only serializes sessions so each
+    refinement can consume the previous verifier feedback, then enriches the
+    native output before the standard TQ postprocessor writes it.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        tq.init()
+        self._trajweave_last_search_stop = False
+
+    async def generate_sequences(self, batch) -> None:
+        """TQ-compatible dispatcher around VERL's native vLLM AgentLoop."""
+        validate = bool(_to_python(batch["validate"])) if "validate" in batch else False
+        if "validate" in batch:
+            batch.pop("validate", None)
+        config = self.config.actor_rollout_ref.rollout
+        sampling_params = {
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+            "top_k": config.top_k,
+            "repetition_penalty": 1.0,
+            "logprobs": config.calculate_log_probs,
+        }
+        if validate:
+            sampling_params.update(
+                top_p=config.val_kwargs.top_p,
+                top_k=config.val_kwargs.top_k,
+                temperature=config.val_kwargs.temperature,
+            )
+        if "agent_name" not in batch:
+            batch["agent_name"] = NonTensorData(config.agent.default_agent_loop)
+        indices = batch["index"] if "index" in batch else torch.arange(len(batch))
+        global_steps = _to_python(batch["global_steps"])
+        trajectory_info = await get_trajectory_info(global_steps, _to_python(indices), validate)
+        tasks = []
+        for i in range(len(batch)):
+            prompt = {}
+            for key, value in batch.items():
+                if isinstance(value, torch.Tensor):
+                    prompt[key] = value[i]
+                elif isinstance(value, NonTensorStack):
+                    prompt[key] = value[i].data
+                elif isinstance(value, NonTensorData):
+                    prompt[key] = value.data
+            tasks.append(
+                asyncio.create_task(
+                    self._run_prompt(
+                        prompt,
+                        sampling_params=dict(sampling_params),
+                        trajectory=trajectory_info[i],
+                        trace=False,
+                    )
+                )
+            )
+        await asyncio.gather(*tasks)
+
+    async def _run_prompt(self, prompt: dict, sampling_params: dict, trajectory: dict, trace: bool = False) -> None:
+        uid = str(_to_python(prompt["uid"]))
+        partition_id = "train" if not trajectory["validate"] else "val"
+        await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "running"})
+        try:
+            config = self.config.actor_rollout_ref.rollout
+            n = int(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
+            base_prompt = prompt.get("raw_prompt")
+            for session_id in range(n):
+                parent_idx = self._marti_select_parent(prompt, node_id=session_id)
+                prompt["raw_prompt"] = self._marti_refinement_prompt(
+                    base_prompt, prompt, parent_idx=parent_idx
+                )
+                self._trajweave_active_marti_context = {
+                    "prompt": prompt,
+                    "node_id": session_id,
+                    "parent_idx": parent_idx,
+                    "source": "vllm_tq",
+                }
+                self._trajweave_last_search_stop = False
+                await self._run_agent_loop(
+                    _marti_vllm_sampling_params(
+                        self.config,
+                        sampling_params,
+                        policy_group=self._marti_policy_group(prompt, session_id),
+                    ),
+                    trajectory=trajectory,
+                    trace=trace,
+                    session_id=session_id,
+                    **prompt,
+                )
+                if self._trajweave_last_search_stop:
+                    break
+            prompt["raw_prompt"] = base_prompt
+            self._trajweave_marti_tree_records.pop(uid, None)
+            self._trajweave_marti_tree_controllers.pop(uid, None)
+            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
+        except Exception:
+            logger.exception("Native vLLM MARTI worker failed for uid=%s", uid)
+            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+
+    def _marti_policy_group(self, prompt: dict[str, Any], node_id: int) -> str:
+        binding = self._marti_agent_binding(node_id)
+        return str(binding[1])
+
+    def _marti_refinement_prompt(self, base_prompt: Any, prompt: dict, *, parent_idx: int) -> Any:
+        if parent_idx < 0:
+            return base_prompt
+        records = self._marti_tree_records().get(self._marti_tree_id(prompt), {})
+        parent = records.get(parent_idx)
+        if not parent:
+            return base_prompt
+        parent_text = self.tokenizer.decode(parent["response_ids"], skip_special_tokens=True)
+        feedback = str(parent.get("feedback", "")).strip()
+        suffix = (
+            f"\n\nPrevious candidate:\n{parent_text}"
+            f"\nVerifier feedback:\n{feedback}"
+            "\nRefine it and return a complete replacement answer."
+        )
+        if isinstance(base_prompt, list):
+            messages = list(base_prompt)
+            messages.append({"role": "user", "content": suffix})
+            return messages
+        return f"{base_prompt}{suffix}"
+
+    async def _agent_loop_postprocess(self, output, validate, **kwargs) -> None:
+        context = getattr(self, "_trajweave_active_marti_context", None)
+        if context is not None:
+            prompt = context["prompt"]
+            node_id = int(context["node_id"])
+            parent_idx = int(context["parent_idx"])
+            candidate = self.tokenizer.decode(output.response_ids, skip_special_tokens=True)
+            verification = self._marti_verify(
+                prompt,
+                node_id=node_id,
+                parent_idx=parent_idx,
+                candidate=candidate,
+            )
+            self._remember_marti_response(
+                prompt,
+                node_id=node_id,
+                response_ids=list(output.response_ids),
+                parent_idx=parent_idx,
+                verification=verification,
+            )
+            output.reward_score = verification.score
+            output.extra_fields.update(
+                self._marti_tree_fields(
+                    prompt,
+                    node_id=node_id,
+                    parent_idx=parent_idx,
+                    verification=verification,
+                    source="vllm_tq",
+                )
+            )
+            self._trajweave_last_search_stop = bool(
+                verification.terminal or output.extra_fields.get("search_stop", False)
+            )
+        internal_output = await super()._agent_loop_postprocess(output, validate, **kwargs)
+        await self._put_outputs([internal_output], validate=validate, **kwargs)
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
@@ -135,12 +325,25 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
         keys, fields, tags = [], [], []
         online_turn_rows: list[dict[str, Any]] = []
         for index, output in enumerate(outputs):
-            prompt_ids = output.prompt_ids[-self.rollout_config.prompt_length :]
-            response_ids = output.response_ids[: self.rollout_config.response_length]
-            response_mask_ids = output.response_mask[: len(response_ids)]
-            pad_token_id = self.tokenizer.pad_token_id
+            prompt_ids = _to_python(output.prompt_ids)
+            response_ids = _to_python(output.response_ids)
+            response_mask_ids = _to_python(output.response_mask)
+            if prompt_ids and isinstance(prompt_ids[0], (list, tuple)):
+                prompt_ids = prompt_ids[0]
+            if response_ids and isinstance(response_ids[0], (list, tuple)):
+                response_ids = response_ids[0]
+            if response_mask_ids and isinstance(response_mask_ids[0], (list, tuple)):
+                response_mask_ids = response_mask_ids[0]
+            prompt_ids = list(prompt_ids[-self.rollout_config.prompt_length :])
+            response_ids = list(response_ids[: self.rollout_config.response_length])
+            response_mask_ids = list(response_mask_ids[: len(response_ids)])
+            pad_token_id = _to_python(self.tokenizer.pad_token_id)
+            if isinstance(pad_token_id, (list, tuple)):
+                pad_token_id = pad_token_id[0] if pad_token_id else 0
             if pad_token_id is None:
-                pad_token_id = self.tokenizer.eos_token_id or 0
+                pad_token_id = _to_python(self.tokenizer.eos_token_id) or 0
+                if isinstance(pad_token_id, (list, tuple)):
+                    pad_token_id = pad_token_id[0] if pad_token_id else 0
 
             prompt_pad = self.rollout_config.prompt_length - len(prompt_ids)
             response_pad = self.rollout_config.response_length - len(response_ids)
@@ -168,6 +371,8 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             if output.reward_score is not None:
                 field["rm_scores"] = _padded_rm_scores(response_mask, float(output.reward_score), len(response_ids))
             if "rollout_log_probs" in field:
+                if isinstance(field["rollout_log_probs"], torch.Tensor) and field["rollout_log_probs"].dim() > 1:
+                    field["rollout_log_probs"] = field["rollout_log_probs"].reshape(-1)
                 field["rollout_log_probs"] = _pad_or_trim_1d(
                     field["rollout_log_probs"],
                     self.rollout_config.response_length,
@@ -271,3 +476,17 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
         writer = JsonlWriter(path)
         for row in rows:
             writer.write({"run_id": runtime.run_id, **row})
+
+
+def _marti_vllm_sampling_params(config: Any, sampling_params: dict[str, Any], *, policy_group: str) -> dict[str, Any]:
+    """Attach the private policy marker only when a grouped client will consume it."""
+    params = dict(sampling_params)
+    trajweave = _get(config, "trajweave", {})
+    multi_actor = _get(trajweave, "multi_actor", {})
+    vllm = _get(multi_actor, "vllm", {})
+    if _as_bool(_get(vllm, "enabled", False)):
+        params["trajweave_policy_group"] = str(policy_group)
+    return params
+
+
+TrajWeaveVLLMAgentLoopWorkerTQ = ray.remote(_TrajWeaveVLLMAgentLoopWorkerTQ)

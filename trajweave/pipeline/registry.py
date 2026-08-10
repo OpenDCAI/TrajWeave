@@ -6,6 +6,7 @@ from trajweave.recipes.agentflow.plugin import AgentFlowRecipePlugin
 from trajweave.recipes.doctor_mas.plugin import DoctorMASRecipePlugin
 from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
 from trajweave.recipes.marti_mars2.plugin import MARTIMARS2RecipePlugin
+from trajweave.recipes.marti_mars2.stable_plugin import MARTIMARS2StableRecipePlugin
 from trajweave.recipes.maporl.plugin import MAPoRLRecipePlugin
 
 
@@ -15,6 +16,7 @@ def recipe_plugins() -> tuple[RecipePlugin, ...]:
         MAPoRLRecipePlugin(),
         AgentFlowRecipePlugin(),
         MARTIMARS2RecipePlugin(),
+        MARTIMARS2StableRecipePlugin(),
         DoctorMASRecipePlugin(),
     )
 

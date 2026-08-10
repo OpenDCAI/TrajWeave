@@ -3,6 +3,7 @@ from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
+from trajweave.orchestration.tree_search import TreeSearchController, TreeSearchProtocol
 
 __all__ = [
     "AgentFlowPlannerToolOrchestra",
@@ -10,4 +11,6 @@ __all__ = [
     "SearchAnswerOrchestra",
     "SolverVerifierOrchestra",
     "TeamContext",
+    "TreeSearchProtocol",
+    "TreeSearchController",
 ]

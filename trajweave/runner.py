@@ -80,6 +80,10 @@ def _output_failure_reason(output: dict[str, Any]) -> str | None:
     returncode = verl_launch.get("returncode")
     if status == "failed" or (isinstance(returncode, int) and returncode != 0):
         return f"VERL launch failed with status={status!r}, returncode={returncode!r}."
+    acceptance = output.get("marti_mars2_acceptance")
+    if isinstance(acceptance, dict) and acceptance.get("status") == "failed":
+        failed_checks = [name for name, passed in acceptance.get("checks", {}).items() if not passed]
+        return f"MARTI-MARS2 fidelity acceptance failed: {', '.join(failed_checks) or 'unknown check'}."
     return None
 
 

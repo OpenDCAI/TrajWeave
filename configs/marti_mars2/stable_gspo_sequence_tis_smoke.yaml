@@ -1,0 +1,13 @@
+recipe: marti_mars2.stable.gspo_sequence_tis
+mode: smoke
+
+stable:
+  loss: gspo
+  tis_level: sequence
+  tis_mode: truncate
+  tis_threshold: 2.0
+  overlong_buffer_len: 16
+  overlong_penalty_factor: 1.0
+
+acceptance:
+  enabled: false
