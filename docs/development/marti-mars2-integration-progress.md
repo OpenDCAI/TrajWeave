@@ -663,3 +663,51 @@ policy_b loss / grad_norm = -0.8702063560 / 4.81680727
 多步生命周期阻塞已经解除，Stage 1E 双 actor async 3-step 工程闭环正式完成。下一阶段可推进 checkpoint
 resume、stale/lag 注入压力测试、stable GPU 配方和 LiveCodeBench；该结果仍不等价于论文规模收敛或完整
 MARS² benchmark 复现。
+
+## 23. 2026-08-10 README 规范对齐、正式复验与推送状态
+
+按照仓库 README 的 paper recipe 接入规范，对 MARTI-MARS² 做了完整工程结构清理：
+
+- 新增通用 `CodeExecutionEnvironment` / `CodeTask`，将代码任务 observation、verifier 和 reward boundary 从
+  MARTI recipe/emitter 中分离；
+- 将 `TreeGroupCreditAllocator`、`TreePathCreditAllocator` 隔离到 `credit/marti_mars2/`，共享
+  `tree_path.py` 只保留通用树计算；
+- runner 改为只识别通用 `acceptance` 契约，MARTI 旧字段仅作为兼容别名；
+- 增加独立 MARTI VERL extension、AgentLoop backend registry 和通用 online-turn writer，移除
+  `runtime_config.py` 中的 MARTI recipe 特判；
+- multi-actor trainer 的 canonical mode 改为 `trajweave_multi_actor_sync`，旧
+  `trajweave_maporl_multi_actor_sync` 名称继续兼容 MAPoRL 配置；
+- VERL 正式运行结束后会将 `global_step_*` checkpoint 目录、`multi_actor_weight_sync.json` 和
+  `latest_checkpointed_iteration.txt` 登记到统一 artifact index，不复制大模型分片；
+- README 已更新为五条可运行 MAS 路径，并补齐 MARTI 的目录结构、运行命令和 Paper Recipe Catalog 条目。
+
+CPU/静态回归最终为 `156 passed, 4 warnings`；`compileall -q trajweave verl` 与 `git diff --check` 均通过。
+
+规范清理后的双卡 native vLLM async 3-step 复验 run：
+
+`/data/cxy-marti-stage1e-vllm-async/runs/20260810-122415-marti-mars2-stage1e-multi-agent-vllm-async-smoke-a9ca470b`
+
+该 run 使用 GPU 0、3，最终 `completed`、return code `0`、通用 `acceptance.status=passed`，并满足：
+
+```text
+training/global_step = 3
+policy_a actor_step / rollout_synced_step / policy_lag = 3 / 3 / 0
+policy_b actor_step / rollout_synced_step / policy_lag = 3 / 3 / 0
+weight_sync pending = 0
+checkpoint/global_step_3 已登记到 artifact_index.jsonl
+multi_actor_weight_sync.json 与 latest_checkpointed_iteration.txt 已登记
+```
+
+日志未出现 CUDA illegal memory access、EngineDeadError 或训练 Traceback。该次复验同时确认新的通用 trainer
+mode、通用 acceptance 和 checkpoint artifact 登记在真实双卡训练路径上生效。
+
+代码已提交并推送到 `origin/cxy-dev`：
+
+```text
+1d1b73c refactor: align MARTI integration with TrajWeave architecture
+b4857f3 docs: register MARTI recipe and acceptance status
+```
+
+当前结论：MARTI 已完成 README 所定义的工程接入与必要的 smoke/tiny/0.5B 双卡 native vLLM 多步验收。
+Qwen2.5-7B、Qwen3-8B 的正式训练评测、统一评测口径、公开权重和 paper-scale 复现尚未执行；已向学长确认
+是否等全部算法接入完成后再统一开展，等待回复期间不将这些项目作为当前 MARTI 工程接入的阻塞项。
