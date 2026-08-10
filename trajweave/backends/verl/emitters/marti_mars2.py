@@ -5,12 +5,19 @@ from typing import Any
 
 from trajweave.backends.verl.runtime_config import config_get
 from trajweave.backends.verl.schema import to_python
+from trajweave.envs import CodeExecutionEnvironment
 from trajweave.orchestration.tree_search import TreeSearchController
-from trajweave.verifiers import CodeVerifierAdapter, VerifierRequest, VerifierResult
+from trajweave.verifiers import VerifierResult
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
 class MARTIMARS2EmitterMixin:
+    def _cleanup_marti_mars2_state(self, uid: str) -> None:
+        if hasattr(self, "_trajweave_marti_tree_records"):
+            self._trajweave_marti_tree_records.pop(uid, None)
+        if hasattr(self, "_trajweave_marti_tree_controllers"):
+            self._trajweave_marti_tree_controllers.pop(uid, None)
+
     def _build_marti_mars2_outputs(
         self,
         prompt: dict[str, Any],
@@ -287,18 +294,13 @@ class MARTIMARS2EmitterMixin:
         candidate: str,
     ) -> VerifierResult:
         candidate_text = candidate.strip()
-        result = CodeVerifierAdapter().verify(
-            VerifierRequest(
-                task_id=self._marti_tree_id(prompt),
-                prompt=str(to_python(prompt.get("raw_prompt", prompt.get("uid", "")))),
-                candidate=candidate_text,
-                node_id=node_id,
-                parent_idx=None if parent_idx < 0 else parent_idx,
-                metadata={
-                    "reward_model": to_python(prompt.get("reward_model", {})) or {},
-                    "extra_info": to_python(prompt.get("extra_info", {})) or {},
-                },
-            )
+        environment = CodeExecutionEnvironment()
+        task = environment.from_record({key: to_python(value) for key, value in prompt.items()})
+        result = environment.verify_candidate(
+            task,
+            candidate_text,
+            node_id=node_id,
+            parent_idx=None if parent_idx < 0 else parent_idx,
         )
         controller_stop = self._marti_tree_controller(prompt).should_stop(success=result.success)
         return VerifierResult(

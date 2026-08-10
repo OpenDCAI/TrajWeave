@@ -97,7 +97,7 @@ class MARTIMARS2RecipePlugin:
             tracker=context.tracker,
         )
         if context.config.get("acceptance", {}).get("enabled", False):
-            output["marti_mars2_acceptance"] = audit_fidelity_training_run(
+            acceptance = audit_fidelity_training_run(
                 context.run_dir,
                 metric_summary=context.tracker.metric_aggregator.summarize(),
                 checkpoint_dir=checkpoint_dir_from_overrides(context.config, run_dir=context.run_dir),
@@ -108,6 +108,15 @@ class MARTIMARS2RecipePlugin:
                     context.config.get("acceptance", {}).get("require_multi_actor_weight_sync", False)
                 ),
             )
+            acceptance.setdefault("name", "marti_mars2_fidelity")
+            acceptance.setdefault(
+                "message",
+                "all configured fidelity checks passed"
+                if acceptance.get("status") == "passed"
+                else "one or more configured fidelity checks failed",
+            )
+            output["acceptance"] = acceptance
+            output["marti_mars2_acceptance"] = acceptance
         return output
 
 
@@ -145,7 +154,7 @@ def marti_mars2_summary(config: dict[str, Any]) -> dict[str, Any]:
         "tree_identity_required": True,
         "tis_hook": bool(mars2_cfg.get("enable_vllm_is_correction", False)),
         "training_backend": (
-            "trajweave_maporl_multi_actor_sync"
+            "trajweave_multi_actor_sync"
             if bool(mars2_cfg.get("multi_actor_training", len(agent_ids) > 1)) and len(agent_ids) > 1
             else "verl_v1_single_actor_wg"
         ),

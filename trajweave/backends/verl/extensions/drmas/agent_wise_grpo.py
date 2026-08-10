@@ -6,19 +6,7 @@ import numpy as np
 import torch
 
 from trajweave.backends.verl.extensions.common.hooks import AgentWiseGRPOHooks, extension_hooks_for_config
-from verl.workers.engine_workers import ActorRolloutRefWorker
-
-
-class TrajWeaveActorRolloutRefWorker(ActorRolloutRefWorker):
-    """Actor worker that installs TrajWeave import shims before VERL engine init."""
-
-    def __init__(self, *args, **kwargs):
-        from trajweave.backends.verl import _ensure_torch_dtensor_import_compat
-        from trajweave.backends.verl.extensions.common.nested_compat import install_worker_nested_tensor_compat
-
-        _ensure_torch_dtensor_import_compat()
-        install_worker_nested_tensor_compat()
-        super().__init__(*args, **kwargs)
+from trajweave.backends.verl.extensions.common.worker import TrajWeaveActorRolloutRefWorker
 
 
 def apply_drmas_agent_wise_grpo_patch(config: Any = None) -> None:

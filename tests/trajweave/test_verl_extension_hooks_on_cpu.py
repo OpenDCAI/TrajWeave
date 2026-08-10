@@ -7,10 +7,10 @@ from trajweave.backends.verl.extensions.common.hooks import (
     AgentFlowPlannerGRPOHooks,
     AgentWiseGRPOHooks,
     MAPoRLFullPPOHooks,
-    MARTIMARS2TreeGRPOHooks,
     PPOExtensionHooks,
     extension_hooks_for_config,
 )
+from trajweave.backends.verl.extensions.marti_mars2 import MARTIMARS2TreeGRPOHooks
 from verl.protocol import DataProto
 from verl.trainer.ppo.core_algos import AdvantageEstimator
 

@@ -62,6 +62,35 @@ def test_verl_dry_run_is_registered_as_run_artifact(tmp_path):
     assert any(row["name"] == "run_verl_ppo.sh" for row in artifact_rows)
 
 
+def test_runner_does_not_register_prepared_asset_metadata_as_missing_files(tmp_path):
+    result = run_from_config(
+        {
+            "recipe": "marti_mars2.single_mcts.fidelity",
+            "mode": "verl_train",
+            "run": {"root_dir": str(tmp_path), "name": "asset-metadata"},
+            "logging": {"console": False},
+            "prepare": {
+                "tiny_verl_assets": {
+                    "enabled": True,
+                    "output_dir": str(tmp_path / "assets"),
+                    "task_family": "controlled_code",
+                    "recipe_name": "asset_metadata_test",
+                    "train_size": 1,
+                    "val_size": 1,
+                    "overwrite": True,
+                }
+            },
+            "marti_mars2": {"max_num_nodes": 2, "agent_loop_backend": "synthetic_tq"},
+            "acceptance": {"enabled": False},
+            "verl": {"enabled": False, "execute": False},
+        }
+    )
+
+    rows = read_jsonl(Path(result["run_dir"]) / "artifacts" / "artifact_index.jsonl")
+    assert all(row["exists"] for row in rows)
+    assert not {"task_family", "recipe_name"}.intersection(row["name"] for row in rows)
+
+
 def test_verl_failed_launch_marks_run_failed(tmp_path):
     result = run_from_config(
         {
@@ -99,11 +128,12 @@ def test_verl_metric_parser_extracts_step_metrics():
     assert [event for event in events if event.name == "actor/pg_loss"][0].value == 0.25
 
 
-def test_marti_fidelity_acceptance_failure_marks_output_failed():
+def test_generic_recipe_acceptance_failure_marks_output_failed():
     reason = _output_failure_reason(
         {
             "verl_launch": {"status": "ok", "returncode": 0},
-            "marti_mars2_acceptance": {
+            "acceptance": {
+                "name": "custom_recipe_contract",
                 "status": "failed",
                 "checks": {"mixed_rewards_within_tree": False, "finite_nonzero_gradient": False},
             },
@@ -111,8 +141,18 @@ def test_marti_fidelity_acceptance_failure_marks_output_failed():
     )
 
     assert reason == (
-        "MARTI-MARS2 fidelity acceptance failed: mixed_rewards_within_tree, finite_nonzero_gradient."
+        "custom_recipe_contract acceptance failed: "
+        "failed checks: mixed_rewards_within_tree, finite_nonzero_gradient."
     )
+
+
+def test_legacy_recipe_specific_acceptance_field_does_not_control_runner_status():
+    assert _output_failure_reason(
+        {
+            "verl_launch": {"status": "ok", "returncode": 0},
+            "marti_mars2_acceptance": {"status": "failed", "checks": {"legacy": False}},
+        }
+    ) is None
 
 
 def test_trajectory_store_writes_online_turn_shards(tmp_path):

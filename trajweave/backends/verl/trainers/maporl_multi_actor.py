@@ -13,7 +13,7 @@ import torch
 import transfer_queue as tq
 from omegaconf import OmegaConf, open_dict
 
-from trajweave.backends.verl.extensions.drmas.agent_wise_grpo import TrajWeaveActorRolloutRefWorker
+from trajweave.backends.verl.extensions.common.worker import TrajWeaveActorRolloutRefWorker
 from trajweave.backends.verl.llm_routing import GroupedLLMServerClient
 from trajweave.backends.verl.routing import safe_worker_role_key, split_tq_batch_by_field
 from trajweave.backends.verl.schema import to_python
@@ -72,8 +72,9 @@ class _NullCheckpointEngineManager:
 
 
 @register_trainer("trajweave_maporl_multi_actor_sync")
-class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
-    """MAPoRL trainer that routes PPO actor work to multiple VERL actor worker groups."""
+@register_trainer("trajweave_multi_actor_sync")
+class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
+    """Algorithm-neutral trainer routing actor work to multiple worker groups."""
 
     def _setup(self):
         self._init_tokenizer()
@@ -86,19 +87,19 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         self._create_worker_groups()
         self._init_runtime_managers()
         self._load_checkpoint()
-        logger.info("TrajWeave MAPoRL multi-actor trainer initialized for groups: %s", sorted(self.actor_rollout_wgs))
+        logger.info("TrajWeave multi-actor trainer initialized for groups: %s", sorted(self.actor_rollout_wgs))
 
     def _init_multi_actor_specs(self) -> None:
         groups = _worker_groups_from_config(self.config)
         if len(groups) < 2:
-            raise ValueError("MAPoRL multi-actor trainer requires at least two worker groups.")
+            raise ValueError("TrajWeave multi-actor trainer requires at least two worker groups.")
         role_keys = [group.role_key for group in groups]
         if len(role_keys) != len(set(role_keys)):
-            raise ValueError(f"MAPoRL worker group ids produce duplicate safe role keys: {role_keys}")
+            raise ValueError(f"TrajWeave worker group ids produce duplicate safe role keys: {role_keys}")
         self.maporl_worker_group_specs = {group.group_id: group for group in groups}
         self.maporl_trainable_group_ids = [group.group_id for group in groups if group.trainable]
         if not self.maporl_trainable_group_ids:
-            raise ValueError("MAPoRL multi-actor trainer requires at least one trainable worker group.")
+            raise ValueError("TrajWeave multi-actor trainer requires at least one trainable worker group.")
         self.maporl_weight_sync = MultiActorWeightSyncContract(tuple(self.maporl_worker_group_specs))
         trajweave_cfg = self.config.get("trajweave", {}) or {}
         reward_range = trajweave_cfg.get("dynamic_filter_reward_range")
@@ -118,12 +119,12 @@ class TrajWeaveMAPoRLMultiActorSyncTrainer(PPOTrainerSync):
         }
         if self.use_critic and len(tokenizers) > 1:
             raise ValueError(
-                "MAPoRL multi-actor with shared critic requires identical tokenizer_path across worker groups. "
+                "TrajWeave multi-actor with shared critic requires identical tokenizer_path across worker groups. "
                 "Disable critic or use compatible tokenizer paths before enabling different-tokenizer training."
             )
         if self.use_reference_policy and not self.config.actor_rollout_ref.model.get("lora_adapter_path"):
             raise ValueError(
-                "MAPoRL multi-actor currently supports reference policy only when ref is inside actor. "
+                "TrajWeave multi-actor currently supports reference policy only when ref is inside actor. "
                 "Set algorithm.use_kl_in_reward=false for the current TrajWeave multi-actor path."
             )
 
@@ -693,3 +694,8 @@ def _namespace_rollout_replica_class(manager: Any, group_id: str) -> None:
         manager.rollout_replica_class,
         name_suffix=_safe_path_name(group_id),
     )
+
+
+# Backward-compatible import name. Existing MAPoRL configs keep their legacy
+# registration while new recipes use ``trajweave_multi_actor_sync``.
+TrajWeaveMAPoRLMultiActorSyncTrainer = TrajWeaveMultiActorSyncTrainer

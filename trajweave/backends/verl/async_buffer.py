@@ -1,4 +1,4 @@
-"""Per-policy trajectory ownership for asynchronous MARTI updates.
+"""Per-policy trajectory ownership for asynchronous multi-actor updates.
 
 This module is deliberately independent of TransferQueue's storage backend.  A
 trainer can feed completed tree records into :class:`PolicyBufferCoordinator`

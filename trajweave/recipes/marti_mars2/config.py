@@ -65,7 +65,7 @@ def build_marti_mars2_launch_overrides(
         base_overrides = _set_override(
             base_overrides,
             "trainer.v1.trainer_mode",
-            "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync",
+            "trainer.v1.trainer_mode=trajweave_multi_actor_sync",
         )
     configured_credit_mode = credit_cfg.get("mode")
     if configured_credit_mode is None:

@@ -44,15 +44,17 @@ def test_safe_worker_role_key_sanitizes_model_ids():
     assert safe_worker_role_key("qwen2.5/0.5b") == "maporl_actor_qwen2_5_0_5b"
 
 
-def test_trajweave_maporl_multi_actor_trainer_is_registered():
+def test_trajweave_multi_actor_trainer_registers_canonical_and_legacy_names():
     pytest.importorskip("transfer_queue")
     from trajweave.backends.verl.trainers import register_trajweave_trainers
     from verl.trainer.ppo.v1 import get_trainer_cls
 
     register_trajweave_trainers()
 
-    trainer_cls = get_trainer_cls("trajweave_maporl_multi_actor_sync")
-    assert trainer_cls.__name__ == "TrajWeaveMAPoRLMultiActorSyncTrainer"
+    trainer_cls = get_trainer_cls("trajweave_multi_actor_sync")
+    legacy_cls = get_trainer_cls("trajweave_maporl_multi_actor_sync")
+    assert trainer_cls.__name__ == "TrajWeaveMultiActorSyncTrainer"
+    assert legacy_cls is trainer_cls
 
 
 def test_marti_multi_actor_summary_selects_multi_actor_backend():
@@ -68,7 +70,7 @@ def test_marti_multi_actor_summary_selects_multi_actor_backend():
         }
     )
 
-    assert summary["training_backend"] == "trajweave_maporl_multi_actor_sync"
+    assert summary["training_backend"] == "trajweave_multi_actor_sync"
 
 
 def test_async_buffer_rows_preserve_tree_identity_and_rollout_versions():
