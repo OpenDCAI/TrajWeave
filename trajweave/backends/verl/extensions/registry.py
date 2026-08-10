@@ -64,10 +64,11 @@ def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.drmas import apply_drmas_agent_wise_grpo_patch
     from trajweave.backends.verl.extensions.gigpo import apply_gigpo_hierarchical_grpo_patch
     from trajweave.backends.verl.extensions.maporl import apply_maporl_full_ppo_patch, apply_maporl_single_model_patch
+    from trajweave.backends.verl.extensions.marti_mars2 import apply_marti_mars2_tree_grpo_patch
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
-        "trajweave_marti_mars2_tree_grpo": apply_drmas_agent_wise_grpo_patch,
+        "trajweave_marti_mars2_tree_grpo": apply_marti_mars2_tree_grpo_patch,
         "trajweave_agentflow_planner_grpo": apply_agentflow_planner_grpo_patch,
         "trajweave_comas_interaction_reinforce": apply_comas_interaction_reinforce_patch,
         "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,

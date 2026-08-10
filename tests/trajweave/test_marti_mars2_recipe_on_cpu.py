@@ -180,7 +180,7 @@ def test_marti_mars2_multi_agent_overrides_preserve_agent_policy_bindings():
     assert "+agent.model_sharing=false" in overrides
     assert '+agent.orchestra.marti_mars2.agent_ids=["generator","critic"]' in overrides
     assert '+agent.orchestra.marti_mars2.model_ids=["policy_a","policy_b"]' in overrides
-    assert "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync" in overrides
+    assert "trainer.v1.trainer_mode=trajweave_multi_actor_sync" in overrides
     assert "+trajweave.multi_actor.enabled=true" in overrides
     assert "+agent.worker_group_ids=[\"policy_a\",\"policy_b\"]" in overrides
 
@@ -227,7 +227,7 @@ def test_stage1e_native_vllm_async_smoke_preserves_launch_contract():
 
     overrides = build_marti_mars2_launch_overrides(config, config_path=str(config_path))
 
-    assert "trainer.v1.trainer_mode=trajweave_maporl_multi_actor_sync" in overrides
+    assert "trainer.v1.trainer_mode=trajweave_multi_actor_sync" in overrides
     assert "+trajweave.multi_actor.vllm.enabled=true" in overrides
     assert "+trajweave.async_buffer.enabled=true" in overrides
     assert "trainer.total_training_steps=3" in overrides

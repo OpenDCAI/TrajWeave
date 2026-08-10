@@ -37,11 +37,19 @@ class MARTIMARS2StableRecipePlugin:
             )
         if context.config.get("acceptance", {}).get("enabled", False):
             metrics = context.config.get("acceptance", {}).get("metrics", {}) or {}
-            output["stable_acceptance"] = stable_acceptance(
+            acceptance = stable_acceptance(
                 metrics=metrics,
                 require_two_actors=bool(context.config.get("acceptance", {}).get("require_two_actors", True)),
                 max_policy_lag=int(context.config.get("acceptance", {}).get("max_policy_lag", 1)),
             )
+            acceptance["name"] = "marti_mars2_stable"
+            acceptance["message"] = (
+                "all configured stability checks passed"
+                if acceptance.get("status") == "passed"
+                else "one or more configured stability checks failed"
+            )
+            output["acceptance"] = acceptance
+            output["stable_acceptance"] = acceptance
         return output
 
 

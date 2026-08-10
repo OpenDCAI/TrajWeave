@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from trajweave.backends.verl.agent_loops.registry import validate_agent_loop_backend
 
 @dataclass(frozen=True)
 class TrajWeaveAgentLoopRuntimeConfig:
@@ -80,23 +81,6 @@ class TrajWeaveAgentLoopRuntimeConfig:
         if self.dynamic_filter_reward_range is not None:
             values["trajweave.dynamic_filter_reward_range"] = str(list(self.dynamic_filter_reward_range))
         return {key: value for key, value in values.items() if value is not None}
-
-
-def validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
-    from trajweave.backends.verl.emitters.registry import supported_emitter_recipes
-
-    supported_recipes = supported_emitter_recipes()
-    if recipe and recipe not in supported_recipes:
-        raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
-    if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq", "vllm_marti_tq"}:
-        raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
-    if backend == "vllm_marti_tq" and recipe != "marti_mars2_single_mcts":
-        raise ValueError("vllm_marti_tq is currently implemented only for marti_mars2_single_mcts.")
-    if recipe and backend == "verl_tq":
-        raise ValueError(
-            "TrajWeave MASRL recipes require agent_loop_backend in {'synthetic_tq', 'hf_local_tq'}; "
-            "VERL native verl_tq does not emit agent_id/traj_uid/turn_id metadata required by agent-wise credit."
-        )
 
 
 def config_get(config: Any, key: str, default: Any = None) -> Any:

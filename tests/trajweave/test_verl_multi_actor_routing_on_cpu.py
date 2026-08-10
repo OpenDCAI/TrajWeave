@@ -83,7 +83,7 @@ def test_marti_multi_actor_summary_selects_multi_actor_backend():
         }
     )
 
-    assert summary["training_backend"] == "trajweave_maporl_multi_actor_sync"
+    assert summary["training_backend"] == "trajweave_multi_actor_sync"
 
 
 def test_async_buffer_rows_preserve_tree_identity_and_rollout_versions():

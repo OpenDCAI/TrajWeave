@@ -54,7 +54,8 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
             )
             if prepared_assets:
                 for name, path in prepared_assets.items():
-                    tracker.log_artifact(name=name, path=path, kind="prepared_asset")
+                    if _is_existing_asset_path(path):
+                        tracker.log_artifact(name=name, path=path, kind="prepared_asset")
             output = run_recipe(context)
             output = _enforce_runtime_identity(output, run_store=run_store)
             output = tracker.write_summary(output)
@@ -97,11 +98,28 @@ def _output_failure_reason(output: dict[str, Any]) -> str | None:
         if validation_error:
             return f"VERL training validation failed: {validation_error}"
         return f"VERL launch failed with status={status!r}, returncode={returncode!r}."
-    acceptance = output.get("marti_mars2_acceptance")
+    acceptance = output.get("acceptance")
+    legacy_marti_acceptance = not isinstance(acceptance, dict)
+    if legacy_marti_acceptance:
+        acceptance = output.get("marti_mars2_acceptance")
     if isinstance(acceptance, dict) and acceptance.get("status") == "failed":
         failed_checks = [name for name, passed in acceptance.get("checks", {}).items() if not passed]
-        return f"MARTI-MARS2 fidelity acceptance failed: {', '.join(failed_checks) or 'unknown check'}."
+        if legacy_marti_acceptance:
+            return f"MARTI-MARS2 fidelity acceptance failed: {', '.join(failed_checks) or 'unknown check'}."
+        name = str(acceptance.get("name") or "recipe")
+        message = str(acceptance.get("message") or "").strip()
+        detail = message or f"failed checks: {', '.join(failed_checks) or 'unknown check'}"
+        return f"{name} acceptance failed: {detail}."
     return None
+
+
+def _is_existing_asset_path(value: Any) -> bool:
+    if not isinstance(value, str | Path):
+        return False
+    try:
+        return Path(value).exists()
+    except OSError:
+        return False
 
 
 def _output_is_plan(output: dict[str, Any]) -> bool:

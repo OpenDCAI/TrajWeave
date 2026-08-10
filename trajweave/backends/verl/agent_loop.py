@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from pathlib import Path
 from typing import Any
 
 import ray
@@ -20,8 +18,10 @@ from trajweave.backends.verl.emitters import (
     MAPoRLEmitterMixin,
     MARTIMARS2EmitterMixin,
 )
-from trajweave.backends.verl.emitters.registry import build_recipe_outputs
+from trajweave.backends.verl.emitters.registry import build_recipe_outputs, cleanup_recipe_state
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
+from trajweave.backends.verl.agent_loops.common import write_online_turn_rows
+from trajweave.backends.verl.agent_loops.registry import load_agent_loop_worker
 from trajweave.backends.verl.runtime_config import (
     TrajWeaveAgentLoopRuntimeConfig,
 )
@@ -51,7 +51,6 @@ from trajweave.backends.verl.schema import (
 from trajweave.backends.verl.schema import (
     to_python as _to_python,
 )
-from trajweave.storage.jsonl import JsonlWriter
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopOutput,
     AgentLoopWorker,
@@ -101,10 +100,9 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.trajweave_runtime_config = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
-        if self.trajweave_runtime_config.agent_loop_backend in {"synthetic_tq", "hf_local_tq"}:
-            self.agent_loop_workers_class = TrajWeaveSyntheticAgentLoopWorkerTQ
-        if self.trajweave_runtime_config.agent_loop_backend == "vllm_marti_tq":
-            self.agent_loop_workers_class = TrajWeaveVLLMAgentLoopWorkerTQ
+        worker_class = load_agent_loop_worker(self.trajweave_runtime_config.agent_loop_backend)
+        if worker_class is not None:
+            self.agent_loop_workers_class = worker_class
         if self.trajweave_runtime_config.recipe:
             logger.info("TrajWeave AgentLoopManager loaded for %s", self.trajweave_runtime_config.recipe)
 
@@ -229,10 +227,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     for output in outputs
                 ):
                     break
-            if hasattr(self, "_trajweave_marti_tree_records"):
-                self._trajweave_marti_tree_records.pop(uid, None)
-            if hasattr(self, "_trajweave_marti_tree_controllers"):
-                self._trajweave_marti_tree_controllers.pop(uid, None)
+            cleanup_recipe_state(self, recipe=runtime.recipe, uid=uid)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception as exc:
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
@@ -354,8 +349,7 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
                 if self._trajweave_last_search_stop:
                     break
             prompt["raw_prompt"] = base_prompt
-            self._trajweave_marti_tree_records.pop(uid, None)
-            self._trajweave_marti_tree_controllers.pop(uid, None)
+            self._cleanup_marti_mars2_state(uid)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception:
             logger.exception("Native vLLM MARTI worker failed for uid=%s", uid)
@@ -624,23 +618,14 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
                 row.setdefault("metadata", {})["worker_group_batch_stats"] = dict(stats[group_id])
 
     def _write_online_turns(self, runtime: TrajWeaveAgentLoopRuntimeConfig, rows: list[dict[str, Any]]) -> None:
-        if not rows or not runtime.capture_online_turns or not runtime.run_dir or not runtime.run_id:
-            return
-        path = Path(str(runtime.run_dir)) / "trajectories" / "online_turns" / f"worker-{os.getpid()}.jsonl"
-        writer = JsonlWriter(path)
-        for row in rows:
-            writer.write({"run_id": runtime.run_id, **row})
+        write_online_turn_rows(runtime, rows)
 
 
 def _marti_vllm_sampling_params(config: Any, sampling_params: dict[str, Any], *, policy_group: str) -> dict[str, Any]:
-    """Attach the private policy marker only when a grouped client will consume it."""
-    params = dict(sampling_params)
-    trajweave = _get(config, "trajweave", {})
-    multi_actor = _get(trajweave, "multi_actor", {})
-    vllm = _get(multi_actor, "vllm", {})
-    if _as_bool(_get(vllm, "enabled", False)):
-        params["trajweave_policy_group"] = str(policy_group)
-    return params
+    """Compatibility export for the MARTI native-vLLM backend helper."""
+    from trajweave.backends.verl.agent_loops.marti_mars2 import vllm_sampling_params
+
+    return vllm_sampling_params(config, sampling_params, policy_group=policy_group)
 
 
 TrajWeaveVLLMAgentLoopWorkerTQ = ray.remote(_TrajWeaveVLLMAgentLoopWorkerTQ)

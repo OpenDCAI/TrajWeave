@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,12 @@ def maybe_run_verl_launch(
     output["verl_launch"] = launch_result
     if tracker is not None:
         tracker.log_verl_result(output["verl_launch"])
+        _register_verl_training_artifacts(
+            launch_overrides,
+            tracker=tracker,
+            launch_cwd=launch_config.cwd,
+            executed=launch_config.execute,
+        )
 
 
 def _with_runtime_env(env: dict[str, str], *, tracker: ExperimentTracker | None) -> dict[str, str]:
@@ -179,3 +186,58 @@ def _integer_override(overrides: tuple[str, ...], key: str) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _register_verl_training_artifacts(
+    overrides: tuple[str, ...],
+    *,
+    tracker: ExperimentTracker,
+    launch_cwd: str | None,
+    executed: bool,
+) -> None:
+    """记录 VERL checkpoint 及多 Actor 权重同步清单，不复制大文件。"""
+
+    if not executed:
+        return
+    configured = _override_value(overrides, "trainer.default_local_dir")
+    if not configured:
+        return
+    expanded = configured.replace("${oc.env:TRAJWEAVE_RUN_DIR}", str(tracker.run_dir))
+    checkpoint_root = Path(os.path.expandvars(expanded))
+    if not checkpoint_root.is_absolute():
+        checkpoint_root = Path(launch_cwd or Path.cwd()) / checkpoint_root
+    checkpoint_root = checkpoint_root.resolve()
+    if not checkpoint_root.exists():
+        return
+    for checkpoint_dir in sorted(path for path in checkpoint_root.glob("global_step_*") if path.is_dir()):
+        tracker.log_artifact(
+            name=f"checkpoint/{checkpoint_dir.name}",
+            path=checkpoint_dir,
+            kind="checkpoint",
+            metadata={"root": str(checkpoint_root)},
+        )
+        manifest = checkpoint_dir / "multi_actor_weight_sync.json"
+        if manifest.is_file():
+            tracker.log_artifact(
+                name=f"checkpoint/{checkpoint_dir.name}/multi_actor_weight_sync.json",
+                path=manifest,
+                kind="checkpoint_manifest",
+            )
+    latest = checkpoint_root / "latest_checkpointed_iteration.txt"
+    if latest.is_file():
+        tracker.log_artifact(
+            name="checkpoint/latest_checkpointed_iteration.txt",
+            path=latest,
+            kind="checkpoint_pointer",
+        )
+
+
+def _override_value(overrides: tuple[str, ...], key: str) -> str | None:
+    value = None
+    for item in overrides:
+        if "=" not in item:
+            continue
+        item_key, item_value = item.split("=", 1)
+        if item_key.lstrip("+") == key:
+            value = item_value.strip('"')
+    return value

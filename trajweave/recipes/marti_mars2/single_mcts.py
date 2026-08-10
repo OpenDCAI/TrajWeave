@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 
 from trajweave.backends.policy import PolicyRequest, PolicyResponse
 from trajweave.core import AgentSpec, AgentTurn, MultiAgentTrajectory, PolicyGroupSpec, TeamSpec, TreeTrajectory
 from trajweave.credit import TreeGroupCreditAllocator, TreePathCreditAllocator
+from trajweave.envs import CodeExecutionEnvironment, CodeTask
 from trajweave.orchestration import TreeSearchProtocol
 from trajweave.rollout.engine import RolloutResult
-from trajweave.verifiers import CallableVerifierAdapter, VerifierRequest
-
-
-@dataclass(frozen=True)
-class CodeTask:
-    task_id: str
-    prompt: str
-    rewards: tuple[float, ...]
+from trajweave.verifiers import CallableVerifierAdapter
 
 
 class _SmokePolicyBackend:
@@ -62,12 +55,12 @@ def default_code_tasks(max_num_nodes: int) -> list[CodeTask]:
         CodeTask(
             task_id="code-add-one",
             prompt="Implement add_one(x).",
-            rewards=tuple([1.0, 0.0] + [0.0] * (max_num_nodes - 2)),
+            node_rewards=tuple([1.0, 0.0] + [0.0] * (max_num_nodes - 2)),
         ),
         CodeTask(
             task_id="code-square",
             prompt="Implement square(x).",
-            rewards=tuple([1.0] * max_num_nodes),
+            node_rewards=tuple([1.0] * max_num_nodes),
         ),
     ]
 
@@ -77,6 +70,7 @@ def run_single_mcts_smoke(
 ) -> tuple[object, RolloutResult]:
     team = default_marti_mars2_team(max_num_nodes=max_num_nodes)
     policy_backend = _SmokePolicyBackend()
+    environment = CodeExecutionEnvironment()
     protocol = TreeSearchProtocol(max_num_nodes=max_num_nodes, initial_candidates=min(2, max_num_nodes))
     if credit_mode == "fidelity":
         credit_allocator = TreeGroupCreditAllocator()
@@ -90,7 +84,12 @@ def run_single_mcts_smoke(
         for task in default_code_tasks(max_num_nodes):
             tree_id = f"{task.task_id}:rollout-{rollout_idx}"
             verifier = CallableVerifierAdapter(
-                lambda request, rewards=task.rewards: _verify_smoke_candidate(request, rewards),
+                lambda request, task=task: environment.verify_candidate(
+                    task,
+                    request.candidate,
+                    node_id=request.node_id,
+                    parent_idx=request.parent_idx,
+                ),
                 name="deterministic_code_verifier",
             )
             tree = protocol.run(
@@ -98,7 +97,7 @@ def run_single_mcts_smoke(
                 prompt_id=task.task_id,
                 task=task,
                 team=team,
-                observation=task.prompt,
+                observation=environment.initial_observation(task),
                 policy_backend=policy_backend,
                 verifier=verifier,
             )
@@ -151,14 +150,3 @@ def run_single_mcts_smoke(
         dataproto_status="skipped",
     )
     return summary, RolloutResult(trajectories=trajectories, samples=samples)
-
-
-def _verify_smoke_candidate(request: VerifierRequest, rewards: tuple[float, ...]) -> dict[str, object]:
-    score = float(rewards[request.node_id])
-    return {
-        "score": score,
-        "success": score > 0.0,
-        "terminal": False,
-        "feedback": "passes deterministic tests" if score > 0.0 else "fails deterministic tests",
-        "verifier": "deterministic_code_verifier",
-    }

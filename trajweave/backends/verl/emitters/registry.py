@@ -9,6 +9,7 @@ class EmitterRoute:
     recipe: str
     synthetic_method: str
     hf_local_method: str
+    cleanup_method: str | None = None
 
     def method_name(self, *, use_hf_local: bool) -> str:
         return self.hf_local_method if use_hf_local else self.synthetic_method
@@ -49,6 +50,7 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         recipe="marti_mars2_single_mcts",
         synthetic_method="_build_marti_mars2_outputs",
         hf_local_method="_build_hf_marti_mars2_outputs",
+        cleanup_method="_cleanup_marti_mars2_state",
     ),
 }
 
@@ -82,3 +84,10 @@ def build_recipe_outputs(
         )
     method = getattr(worker, route.synthetic_method)
     return method(prompt, session_id=session_id)
+
+
+def cleanup_recipe_state(worker: Any, *, recipe: str | None, uid: str) -> None:
+    route = EMITTER_ROUTES.get(recipe or "doctor_mas_math")
+    if route is None or route.cleanup_method is None:
+        return
+    getattr(worker, route.cleanup_method)(uid)
