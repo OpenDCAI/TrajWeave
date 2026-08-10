@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路径：
+TrajWeave 现在接入了六个论文方向，对应七条可运行的 MASRL 路径：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -20,6 +20,7 @@ TrajWeave 现在接入了五个论文方向，对应六条可运行的 MASRL 路
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
 | GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
+| MARTI-MARS² Code      | multi-agent MCTS tree search and refinement  | tree-group credit、code verifier、native vLLM 多 Actor 和异步 buffer 已接入 |
 
 当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。
 
@@ -156,6 +157,7 @@ configs/                         按算法归档的 YAML 启动入口。
   agentflow/                     AgentFlow planner-tool 配置。
   gigpo/                         GiGPO solver-verifier step-credit 配置。
   comas/                         CoMAS peer-review interaction-reward 配置。
+  marti_mars2/                   MARTI-MARS² tree search、stable 和 native vLLM 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -173,6 +175,7 @@ trajweave/
     agentflow/                   AgentFlow planner/tool/verifier protocol。
     gigpo/                       GiGPO 的可验证 Solver/Frozen-Verifier protocol。
     comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
+    tree_search/                 MARTI-MARS² MCTS selection/expansion/refinement/termination protocol。
   credit/                        Reward propagation 和 credit assignment。
     common/                      可复用的 step grouping 和 discounted return。
     agentflow/                   Planner-only Flow-GRPO credit。
@@ -180,15 +183,18 @@ trajweave/
     maporl/                      MAPoRL score 和 bonus rules。
     gigpo/                       GiGPO episode + step hierarchical credit。
     comas/                       CoMAS score parser 和 interaction reward 真值表。
+    marti_mars2/                 MARTI fidelity tree-group 和 experimental tree-path credit。
   recipes/                       按论文隔离的可执行组合。
     doctor_mas/                  DrMAS Math/Search recipe。
     maporl/                      MAPoRL debate recipe。
     agentflow/                   AgentFlow planner-tool recipe。
     gigpo/                       GiGPO solver-verifier recipe。
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
+    marti_mars2/                 MARTI-MARS² recipe、acceptance、stable 和 eval contracts。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
+    verl/agent_loops/            AgentLoop backend registry、通用 turn writer 和 native MARTI backend。
     verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、CoMAS 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
@@ -204,6 +210,7 @@ trajweave/
     verl/extensions/agentflow/   AgentFlow planner-only GRPO hooks。
     verl/extensions/gigpo/       GiGPO hierarchical GRPO runtime extension。
     verl/extensions/comas/       CoMAS interaction REINFORCE advantage hook。
+    verl/extensions/marti_mars2/ MARTI tree-GRPO hooks 和 runtime extension entrypoint。
     verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
     verl/trainers/               通用多 Actor Trainer 和 MAPoRL 旧入口兼容层。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
@@ -314,6 +321,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/comas/peer_review_math_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marti_mars2/single_mcts_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -330,6 +340,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_verl_tiny.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marti_mars2/single_mcts_verl_tiny.yaml
 ```
 
 真实 Qwen2.5-0.5B 双卡回归入口：
@@ -352,6 +365,9 @@ CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
 
 CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
   --config configs/comas/peer_review_math_qwen05b_2gpu.yaml
+
+CUDA_VISIBLE_DEVICES=0,1 PYTHONPATH=. python -m trajweave.cli.run \
+  --config configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml
 ```
 
 这些配置包含本地模型路径。Contributor 在其他机器运行前，必须修改 YAML 中的 `model_path` 和 `tokenizer_path`，不能假设 `/data/workspace/liuzhou/models` 存在。
@@ -649,6 +665,20 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 当前状态    | 两个独立 Qwen2.5-0.5B-Instruct Actor 完成双卡 `2/2` step；48 条 turn、16 个 interaction，奖励约束违规数为 0，两组权重都实际更新并产生差异。 |
 | 主要配置    | `configs/comas/peer_review_math_smoke.yaml`, `configs/comas/peer_review_math_qwen05b_2gpu.yaml`。      |
 | 已知限制    | 当前真实训练 recipe 只接入 Math；受两卡资源限制用 2 Agent 验证，而原配置默认为 4 Agent；Coding/Science 的原始 prompt 已保留，但对应环境、评测和 paper-scale benchmark 尚未接入。 |
+
+### MARTI-MARS² Code
+
+| 字段        | 内容                                                        |
+| ----------- | ----------------------------------------------------------- |
+| 论文贡献    | 在多 Agent 树搜索中联合扩展、改写、验证与路径级 credit。 |
+| Environment | `CodeExecutionEnvironment`，使用可执行 test case 产生 verifier reward。 |
+| Orchestra   | `tree_search` protocol，显式记录 tree/node/parent/path 和终止状态。 |
+| Credit      | fidelity tree-group GRPO；parent/sibling/path shaping 只作为可选实验路径。 |
+| VERL 路径   | MARTI emitter -> native vLLM AgentLoop -> TransferQueue -> MARTI extension -> 通用多 Actor Trainer。 |
+| 推理流      | code task -> generator/critic 扩展树 -> verifier 执行 -> 继续搜索或停止。 |
+| 训练流      | node verifier reward -> tree identity grouping -> GRPO advantage -> 按 Worker Group 路由 -> Actor 更新与权重同步。 |
+| 主要配置    | `configs/marti_mars2/single_mcts_smoke.yaml`, `configs/marti_mars2/single_mcts_verl_tiny.yaml`, `configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml` |
+| 已知限制    | 当前是工程闭环验收，不代表已复现论文 benchmark 指标。 |
 
 ## 15. 贡献者规则
 
