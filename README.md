@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在有四条可运行的 MAS 路径：
+TrajWeave 现在有五条可运行的 MAS 路径：
 
 | 路径                  | MAS 形态                                      | 当前状态                                           |
 | --------------------- | --------------------------------------------- | -------------------------------------------------- |
@@ -18,6 +18,7 @@ TrajWeave 现在有四条可运行的 MAS 路径：
 | DrMAS Search          | verifier -> searcher -> answer                | smoke、VERL tiny train 已验证                      |
 | MAPoRL Debate Math    | multiple solver agents debate until consensus | smoke、VERL tiny、0.5B 双卡 multi-actor 已验证     |
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | smoke、VERL tiny train 已验证                      |
+| MARTI-MARS² Code      | multi-agent MCTS tree search and refinement    | smoke、VERL tiny、0.5B 双卡 native vLLM async 3-step 已验证 |
 
 最新的 TrajWeave runtime 会把一次训练 run 持久化到统一目录：
 
@@ -38,6 +39,7 @@ outputs/trajweave/runs/RUN_ID/
   artifacts/
     artifact_index.jsonl
     run_verl_ppo.sh
+    # index 同时登记 checkpoint 目录、latest pointer 和 multi-actor sync manifest
   trajectories/
     online_turns/
       worker-PID.jsonl
@@ -111,6 +113,7 @@ configs/                         按算法归档的 YAML 启动入口。
   drmas/                         DrMAS Math/Search 的 smoke、tiny、VERL 配置。
   maporl/                        MAPoRL debate 配置。
   agentflow/                     AgentFlow planner-tool 配置。
+  marti_mars2/                   MARTI-MARS² tree search、stable 和 native vLLM 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -121,24 +124,30 @@ trajweave/
   envs/                          任务环境、observation、tool 和 final reward。
     math/                        数学任务 schema 和 evaluator。
     search/                      搜索任务 schema、retrieval tool 和 evaluator。
+    code/                        代码任务、test-case verifier boundary 和 final reward。
   orchestration/                 多智能体 protocol 和 message flow。
     solver_verifier/             固定 Solver -> Verifier loop。
     search_answer/               Verifier -> Searcher -> Answer workflow。
     maporl_debate/               MAPoRL debate 和 consensus protocol。
     agentflow/                   AgentFlow planner/tool/verifier protocol。
+    tree_search/                 MCTS selection/expansion/refinement/termination protocol。
   credit/                        Reward propagation 和 credit assignment。
     agentflow/                   Planner-only Flow-GRPO credit。
     doctor_mas/                  Agent-wise DrMAS normalization。
     maporl/                      MAPoRL score 和 bonus rules。
+    marti_mars2/                 MARTI fidelity tree-group 和 experimental tree-path credit。
   rollout/                       离线 rollout engine。
   recipes/                       论文专属 recipe package。
+    marti_mars2/                 MARTI-MARS² recipe、acceptance、stable 和 eval contracts。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/emitters/registry.py    Recipe -> AgentLoop emitter routing table。
+    verl/agent_loops/            AgentLoop backend registry、通用 turn writer 和 native MARTI backend。
     verl/extensions/common/      共享 hook 和 nested TransferQueue compatibility。
     verl/extensions/drmas/       DrMAS agent-wise GRPO runtime patch。
     verl/extensions/maporl/      MAPoRL PPO runtime patch。
     verl/trainers/               TrajWeave 注册的 VERL V1 trainers。
     verl/extensions/agentflow/   AgentFlow planner-only GRPO runtime patch。
+    verl/extensions/marti_mars2/ MARTI tree-GRPO hooks 和 runtime extension entrypoint。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -174,9 +183,9 @@ verl/                            保留的 VERL backend。
 
 | 概念          | 回答的问题                                      | 当前例子                                                                 |
 | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------ |
-| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`               |
-| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra` |
-| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner` |
+| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`, `CodeExecutionEnvironment` |
+| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `TreeSearchProtocol` |
+| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `TreeGroupCreditAllocator` |
 
 不要假设“一篇论文等于一个环境”。例如 DrMAS 可以跑 Math，也可以跑 Search。真正决定组合关系的是 paper recipe。
 
@@ -225,6 +234,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marti_mars2/single_mcts_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -241,6 +253,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/agentflow/flow_grpo_verl_tiny.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marti_mars2/single_mcts_verl_tiny.yaml
 ```
 
 0.5B 资源验证配置：
@@ -249,9 +264,12 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 configs/maporl/debate_math_qwen05b_2gpu.yaml
 configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml
 configs/maporl/debate_math_worker_groups_hetero.yaml
+configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml
 ```
 
-`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups，并使用 TrajWeave trainer mode `trajweave_maporl_multi_actor_sync`。它是当前验证独立 MAPoRL actor worker groups 双卡训练的主要入口。
+`configs/maporl/debate_math_multi_actor_qwen05b_2gpu.yaml` 会启动两个 trainable MAPoRL worker groups；旧 trainer mode `trajweave_maporl_multi_actor_sync` 作为兼容别名保留。新 recipe 应使用通用 mode `trajweave_multi_actor_sync`。
+
+MARTI-MARS² 的正式资源门槛配置是 `configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml`：两张 GPU、两个独立 actor worker group、native vLLM rollout、async buffer，连续训练 3 step。验收还要求两组 actor/rollout step 同步、policy lag 为 0、pending group 为 0，并检查 checkpoint、metrics 与 online turn JSONL。
 
 ## 9. MAS 数据流 GIF
 
@@ -438,6 +456,21 @@ git diff --check
 | 当前状态    | smoke 和 VERL tiny train 已验证                             |
 | 主要配置    | `agentflow/flow_grpo_smoke.yaml`, `agentflow/flow_grpo_verl_tiny.yaml` |
 | 已知限制    | 还没有验证外部工具和 paper-scale LLM training。             |
+
+### MARTI-MARS² Code
+
+| 字段        | 内容                                                        |
+| ----------- | ----------------------------------------------------------- |
+| 论文贡献    | 多智能体 MCTS 代码搜索、节点 verifier reward 和树级 GRPO 训练。 |
+| Environment | `CodeExecutionEnvironment`                                  |
+| Orchestra   | `TreeSearchProtocol` / `TreeSearchController`               |
+| Credit      | fidelity `TreeGroupCreditAllocator`；experimental `TreePathCreditAllocator` |
+| VERL 路径   | MARTI emitter、独立 MARTI extension、native vLLM AgentLoop backend，加通用 `trajweave_multi_actor_sync` trainer |
+| 推理流      | code task -> initial candidates -> select/expand/refine -> verifier -> stop or continue |
+| 训练流      | node verifier reward -> tree-group credit -> route by `worker_group` -> per-actor GRPO update -> rollout weight sync |
+| 当前状态    | smoke、VERL tiny、0.5B 双卡 native vLLM async 3-step 已验证 |
+| 主要配置    | `marti_mars2/single_mcts_smoke.yaml`, `marti_mars2/single_mcts_verl_tiny.yaml`, `marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml` |
+| 已知限制    | PRIME 完整路径仍依赖可选 `pyext`；稳定 GPU 长跑、LiveCodeBench 正式评测、公开权重和 paper-scale 模型训练尚未完成。 |
 
 ## 15. 贡献者规则
 
