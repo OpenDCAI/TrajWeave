@@ -45,6 +45,11 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         synthetic_method="_build_comas_peer_review_outputs",
         hf_local_method="_build_hf_comas_peer_review_outputs",
     ),
+    "marti_mars2_single_mcts": EmitterRoute(
+        recipe="marti_mars2_single_mcts",
+        synthetic_method="_build_marti_mars2_outputs",
+        hf_local_method="_build_hf_marti_mars2_outputs",
+    ),
 }
 
 

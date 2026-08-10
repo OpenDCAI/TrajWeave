@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -6,6 +7,7 @@ from trajweave.backends.verl.extensions.common.hooks import (
     AgentFlowPlannerGRPOHooks,
     AgentWiseGRPOHooks,
     MAPoRLFullPPOHooks,
+    MARTIMARS2TreeGRPOHooks,
     PPOExtensionHooks,
     extension_hooks_for_config,
 )
@@ -306,3 +308,80 @@ def test_agentflow_hook_delegates_advantage_to_fallback():
 
     assert result == {"ok": True}
     assert calls[0]["batch_keys"] == ["responses"]
+
+
+def test_marti_mars2_fidelity_hook_keeps_raw_verifier_rewards():
+    data = DataProto.from_dict(
+        tensors={
+            "token_level_rewards": torch.tensor([[1.0], [0.0]], dtype=torch.float32),
+            "response_mask": torch.ones(2, 1, dtype=torch.long),
+        },
+        non_tensors={
+            "uid": np.array(["prompt", "prompt"], dtype=object),
+            "tree_id": np.array(["tree-0", "tree-0"], dtype=object),
+            "prompt_id": np.array(["prompt-0", "prompt-0"], dtype=object),
+            "node_id": np.array([0, 1], dtype=object),
+            "parent_idx": np.array([-1, -1], dtype=object),
+            "path": np.array([(0,), (1,)], dtype=object),
+        },
+    )
+
+    hooks = MARTIMARS2TreeGRPOHooks()
+    result = hooks.process_rewards(data)
+
+    assert result.batch["token_level_rewards"].flatten().tolist() == pytest.approx([1.0, 0.0])
+    assert result.non_tensor_batch["parent_sibling_reward"].tolist() == pytest.approx([1.0, 0.0])
+    assert result.non_tensor_batch["path_return"].tolist() == pytest.approx([1.0, 0.0])
+    assert isinstance(
+        extension_hooks_for_config({"trajweave": {"credit_allocator": "marti_mars2_tree_path_grpo"}}),
+        MARTIMARS2TreeGRPOHooks,
+    )
+
+
+def test_marti_mars2_experimental_hook_applies_tree_reward_shaping():
+    data = DataProto.from_dict(
+        tensors={
+            "token_level_rewards": torch.tensor([[1.0], [0.0]], dtype=torch.float32),
+            "response_mask": torch.ones(2, 1, dtype=torch.long),
+        },
+        non_tensors={
+            "uid": np.array(["prompt", "prompt"], dtype=object),
+            "tree_id": np.array(["tree-0", "tree-0"], dtype=object),
+            "prompt_id": np.array(["prompt-0", "prompt-0"], dtype=object),
+            "node_id": np.array([0, 1], dtype=object),
+            "parent_idx": np.array([-1, -1], dtype=object),
+            "path": np.array([(0,), (1,)], dtype=object),
+        },
+    )
+
+    hooks = MARTIMARS2TreeGRPOHooks(credit_mode="experimental")
+    result = hooks.process_rewards(data)
+
+    assert result.batch["token_level_rewards"].flatten().tolist() == pytest.approx([1.3, -0.3])
+    assert result.non_tensor_batch["parent_sibling_reward"].tolist() == pytest.approx([1.3, -0.3])
+
+
+def test_marti_mars2_hook_applies_discounted_parent_path_credit():
+    data = DataProto.from_dict(
+        tensors={
+            "token_level_rewards": torch.tensor([[1.0], [0.0], [0.0]], dtype=torch.float32),
+            "response_mask": torch.ones(3, 1, dtype=torch.long),
+        },
+        non_tensors={
+            "uid": np.array(["prompt"] * 3, dtype=object),
+            "tree_id": np.array(["tree-0"] * 3, dtype=object),
+            "prompt_id": np.array(["prompt-0"] * 3, dtype=object),
+            "node_id": np.array([0, 1, 2], dtype=object),
+            "parent_idx": np.array([-1, -1, 0], dtype=object),
+            "path": np.array([(0,), (1,), (0, 2)], dtype=object),
+        },
+    )
+
+    result = MARTIMARS2TreeGRPOHooks(credit_mode="experimental").process_rewards(data)
+    metrics = {}
+    MARTIMARS2TreeGRPOHooks(credit_mode="experimental").update_metrics(result, metrics, stage="advantage")
+
+    assert result.non_tensor_batch["parent_sibling_reward"].tolist() == pytest.approx([1.3, -0.3, -0.3])
+    assert result.non_tensor_batch["path_return"].tolist() == pytest.approx([1.3, -0.3, 0.09])
+    assert metrics["trajweave/marti_mars2/parent_sibling_reward/mean"] == pytest.approx(0.2333333333)
+    assert metrics["trajweave/marti_mars2/path_return/mean"] == pytest.approx(0.3633333333)

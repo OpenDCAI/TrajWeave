@@ -140,6 +140,58 @@ class HFLocalGenerationMixin:
             response_ids = self._encode_text(response_text)
         return [int(token_id) for token_id in response_ids[: self.rollout_config.response_length]]
 
+    def _generate_local_response_with_logprobs(
+        self,
+        prompt_ids: list[int],
+        *,
+        policy_group: str = "shared",
+    ) -> tuple[list[int], list[float]]:
+        model = self._local_model(policy_group=policy_group)
+        tokenizer = self._local_tokenizer(policy_group=policy_group)
+        if tokenizer is not self.tokenizer:
+            raise ValueError("Rollout logprob capture requires the rollout and policy tokenizers to match.")
+        device = next(model.parameters()).device
+        input_ids = self._local_prompt_ids(prompt_ids, policy_group=policy_group, tokenizer=tokenizer)
+        input_ids = torch.tensor([input_ids[-self.rollout_config.prompt_length :]], dtype=torch.long, device=device)
+        attention_mask = torch.ones_like(input_ids)
+        sampling = self._local_sampling_kwargs()
+        with torch.no_grad():
+            output = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=self.rollout_config.response_length,
+                **sampling,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id or 0,
+                eos_token_id=tokenizer.eos_token_id,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+        response_ids = output.sequences[0, input_ids.shape[-1] :].detach().cpu().tolist()
+        if not response_ids:
+            response_ids = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
+        logprobs = []
+        for token_id, scores in zip(response_ids, output.scores, strict=False):
+            token_logprobs = torch.log_softmax(scores[0].float(), dim=-1)
+            logprobs.append(float(token_logprobs[int(token_id)].detach().cpu().item()))
+        if len(logprobs) < len(response_ids):
+            logprobs.extend([0.0] * (len(response_ids) - len(logprobs)))
+        return [int(token_id) for token_id in response_ids], logprobs
+
+    def _local_sampling_kwargs(self) -> dict[str, Any]:
+        rollout = getattr(self, "rollout_config", None)
+        do_sample = bool(getattr(rollout, "do_sample", False))
+        if not do_sample:
+            return {"do_sample": False}
+        sampling = {
+            "do_sample": True,
+            "temperature": float(getattr(rollout, "temperature", 1.0)),
+            "top_p": float(getattr(rollout, "top_p", 1.0)),
+        }
+        top_k = int(getattr(rollout, "top_k", -1))
+        if top_k > 0:
+            sampling["top_k"] = top_k
+        return sampling
+
     def _local_model(self, *, policy_group: str = "shared"):
         if not hasattr(self, "_trajweave_local_models"):
             self._trajweave_local_models = {}

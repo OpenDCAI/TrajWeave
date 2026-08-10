@@ -38,6 +38,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
         return ("trajweave_maporl_single_model",)
     if credit_allocator == "drmas_agent_wise_grpo" or recipe in {"doctor_mas_math", "doctor_mas_search"}:
         return ("drmas_agent_wise_grpo",)
+    if credit_allocator in {"marti_mars2_fidelity_group_grpo", "marti_mars2_tree_path_grpo"} or recipe == "marti_mars2_single_mcts":
+        return ("trajweave_marti_mars2_tree_grpo",)
     return ()
 
 
@@ -65,6 +67,7 @@ def _registry() -> dict[str, RuntimeExtension]:
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
+        "trajweave_marti_mars2_tree_grpo": apply_drmas_agent_wise_grpo_patch,
         "trajweave_agentflow_planner_grpo": apply_agentflow_planner_grpo_patch,
         "trajweave_comas_interaction_reinforce": apply_comas_interaction_reinforce_patch,
         "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,

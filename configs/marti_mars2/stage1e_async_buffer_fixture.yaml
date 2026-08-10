@@ -1,0 +1,11 @@
+recipe: marti_mars2.single_mcts.fidelity
+mode: smoke
+
+marti_mars2:
+  multi_actor_training: true
+  agent_ids: [generator, critic]
+  model_ids: [policy_a, policy_b]
+  max_policy_lag: 1
+  buffer_min_batch_size: 1
+  dynamic_filter_reward_range: [0.0, 1.0]
+  async_fixture: true

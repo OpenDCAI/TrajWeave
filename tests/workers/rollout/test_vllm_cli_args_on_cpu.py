@@ -189,6 +189,27 @@ class TestVllmColocateZmqHandle:
 
         assert handle == "ipc:///tmp/rl-colocate-zmq-job-123-replica-2-rank-3.sock"
 
+    def test_zmq_handle_includes_multi_actor_name_suffix(self, monkeypatch):
+        parallel_config = SimpleNamespace(
+            tensor_parallel_size=1,
+            data_parallel_size=1,
+            data_parallel_size_local=1,
+            data_parallel_rank_local=0,
+        )
+        worker = SimpleNamespace(
+            local_rank=0,
+            model_runner=SimpleNamespace(
+                vllm_config=SimpleNamespace(parallel_config=parallel_config),
+            ),
+        )
+        monkeypatch.setenv("VERL_REPLICA_RANK", "0")
+        monkeypatch.setenv("VERL_REPLICA_NAME_SUFFIX", "policy_a")
+        monkeypatch.setenv("VERL_RAY_JOB_ID", "job-123")
+
+        handle = vLLMColocateWorkerExtension._get_zmq_handle(worker)
+
+        assert handle == "ipc:///tmp/rl-colocate-zmq-job-123-replica-0_policy_a-rank-0.sock"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

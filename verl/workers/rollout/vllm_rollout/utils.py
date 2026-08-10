@@ -348,11 +348,16 @@ class vLLMColocateWorkerExtension:
         side and avoid cross-job collisions on shared hosts.
         """
         replica_rank = os.environ.get("VERL_REPLICA_RANK", "0")
+        name_suffix = os.environ.get("VERL_REPLICA_NAME_SUFFIX", "")
+        rendered_suffix = f"_{name_suffix}" if name_suffix else ""
         job_id = os.environ.get("VERL_RAY_JOB_ID", "0")
         vllm_config = getattr(self.model_runner, "vllm_config", None)
         parallel_config = getattr(vllm_config, "parallel_config", None)
         local_rank = _resolve_vllm_weight_sync_local_rank(self.local_rank, parallel_config)
-        return f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{replica_rank}-rank-{local_rank}.sock"
+        return (
+            f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{replica_rank}"
+            f"{rendered_suffix}-rank-{local_rank}.sock"
+        )
 
 
 class SuppressSignalInThread:

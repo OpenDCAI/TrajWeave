@@ -19,6 +19,9 @@ class TrajWeaveAgentLoopRuntimeConfig:
     run_dir: str | None = None
     capture_online_turns: bool = False
     turn_padding_multiple: int = 1
+    max_policy_lag: int = 1
+    buffer_min_batch_size: int = 1
+    dynamic_filter_reward_range: tuple[float, float] | None = None
 
     @classmethod
     def from_verl_config(cls, config: Any) -> TrajWeaveAgentLoopRuntimeConfig:
@@ -51,6 +54,9 @@ class TrajWeaveAgentLoopRuntimeConfig:
                     )
                 ),
             ),
+            max_policy_lag=int(config_get(trajweave, "max_policy_lag", 1)),
+            buffer_min_batch_size=int(config_get(trajweave, "buffer_min_batch_size", 1)),
+            dynamic_filter_reward_range=_reward_range(config_get(trajweave, "dynamic_filter_reward_range", None)),
         )
 
     def as_overrides(self) -> dict[str, str]:
@@ -68,7 +74,11 @@ class TrajWeaveAgentLoopRuntimeConfig:
             "trajweave.run_dir": self.run_dir,
             "trajweave.capture_online_turns": str(self.capture_online_turns).lower(),
             "trajweave.turn_padding_multiple": str(self.turn_padding_multiple),
+            "trajweave.max_policy_lag": str(self.max_policy_lag),
+            "trajweave.buffer_min_batch_size": str(self.buffer_min_batch_size),
         }
+        if self.dynamic_filter_reward_range is not None:
+            values["trajweave.dynamic_filter_reward_range"] = str(list(self.dynamic_filter_reward_range))
         return {key: value for key, value in values.items() if value is not None}
 
 
@@ -78,8 +88,10 @@ def validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
     supported_recipes = supported_emitter_recipes()
     if recipe and recipe not in supported_recipes:
         raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
-    if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:
+    if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq", "vllm_marti_tq"}:
         raise ValueError(f"Unsupported TrajWeave AgentLoop backend: {backend}")
+    if backend == "vllm_marti_tq" and recipe != "marti_mars2_single_mcts":
+        raise ValueError("vllm_marti_tq is currently implemented only for marti_mars2_single_mcts.")
     if recipe and backend == "verl_tq":
         raise ValueError(
             "TrajWeave MASRL recipes require agent_loop_backend in {'synthetic_tq', 'hf_local_tq'}; "
@@ -129,3 +141,16 @@ def _default_turn_padding_multiple(recipe: str | None) -> int:
         "agentflow_planner_tool": 4,
         "gigpo_solver_verifier_math": 2,
     }.get(str(recipe), 1)
+
+
+def _reward_range(value: Any) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [part.strip() for part in value.split(",")]
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("trajweave.dynamic_filter_reward_range must contain [lower, upper]")
+    result = (float(value[0]), float(value[1]))
+    if result[0] >= result[1]:
+        raise ValueError("dynamic_filter_reward_range lower must be smaller than upper")
+    return result

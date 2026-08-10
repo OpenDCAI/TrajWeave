@@ -89,6 +89,41 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         allowed_modes=("smoke", "verl_train", "verl_plan", "marti_eval"),
         aliases=("marti_mars2_single_mcts", "marti-mars2-single-mcts", "mars2.single_mcts"),
     ),
+    RecipeDefinition(
+        name="marti_mars2.single_mcts.fidelity",
+        family="marti_mars2",
+        task="code",
+        runtime_recipe="marti_mars2_single_mcts",
+        aliases=("marti_mars2_fidelity", "marti-mars2-fidelity"),
+    ),
+    RecipeDefinition(
+        name="marti_mars2.vanilla_grpo.baseline",
+        family="marti_mars2",
+        task="code",
+        runtime_recipe="marti_mars2_single_mcts",
+        aliases=("marti_mars2_vanilla_grpo", "marti-mars2-vanilla-grpo"),
+    ),
+    RecipeDefinition(
+        name="marti_mars2.single_mcts.tree_credit_experimental",
+        family="marti_mars2",
+        task="code",
+        runtime_recipe="marti_mars2_single_mcts",
+        aliases=("marti_mars2_tree_credit_experimental", "marti-mars2-tree-credit-experimental"),
+    ),
+    RecipeDefinition(
+        name="marti_mars2.stable.gspo_token_tis",
+        family="marti_mars2_stable",
+        task="code",
+        runtime_recipe="marti_mars2_stable",
+        aliases=("marti_mars2_stable", "mars2.stable.token"),
+    ),
+    RecipeDefinition(
+        name="marti_mars2.stable.gspo_sequence_tis",
+        family="marti_mars2_stable",
+        task="code",
+        runtime_recipe="marti_mars2_stable",
+        aliases=("mars2.stable.sequence",),
+    ),
 )
 
 

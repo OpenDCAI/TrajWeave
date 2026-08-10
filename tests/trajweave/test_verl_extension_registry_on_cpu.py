@@ -22,3 +22,12 @@ def test_verl_extensions_auto_select_gigpo_from_recipe_and_credit():
     assert _extension_names({"trajweave": {"credit_allocator": "gigpo_hierarchical_grpo"}}) == (
         "trajweave_gigpo_hierarchical_grpo",
     )
+
+
+def test_verl_extensions_auto_select_marti_mars2_tree_grpo():
+    assert _extension_names({"trajweave": {"recipe": "marti_mars2_single_mcts"}}) == (
+        "trajweave_marti_mars2_tree_grpo",
+    )
+    assert _extension_names({"trajweave": {"credit_allocator": "marti_mars2_fidelity_group_grpo"}}) == (
+        "trajweave_marti_mars2_tree_grpo",
+    )

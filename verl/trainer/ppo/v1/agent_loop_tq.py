@@ -172,6 +172,13 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
 
             keys.append(f"{uid}_{session_id}_{i}")
             field = output.as_dict()
+            # Expose agent-loop extension fields at the top level so tree
+            # grouping/credit hooks can consume them from the TransferQueue
+            # batch.  Native VERL keeps them nested under ``extra_fields``.
+            extra_fields = field.pop("extra_fields", {}) or {}
+            for key, value in extra_fields.items():
+                field.setdefault(key, value)
+            field["extra_fields"] = extra_fields
             field.update(kwargs)
             # do not store raw image/video
             field.pop("multi_modal_data", None)
@@ -196,6 +203,13 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
                     "min_global_steps": field["extra_fields"].get("min_global_steps"),
                     # max_global_steps: end generation model weights version of this trajectory
                     "max_global_steps": field["extra_fields"].get("max_global_steps"),
+                    "rollout_policy_step": field["extra_fields"].get(
+                        "rollout_policy_step", field["extra_fields"].get("policy_step", kwargs.get("global_steps", 0))
+                    ),
+                    "rollout_global_step": field["extra_fields"].get(
+                        "rollout_global_step", kwargs.get("global_steps", 0)
+                    ),
+                    "policy_group": field["extra_fields"].get("policy_group", field["extra_fields"].get("worker_group")),
                 }
             )
 

@@ -3,7 +3,7 @@ import stat
 from pathlib import Path
 
 from trajweave.metrics import parse_verl_console_metrics
-from trajweave.runner import run_from_config
+from trajweave.runner import _output_failure_reason, run_from_config
 from trajweave.runtime import ExperimentTracker
 from trajweave.storage import RunStore, RunStoreConfig, TrajectoryStore
 
@@ -127,6 +127,22 @@ def test_verl_metric_parser_extracts_step_metrics():
     assert {event.name for event in events} == {"actor/pg_loss", "actor/grad_norm", "critic/score/mean"}
     assert {event.step for event in events} == {1}
     assert [event for event in events if event.name == "actor/pg_loss"][0].value == 0.25
+
+
+def test_marti_fidelity_acceptance_failure_marks_output_failed():
+    reason = _output_failure_reason(
+        {
+            "verl_launch": {"status": "ok", "returncode": 0},
+            "marti_mars2_acceptance": {
+                "status": "failed",
+                "checks": {"mixed_rewards_within_tree": False, "finite_nonzero_gradient": False},
+            },
+        }
+    )
+
+    assert reason == (
+        "MARTI-MARS2 fidelity acceptance failed: mixed_rewards_within_tree, finite_nonzero_gradient."
+    )
 
 
 def test_trajectory_store_writes_online_turn_shards(tmp_path):

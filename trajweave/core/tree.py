@@ -24,6 +24,9 @@ class SearchNode:
     advantage: float | None = None
     path: tuple[int, ...] = ()
     is_terminal: bool = False
+    rollout_policy_step: int | None = None
+    rollout_global_step: int | None = None
+    policy_lag: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
