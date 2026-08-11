@@ -17,8 +17,22 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
 
 
 def recipe_name(config: dict[str, Any]) -> str:
-    return str(config.get("recipe", config.get("run", {}).get("recipe", "doctor_mas_math")))
+    value = _required_config_value(config, "recipe")
+    return str(value)
 
 
 def mode_name(config: dict[str, Any]) -> str:
-    return str(config.get("mode", config.get("run", {}).get("mode", "smoke")))
+    value = _required_config_value(config, "mode")
+    return str(value)
+
+
+def _required_config_value(config: dict[str, Any], key: str) -> Any:
+    run_config = config.get("run", {})
+    if run_config is None:
+        run_config = {}
+    if not isinstance(run_config, dict):
+        raise ValueError("run config must be a mapping.")
+    value = config.get(key, run_config.get(key))
+    if value is None or not str(value).strip():
+        raise ValueError(f"Config must explicitly define a non-empty {key!r}.")
+    return value

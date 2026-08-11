@@ -14,9 +14,11 @@ class ATGRPORecipePlugin:
         return context.recipe_definition.family == "atgrpo"
 
     def run(self, context: RunContext) -> dict[str, Any]:
-        if context.mode == "verl_train":
+        if context.mode in {"verl_train", "verl_plan"}:
             return self._run_verl_train(context)
-        return self._run_smoke(context)
+        if context.mode == "smoke":
+            return self._run_smoke(context)
+        raise ValueError(f"Unsupported AT-GRPO mode: {context.mode!r}.")
 
     def _run_smoke(self, context: RunContext) -> dict[str, Any]:
         settings = resolve_atgrpo_settings(context.config)
@@ -51,6 +53,7 @@ class ATGRPORecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         return output
 

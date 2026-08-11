@@ -29,6 +29,9 @@ def test_runner_creates_run_store_logs_metrics_and_trajectories(tmp_path):
     assert result["run_id"]
     assert run_dir.exists()
     assert (run_dir / "manifest.json").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["worktree_diff_sha256"]) == 64
+    assert isinstance(manifest["worktree_dirty"], bool)
     assert (run_dir / "status.json").exists()
     assert (run_dir / "summary.json").exists()
     assert (run_dir / "config.yaml").exists()
@@ -45,7 +48,7 @@ def test_verl_dry_run_is_registered_as_run_artifact(tmp_path):
     result = run_from_config(
         {
             "recipe": "agentflow.flow_grpo.planner_tool",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "run": {"root_dir": str(tmp_path), "name": "unit-verl-dry-run"},
             "logging": {"console": False},
             "prepare": {"tiny_verl_assets": {"enabled": False}},
@@ -70,7 +73,7 @@ def test_verl_native_rollout_dump_is_explicit_opt_in(tmp_path):
     result = run_from_config(
         {
             "recipe": "agentflow.flow_grpo.planner_tool",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "run": {"root_dir": str(tmp_path), "name": "unit-native-rollout-dump"},
             "logging": {"console": False},
             "prepare": {"tiny_verl_assets": {"enabled": False}},

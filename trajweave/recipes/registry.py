@@ -9,6 +9,7 @@ class RecipeDefinition:
     family: str
     task: str
     runtime_recipe: str
+    allowed_modes: tuple[str, ...]
     aliases: tuple[str, ...] = ()
 
     def matches(self, value: str) -> bool:
@@ -21,6 +22,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="doctor_mas",
         task="math",
         runtime_recipe="doctor_mas_math",
+        allowed_modes=("smoke", "train_tiny", "verl_train", "verl_plan"),
         aliases=("doctor_mas_math",),
     ),
     RecipeDefinition(
@@ -28,6 +30,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="doctor_mas",
         task="search",
         runtime_recipe="doctor_mas_search",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("doctor_mas_search",),
     ),
     RecipeDefinition(
@@ -35,6 +38,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="drmas_native",
         task="math",
         runtime_recipe="doctor_mas_math",
+        allowed_modes=("verl_train", "verl_plan"),
         aliases=("drmas_native_math", "doctor_mas_native_math"),
     ),
     RecipeDefinition(
@@ -42,6 +46,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="drmas_native",
         task="search",
         runtime_recipe="doctor_mas_search",
+        allowed_modes=("verl_train", "verl_plan"),
         aliases=("drmas_native_search", "doctor_mas_native_search"),
     ),
     RecipeDefinition(
@@ -49,6 +54,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="maporl",
         task="math",
         runtime_recipe="maporl_debate_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("maporl_debate_math", "maporl.debate_math.verl_tiny"),
     ),
     RecipeDefinition(
@@ -56,6 +62,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="agentflow",
         task="math",
         runtime_recipe="agentflow_planner_tool",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("agentflow_planner_tool", "agentflow.flow_grpo"),
     ),
     RecipeDefinition(
@@ -63,6 +70,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="gigpo",
         task="math",
         runtime_recipe="gigpo_solver_verifier_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("gigpo_solver_verifier_math", "gigpo.math"),
     ),
     RecipeDefinition(
@@ -70,6 +78,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="atgrpo",
         task="math",
         runtime_recipe="atgrpo_solver_verifier_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("atgrpo_solver_verifier_math", "atgrpo.math"),
     ),
     RecipeDefinition(
@@ -77,6 +86,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="comas",
         task="math",
         runtime_recipe="comas_peer_review_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("comas_peer_review_math", "comas.math"),
     ),
     RecipeDefinition(
@@ -84,6 +94,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="matpo",
         task="browse_qa",
         runtime_recipe="matpo_browse",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
         aliases=("matpo_browse", "matpo.browse_qa"),
     ),
 )
@@ -99,3 +110,10 @@ def resolve_recipe(name: str) -> RecipeDefinition:
 
 def is_recipe_family(name: str, family: str) -> bool:
     return resolve_recipe(name).family == family
+
+
+def validate_recipe_mode(recipe: RecipeDefinition, mode: str) -> None:
+    if mode not in recipe.allowed_modes:
+        raise ValueError(
+            f"Unsupported mode {mode!r} for recipe {recipe.name!r}. Allowed modes: {list(recipe.allowed_modes)}"
+        )

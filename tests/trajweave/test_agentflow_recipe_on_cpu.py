@@ -45,7 +45,7 @@ def test_agentflow_verl_config_prepares_planner_grpo_launch():
     result = run_from_config(
         {
             "recipe": "agentflow.flow_grpo.planner_tool",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "agentflow": {
                 "agent_loop_backend": "synthetic_tq",

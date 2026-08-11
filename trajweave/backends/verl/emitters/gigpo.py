@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from trajweave.backends.verl.runtime_config import config_get
-from trajweave.backends.verl.schema import to_python
+from trajweave.backends.verl.schema import required_ground_truth, to_python
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
@@ -16,8 +16,7 @@ class GiGPOEmitterMixin:
         session_id: int = 0,
     ) -> list[AgentLoopOutput]:
         raw_prompt = to_python(prompt.get("raw_prompt", []))
-        reward_model = to_python(prompt.get("reward_model", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "2"))
+        ground_truth = required_ground_truth(prompt)
         prompt_ids = self._encode_prompt(raw_prompt)
         max_steps = self._gigpo_max_steps()
         is_correct = session_id % 2 == 0

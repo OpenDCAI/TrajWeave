@@ -6,7 +6,7 @@ from typing import Any
 from trajweave.backends.local import extract_final_int
 from trajweave.backends.policy import PolicyRequest, PolicyResponse
 from trajweave.backends.verl.runtime_config import config_get
-from trajweave.backends.verl.schema import to_python
+from trajweave.backends.verl.schema import required_ground_truth, to_python
 from trajweave.core.specs import TeamSpec
 from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
 from trajweave.credit.atgrpo import apply_mixed_reward
@@ -80,8 +80,7 @@ def build_hf_workflow_outputs(
     task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
     raw_prompt = to_python(prompt.get("raw_prompt", []))
     question = _question_from_prompt(raw_prompt)
-    reward_model = to_python(prompt.get("reward_model", {})) or {}
-    ground_truth = str(reward_model.get("ground_truth", ""))
+    ground_truth = required_ground_truth(prompt)
     backend = HFLocalWorkerPolicyBackend(worker=worker, session_id=session_id, validate=validate)
 
     if recipe == "doctor_mas_math":
@@ -526,11 +525,10 @@ def build_rule_comas_workflow_outputs(
     task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
     raw_prompt = to_python(prompt.get("raw_prompt", []))
     question = _question_from_prompt(raw_prompt)
-    reward_model = to_python(prompt.get("reward_model", {})) or {}
     task = MathTask(
         task_id=task_id,
         question=question,
-        answer=_integer_ground_truth(str(reward_model.get("ground_truth", ""))),
+        answer=_integer_ground_truth(required_ground_truth(prompt)),
     )
     team, protocol, environment = _comas_runtime_components(worker)
     backend = _WorkerEncodedPolicyBackend(worker=worker, delegate=CoMASRulePolicyBackend())

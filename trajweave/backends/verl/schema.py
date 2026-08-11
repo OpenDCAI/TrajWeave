@@ -154,3 +154,13 @@ def flatten_token_ids(token_ids: Any) -> list[int]:
     if isinstance(token_ids, list) and token_ids and isinstance(token_ids[0], list):
         token_ids = token_ids[0]
     return [int(token_id) for token_id in token_ids]
+
+
+def required_ground_truth(prompt: Mapping[str, Any]) -> str:
+    reward_model = to_python(prompt.get("reward_model", {})) or {}
+    if not isinstance(reward_model, Mapping):
+        raise ValueError("prompt.reward_model must be a mapping containing ground_truth.")
+    value = reward_model.get("ground_truth")
+    if value is None or not str(value).strip():
+        raise ValueError("prompt.reward_model.ground_truth is required and must be non-empty.")
+    return str(value)

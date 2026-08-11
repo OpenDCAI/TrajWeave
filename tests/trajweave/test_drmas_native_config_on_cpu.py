@@ -11,7 +11,7 @@ def test_drmas_native_math_config_prepares_agent_wise_verl_launch():
     result = run_from_config(
         {
             "recipe": "drmas_native_math",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "drmas_native": {
                 "agent_ids": ["Solver Agent", "Verifier Agent"],

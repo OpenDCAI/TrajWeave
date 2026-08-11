@@ -336,9 +336,9 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             group_id for group_id in self.multi_actor_trainable_group_ids if routed_counts.get(group_id, 0) == 0
         ]
         if missing_trainable_groups:
-            logger.warning(
-                "TrajWeave batch has no samples for trainable worker groups: %s",
-                missing_trainable_groups,
+            raise RuntimeError(
+                "TrajWeave synchronous multi-actor step is missing samples for trainable worker groups: "
+                f"{missing_trainable_groups}. No actor was updated."
             )
         metrics[f"trajweave/{self._metric_namespace()}/actor_groups/missing_trainable"] = len(missing_trainable_groups)
 

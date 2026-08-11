@@ -29,6 +29,8 @@ class DoctorMASRecipePlugin:
     def run(self, context: RunContext) -> dict:
         if context.mode == "train_tiny":
             return self._run_tiny_training(context)
+        if context.mode not in {"smoke", "verl_train", "verl_plan"}:
+            raise ValueError(f"Unsupported DoctorMAS mode: {context.mode!r}.")
 
         summary, result = self._run_rollout_recipe(context)
         context.tracker.log_rollout_result(result, source=context.recipe_definition.runtime_recipe)
@@ -47,7 +49,13 @@ class DoctorMASRecipePlugin:
         if context.prepared_assets:
             output["prepared_assets"] = context.prepared_assets
         maybe_export_dataproto(context.config, result, output, tracker=context.tracker)
-        maybe_run_verl_launch(context.config, output, default_enabled=False, tracker=context.tracker)
+        maybe_run_verl_launch(
+            context.config,
+            output,
+            default_enabled=False,
+            tracker=context.tracker,
+            mode=context.mode,
+        )
         return output
 
     def _run_rollout_recipe(self, context: RunContext):

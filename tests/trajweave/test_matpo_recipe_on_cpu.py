@@ -60,7 +60,7 @@ def test_matpo_verl_config_wires_explicit_reward_weights_and_replaces_conflicts(
     result = run_from_config(
         {
             "recipe": "matpo.browse_qa.parent_broadcast",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "matpo": {
                 "agent_loop_backend": "hf_local_tq",

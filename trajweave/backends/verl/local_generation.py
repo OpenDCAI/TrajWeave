@@ -24,7 +24,13 @@ class HFLocalGenerationMixin:
                 tokenize=True,
                 **self.config.data.get("apply_chat_template_kwargs", {}),
             )
-        except Exception:
+        except Exception as exc:
+            if not self._allow_plain_text_prompt_fallback():
+                raise RuntimeError(
+                    "Chat-template encoding failed. Set "
+                    "trajweave.allow_plain_text_prompt_fallback=true only when plain-text encoding is intentional."
+                ) from exc
+            logger.warning("Chat-template encoding failed; using explicitly enabled plain-text fallback: %s", exc)
             token_ids = self._encode_text(str(raw_prompt))
         token_ids = flatten_token_ids(token_ids)
         return token_ids[-self.rollout_config.prompt_length :]
@@ -50,7 +56,13 @@ class HFLocalGenerationMixin:
                 add_generation_prompt=True,
                 tokenize=True,
             )
-        except Exception:
+        except Exception as exc:
+            if not self._allow_plain_text_prompt_fallback():
+                raise RuntimeError(
+                    "Tokenizer has no usable chat template. Set "
+                    "trajweave.allow_plain_text_prompt_fallback=true only when plain-text encoding is intentional."
+                ) from exc
+            logger.warning("Tokenizer chat-template failed; using explicitly enabled plain-text fallback: %s", exc)
             try:
                 token_ids = tokenizer.encode(text, add_special_tokens=False)
             except TypeError:
@@ -59,6 +71,10 @@ class HFLocalGenerationMixin:
         if not token_ids:
             token_ids = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
         return token_ids[-self.rollout_config.prompt_length :]
+
+    def _allow_plain_text_prompt_fallback(self) -> bool:
+        runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
+        return runtime.allow_plain_text_prompt_fallback
 
     def _decode_response_ids(self, response_ids: list[int]) -> str:
         try:

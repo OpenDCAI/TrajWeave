@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from trajweave.backends.verl.schema import to_python
+from trajweave.backends.verl.schema import required_ground_truth, to_python
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
 class DrMASEmitterMixin:
     def _build_solver_verifier_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
         raw_prompt = to_python(prompt.get("raw_prompt", []))
-        reward_model = to_python(prompt.get("reward_model", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "2"))
+        ground_truth = required_ground_truth(prompt)
         prompt_ids = self._encode_prompt(raw_prompt)
         is_correct = session_id % 2 == 0
         solver_answer = ground_truth if is_correct else "__wrong__"
@@ -65,9 +64,8 @@ class DrMASEmitterMixin:
 
     def _build_search_answer_outputs(self, prompt: dict[str, Any], *, session_id: int = 0) -> list[AgentLoopOutput]:
         raw_prompt = to_python(prompt.get("raw_prompt", []))
-        reward_model = to_python(prompt.get("reward_model", {})) or {}
         extra_info = to_python(prompt.get("extra_info", {})) or {}
-        ground_truth = str(reward_model.get("ground_truth", "Paris"))
+        ground_truth = required_ground_truth(prompt)
         search_query = str(extra_info.get("search_query", ground_truth))
         prompt_ids = self._encode_prompt(raw_prompt)
         is_correct = session_id % 2 == 0

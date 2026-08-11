@@ -8,7 +8,7 @@ from trajweave.pipeline.assets import maybe_prepare_assets
 from trajweave.pipeline.config import load_yaml_config, mode_name, recipe_name
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.registry import run_recipe
-from trajweave.recipes.registry import resolve_recipe
+from trajweave.recipes.registry import resolve_recipe, validate_recipe_mode
 from trajweave.runtime import ExperimentTracker
 from trajweave.storage import RunStore, RunStoreConfig
 from trajweave.storage.serialization import redact_secrets
@@ -22,6 +22,7 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
     recipe = recipe_name(config)
     recipe_definition = resolve_recipe(recipe)
     mode = mode_name(config)
+    validate_recipe_mode(recipe_definition, mode)
     run_store = RunStore(
         RunStoreConfig.from_config(config, recipe=recipe),
         recipe=recipe,
@@ -60,6 +61,8 @@ def run_from_config(config: dict[str, Any], config_path: str | None = None) -> d
             failure_reason = _output_failure_reason(output)
             if failure_reason:
                 tracker.finalize("failed", error=failure_reason)
+            elif _output_is_plan(output):
+                tracker.finalize("planned")
             else:
                 tracker.finalize("completed")
             return output
@@ -82,15 +85,26 @@ def result_exit_code(result: dict[str, Any]) -> int:
 def _output_failure_reason(output: dict[str, Any]) -> str | None:
     verl_launch = output.get("verl_launch")
     if not isinstance(verl_launch, dict):
+        if output.get("mode") == "verl_train":
+            return "mode='verl_train' completed without a VERL launch result."
         return None
     status = verl_launch.get("status")
     returncode = verl_launch.get("returncode")
+    if output.get("mode") == "verl_train" and status in {"disabled", "dry_run"}:
+        return f"VERL training did not execute: launch status={status!r}."
     if status == "failed" or (isinstance(returncode, int) and returncode != 0):
         validation_error = verl_launch.get("validation_error")
         if validation_error:
             return f"VERL training validation failed: {validation_error}"
         return f"VERL launch failed with status={status!r}, returncode={returncode!r}."
     return None
+
+
+def _output_is_plan(output: dict[str, Any]) -> bool:
+    verl_launch = output.get("verl_launch")
+    return (
+        output.get("mode") == "verl_plan" and isinstance(verl_launch, dict) and verl_launch.get("status") == "dry_run"
+    )
 
 
 def _enforce_runtime_identity(output: dict[str, Any], *, run_store: RunStore) -> dict[str, Any]:

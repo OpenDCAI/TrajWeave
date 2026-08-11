@@ -15,7 +15,7 @@ class CoMASRecipePlugin:
         return context.recipe_definition.family == "comas"
 
     def run(self, context: RunContext) -> dict[str, Any]:
-        if context.mode == "verl_train":
+        if context.mode in {"verl_train", "verl_plan"}:
             return self._run_verl_train(context)
         if context.mode == "smoke":
             return self._run_smoke(context)
@@ -57,6 +57,7 @@ class CoMASRecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         return output
 
@@ -65,7 +66,7 @@ def comas_summary(config: dict[str, Any]) -> dict[str, Any]:
     comas_cfg = config.get("comas", {}) or {}
     topology = resolve_comas_topology(
         config,
-        require_worker_assets=str(config.get("mode", "")) == "verl_train",
+        require_worker_assets=str(config.get("mode", "")) in {"verl_train", "verl_plan"},
     )
     return {
         "paper": "CoMAS: Co-Evolving Multi-Agent Systems via Interaction Rewards",

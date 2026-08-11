@@ -64,6 +64,35 @@ logger = logging.getLogger(__name__)
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
+def _schedule_background_task(
+    background_tasks: set[asyncio.Task[Any]],
+    coroutine: Any,
+) -> asyncio.Task[Any]:
+    """保留异步 rollout task 引用，同时让 Ray 调用立即返回。"""
+
+    task = asyncio.create_task(coroutine)
+    background_tasks.add(task)
+    task.add_done_callback(lambda completed: _consume_background_task(background_tasks, completed))
+    return task
+
+
+def _consume_background_task(
+    background_tasks: set[asyncio.Task[Any]],
+    task: asyncio.Task[Any],
+) -> None:
+    background_tasks.discard(task)
+    if task.cancelled():
+        logger.warning("TrajWeave rollout background task was cancelled.")
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(
+            "TrajWeave rollout background task terminated unexpectedly: %s",
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+
 class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
     """VERL V1 TransferQueue manager that carries TrajWeave MAS config metadata."""
 
@@ -134,6 +163,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
         super().__init__(*args, **kwargs)
         tq.init()
         self._trajweave_policy_version = 0
+        self.background_tasks: set[asyncio.Task[Any]] = set()
 
     def reload_local_models(self, model_paths: dict[str, str], *, policy_version: int) -> dict[str, Any]:
         return HFLocalGenerationMixin.reload_local_models(
@@ -160,17 +190,20 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             global_steps = global_steps[0] if global_steps else -1
         trajectory_info = await get_trajectory_info(global_steps, index, validate)
 
-        tasks = []
         for i in range(batch_size):
             prompt = {key: _batch_item(value, i) for key, value in batch.items()}
-            tasks.append(asyncio.create_task(self._run_prompt(prompt, trajectory=trajectory_info[i])))
-        await asyncio.gather(*tasks)
+            _schedule_background_task(
+                self.background_tasks,
+                self._run_prompt(prompt, trajectory=trajectory_info[i]),
+            )
 
     async def _run_prompt(self, prompt: dict[str, Any], trajectory: dict[str, Any]) -> None:
-        uid = str(_to_python(prompt["uid"]))
-        partition_id = "train" if not trajectory["validate"] else "val"
-        await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "running"})
+        uid = "<unknown>"
+        partition_id = "train"
         try:
+            uid = str(_to_python(prompt["uid"]))
+            partition_id = "train" if not trajectory["validate"] else "val"
+            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "running"})
             config = self.config.actor_rollout_ref.rollout
             n = int(
                 _to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
@@ -204,9 +237,22 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                     )
                     await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
-        except Exception:
+        except Exception as exc:
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
-            await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "failure"})
+            if uid == "<unknown>":
+                raise
+            try:
+                await tq.async_kv_put(
+                    key=uid,
+                    partition_id=partition_id,
+                    tag={
+                        "status": "failure",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc)[:500],
+                    },
+                )
+            except Exception as status_exc:
+                raise RuntimeError(f"Failed to mark rollout prompt {uid!r} as failure.") from status_exc
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)

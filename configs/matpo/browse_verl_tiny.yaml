@@ -1,5 +1,5 @@
 recipe: matpo_browse
-mode: verl_train
+mode: verl_plan
 
 matpo:
   agent_loop_backend: hf_local_tq

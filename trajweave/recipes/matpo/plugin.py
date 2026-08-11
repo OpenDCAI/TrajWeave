@@ -15,9 +15,11 @@ class MATPORecipePlugin:
         return context.recipe_definition.family == "matpo"
 
     def run(self, context: RunContext) -> dict:
-        if context.mode == "verl_train":
+        if context.mode in {"verl_train", "verl_plan"}:
             return self._run_verl_train(context)
-        return self._run_smoke(context)
+        if context.mode == "smoke":
+            return self._run_smoke(context)
+        raise ValueError(f"Unsupported MATPO mode: {context.mode!r}.")
 
     def _run_smoke(self, context: RunContext) -> dict:
         config = context.config
@@ -64,6 +66,7 @@ class MATPORecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         return output
 

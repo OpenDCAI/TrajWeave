@@ -155,7 +155,7 @@ def test_comas_verl_config_selects_generic_multi_actor_trainer_and_namespaced_ho
     result = run_from_config(
         {
             "recipe": "comas.peer_review_math",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "comas": {
                 "agent_count": 2,
                 "agent_ids": ["agent-a", "agent-b"],

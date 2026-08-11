@@ -46,6 +46,62 @@ def git_sha(cwd: str | Path | None = None) -> str | None:
     return sha or None
 
 
+def git_worktree_fingerprint(cwd: str | Path | None = None) -> str | None:
+    """Hash tracked changes and every non-ignored untracked file in the worktree."""
+
+    root = Path(cwd or Path.cwd())
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--binary", "HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+        )
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if diff.returncode != 0 or untracked.returncode != 0:
+        return None
+
+    digest = hashlib.sha256()
+    _update_fingerprint(digest, b"tracked-diff", diff.stdout)
+    for raw_path in sorted(path for path in untracked.stdout.split(b"\0") if path):
+        path = root / os.fsdecode(raw_path)
+        try:
+            content = path.read_bytes()
+        except OSError:
+            return None
+        _update_fingerprint(digest, raw_path, content)
+    return digest.hexdigest()
+
+
+def git_worktree_is_dirty(cwd: str | Path | None = None) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
+def _update_fingerprint(digest: Any, label: bytes, content: bytes) -> None:
+    digest.update(len(label).to_bytes(8, "big"))
+    digest.update(label)
+    digest.update(len(content).to_bytes(8, "big"))
+    digest.update(content)
+
+
 @dataclass(frozen=True)
 class RunStoreConfig:
     root_dir: str = "outputs/trajweave/runs"
@@ -156,6 +212,8 @@ class RunStore:
             "mode": self.mode,
             "config_path": self.config_path,
             "git_sha": git_sha(self.cwd),
+            "worktree_diff_sha256": git_worktree_fingerprint(self.cwd),
+            "worktree_dirty": git_worktree_is_dirty(self.cwd),
             "created_at": utc_now_iso(),
         }
         self._write_json(self.run_dir / "manifest.json", manifest)

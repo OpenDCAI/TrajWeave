@@ -1,5 +1,5 @@
 recipe: drmas.search.verl_tiny
-mode: verl_train
+mode: verl_plan
 
 drmas_native:
   agent_ids: ["Verifier Agent", "Search Agent", "Answer Agent"]

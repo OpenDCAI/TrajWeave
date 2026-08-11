@@ -129,7 +129,7 @@ def test_maporl_smoke_and_train_use_credit_section_precedence(monkeypatch):
         {
             **shared_config,
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "maporl": {
                 **shared_config["maporl"],
                 "agent_loop_backend": "synthetic_tq",
@@ -166,7 +166,7 @@ def test_maporl_verl_config_prepares_namespaced_launch():
     result = run_from_config(
         {
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
                 "agent_count": 2,
@@ -225,7 +225,7 @@ def test_maporl_verl_config_keeps_multi_policy_metadata():
     result = run_from_config(
         {
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
                 "agent_count": 2,
@@ -257,7 +257,7 @@ def test_maporl_verl_config_enables_multi_actor_trainer_for_trainable_groups():
     result = run_from_config(
         {
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
                 "agent_count": 2,
@@ -318,7 +318,7 @@ def test_maporl_verl_config_allows_compatible_tokenizer_paths(monkeypatch):
     result = run_from_config(
         {
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
                 "agent_count": 2,
@@ -359,7 +359,7 @@ def test_maporl_verl_config_uses_safe_worker_group_list_override_for_special_ids
     result = run_from_config(
         {
             "recipe": "maporl.debate_math.full_verl_tiny",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "prepare": {"tiny_verl_assets": {"enabled": False}},
             "maporl": {
                 "agent_count": 2,
