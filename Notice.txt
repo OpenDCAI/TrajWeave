@@ -2,3 +2,11 @@ TrajWeave includes code derived from VERL / HybridFlow.
 
 Original VERL copyright:
 Copyright 2023-2024 Bytedance Ltd. and/or its affiliates
+
+TrajWeave's CoMLRL integration is adapted from OpenMLRL/CoMLRL commit
+3c724afd. CoMLRL is distributed under the BSD 3-Clause License.
+
+Original CoMLRL copyright:
+Copyright (c) 2025 OpenMLRL
+
+The complete CoMLRL license is included in licenses/CoMLRL-BSD-3-Clause.txt.

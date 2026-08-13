@@ -18,6 +18,23 @@ class RecipeDefinition:
 
 RECIPES: tuple[RecipeDefinition, ...] = (
     RecipeDefinition(
+        name="comlrl.magrpo",
+        family="comlrl",
+        task="math",
+        runtime_recipe="comlrl_joint_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("comlrl.joint_math", "comlrl_joint_math"),
+    ),
+    RecipeDefinition("comlrl.mareinforce", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.marloo", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.maremax", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.iac", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.maac", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.madpo", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.marlhf", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.madpo_iter", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition("comlrl.marlhf_iter", "comlrl", "math", "comlrl_joint_math", ("smoke", "verl_train", "verl_plan")),
+    RecipeDefinition(
         name="drmas.math.smoke",
         family="doctor_mas",
         task="math",

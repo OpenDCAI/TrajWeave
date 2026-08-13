@@ -75,7 +75,7 @@ class TrajWeaveAgentLoopRuntimeConfig:
 def validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
     from trajweave.backends.verl.emitters.registry import supported_emitter_recipes
 
-    supported_recipes = supported_emitter_recipes()
+    supported_recipes = supported_emitter_recipes() | {"comlrl_joint_math"}
     if recipe and recipe not in supported_recipes:
         raise ValueError(f"Unsupported TrajWeave recipe for VERL AgentLoopManager: {recipe}")
     if backend not in {"verl_tq", "synthetic_tq", "hf_local_tq"}:

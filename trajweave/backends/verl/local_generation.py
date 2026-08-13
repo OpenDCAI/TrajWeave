@@ -232,7 +232,8 @@ class HFLocalGenerationMixin:
         if not tokenizer_path and not model_path:
             return self.tokenizer
         tokenizer_source = tokenizer_path or model_path
-        if str(tokenizer_source) == str(self.model_config.local_path):
+        global_tokenizer_source = self.model_config.tokenizer_path or self.model_config.path
+        if str(tokenizer_source) == str(global_tokenizer_source):
             return self.tokenizer
         if not hasattr(self, "_trajweave_local_tokenizers"):
             self._trajweave_local_tokenizers = {}

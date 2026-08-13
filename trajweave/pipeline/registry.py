@@ -5,6 +5,7 @@ from trajweave.pipeline.plugin import RecipePlugin
 from trajweave.recipes.agentflow.plugin import AgentFlowRecipePlugin
 from trajweave.recipes.atgrpo.plugin import ATGRPORecipePlugin
 from trajweave.recipes.comas.plugin import CoMASRecipePlugin
+from trajweave.recipes.comlrl.plugin import CoMLRLRecipePlugin
 from trajweave.recipes.doctor_mas.plugin import DoctorMASRecipePlugin
 from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
 from trajweave.recipes.gigpo.plugin import GiGPORecipePlugin
@@ -15,6 +16,7 @@ from trajweave.recipes.matpo.plugin import MATPORecipePlugin
 def recipe_plugins() -> tuple[RecipePlugin, ...]:
     return (
         DrMASNativeRecipePlugin(),
+        CoMLRLRecipePlugin(),
         CoMASRecipePlugin(),
         MAPoRLRecipePlugin(),
         AgentFlowRecipePlugin(),

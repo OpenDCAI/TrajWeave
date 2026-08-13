@@ -51,6 +51,7 @@ def sync_hf_local_rollout_weights(trainer: Any) -> dict[str, str]:
     if not results:
         raise RuntimeError("HF local rollout weight sync did not reload any AgentLoop worker.")
     _prune_old_snapshots(root.parent, keep=2)
+    trainer._trajweave_rollout_model_paths = dict(model_paths)
     logger.info(
         "TrajWeave HF local rollout weights synchronized at global_step=%d: %s",
         global_step,

@@ -5,7 +5,30 @@ import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
+
+
+def encode_chat_prompt_text(tokenizer: Any, text: str, *, max_length: int | None = None) -> list[int]:
+    from trajweave.backends.verl.schema import flatten_token_ids
+
+    messages = [{"role": "user", "content": str(text)}]
+    try:
+        token_ids = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+    except Exception:
+        try:
+            token_ids = tokenizer.encode(str(text), add_special_tokens=False)
+        except TypeError:
+            token_ids = tokenizer.encode(str(text))
+    normalized = flatten_token_ids(token_ids)
+    if not normalized:
+        normalized = [tokenizer.eos_token_id or tokenizer.pad_token_id or 0]
+    if max_length is not None:
+        normalized = normalized[-max_length:]
+    return normalized
 
 
 @dataclass(frozen=True)

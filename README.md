@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了八条可运行的 MASRL 路径（部分论文方向含多个任务变体）：
+TrajWeave 现在接入了九条 MASRL 路径（部分论文方向含多个任务或算法变体）：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -22,8 +22,9 @@ TrajWeave 现在接入了八条可运行的 MASRL 路径（部分论文方向含
 | AT-GRPO SolverVerifier | selected-spine solver/verifier tree | sibling 分组、训练/验证拓扑、标准 clipped-PPO 和 tiny Trainer 2-step 已验证；随机 HF tiny 仍可能出现组内零方差 |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
 | MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
+| CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | MAGRPO family、separate-critic IAC/MAAC、MADPO、MARLHF 与 iterative 路径已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
 
-当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MATPO 是在此基线之后迁入 lz-dev 的新增路径，目前重点验收 parent-child credit 和 Qwen2.5-0.5B-Instruct smoke train。
+当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。CoMLRL 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
 
 验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
@@ -164,6 +165,7 @@ configs/                         按算法归档的 YAML 启动入口。
   atgrpo/                        AT-GRPO selected-spine solver-verifier 配置。
   comas/                         CoMAS peer-review interaction-reward 配置。
   matpo/                         MATPO planner-worker browse 配置。
+  comlrl/                        CoMLRL 十种算法 smoke 与 VERL plan 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -183,6 +185,7 @@ trajweave/
     atgrpo/                      AT-GRPO selected-spine solver/verifier 树采样 protocol。
     comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
     matpo/                       MATPO planner/worker parent-child protocol。
+    comlrl/                      CoMLRL full joint-action tree 与 iterative comparator。
   credit/                        Reward propagation 和 credit assignment。
     common/                      可复用的 step grouping 和 discounted return。
     agentflow/                   Planner-only Flow-GRPO credit。
@@ -192,6 +195,7 @@ trajweave/
     atgrpo/                      AT-GRPO observation-group advantage 与 solver/verifier role-local mixed reward。
     comas/                       CoMAS score parser 和 interaction reward 真值表。
     matpo/                       MATPO parent-broadcast credit。
+    comlrl/                      joint return/baseline、IAC/MAAC、MADPO/MARLHF credit。
   recipes/                       按论文隔离的可执行组合。
     doctor_mas/                  DrMAS Math/Search recipe。
     maporl/                      MAPoRL debate recipe。
@@ -199,10 +203,11 @@ trajweave/
     gigpo/                       GiGPO solver-verifier recipe。
     atgrpo/                      AT-GRPO tree sampling、credit、VERL override 和 plugin。
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
+    comlrl/                      CoMLRL algorithm/config/plugin 组合。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、CoMLRL 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -218,8 +223,9 @@ trajweave/
     verl/extensions/gigpo/       GiGPO hierarchical GRPO runtime extension。
     verl/extensions/comas/       CoMAS interaction REINFORCE advantage hook。
     verl/extensions/matpo/       MATPO parent-broadcast GRPO runtime extension。
+    verl/extensions/comlrl/      CoMLRL ratio-free policy gradient、actor-critic 与 preference hooks。
     verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
-    verl/trainers/               通用多 Actor Trainer 和 MAPoRL 旧入口兼容层。
+    verl/trainers/               多 Actor、CoMLRL critic/preference/staged/iterative Trainer。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -331,6 +337,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/matpo/browse_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/comlrl/magrpo_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -350,6 +359,10 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/matpo/browse_verl_tiny.yaml
+
+# CoMLRL command-only plan；运行前替换模型、tokenizer 与 train/val parquet placeholder。
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/comlrl/madpo_verl_tiny.yaml
 ```
 
 真实 Qwen2.5-0.5B 双卡回归入口：
@@ -656,6 +669,21 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 当前状态    | smoke、Qwen2.5-0.5B 双卡两步真实训练、非零层级优势、checkpoint 和 policy version 回流已验证 |
 | 主要配置    | `configs/gigpo/solver_verifier_math_smoke.yaml`, `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml` |
 | 已知限制    | 当前只验证数学可判定环境和单一共享 Actor；ALFWorld/WebShop、similarity grouping 的大规模效果与论文指标尚未验证。 |
+
+### CoMLRL Joint Collaboration
+
+| 字段        | 内容 |
+| ----------- | ---- |
+| 参考实现    | [OpenMLRL/CoMLRL](https://github.com/OpenMLRL/CoMLRL)，对齐提交 `3c724afd`（`v1.4.1-5-g3c724af`）。 |
+| 算法范围    | MAGRPO、MAREINFORCE、MARLOO、MAREMAX、separate-critic IAC、MAAC、MADPO、MARLHF、MADPOIter、MARLHFIter。 |
+| Environment | `JointMathEnvironment`；环境一次消费完整 joint action，返回 team reward、terminal/truncated 和下一层 observation。 |
+| Orchestra   | `FullJointTreeBuilder`；aligned 使用同 candidate index，cross 使用 Cartesian product，多轮沿 joint transition 展开。 |
+| Credit      | action return 为 `reward + mean(child returns)`；cross completion 投影使用参与 joint return 之和；四种 baseline 按 `(episode, tree node, agent)` 分组。 |
+| VERL 路径   | AgentLoop 一次消费 `rollout.n` 构造完整联合树 -> CoMLRL schema/TQ -> per-group Actor、独立或 centralized critic、joint DPO 或 staged reward model Trainer。 |
+| Preference  | MADPO 使用 joint factorized log-prob delta；MARLHF 执行 task-reward preference -> scalar reward model -> ratio-free online RL；iterative 支持 current/copy/model/history/API comparator、replay 和安全生命周期。 |
+| 当前状态    | 十种 recipe 的 CPU smoke、joint tree/schema/storage/padding、真实 TransferQueue bridge、critic/preference/iterative 单测已接入；尚无可声明完成的真实多 GPU run。 |
+| 主要配置    | `configs/comlrl/*_smoke.yaml` 与每种算法对应的 `*_verl_tiny.yaml`；后者是显式小 batch/短序列/单 epoch 的 `verl_plan` 模板，仍需替换模型、tokenizer 和 train/val parquet 路径。 |
+| 已知限制    | TrajWeave 面向 cooperative multi-agent，至少 2 Agent；IAC 当前只支持每 Agent 独立 critic，不支持共享 actor backbone value head；IAC/MAAC 当前固定单候选，checkpoint resume 与 reference-policy KL rollout 尚未接线（非零 KL 配置会 fail-fast）；真实训练前需替换 plan 中的模型/tokenizer/数据 placeholder 并按 Actor/Critic 数量配置 GPU。 |
 
 ### CoMAS PeerReview Math
 

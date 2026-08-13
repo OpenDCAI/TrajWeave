@@ -746,6 +746,20 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
     if (
+        credit_allocator
+        in {
+            "comlrl_reinforce",
+            "comlrl_magrpo",
+            "comlrl_mareinforce",
+            "comlrl_maremax",
+            "comlrl_marloo",
+        }
+        or "trajweave_comlrl_reinforce" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.comlrl import CoMLRLReinforceHooks
+
+        return CoMLRLReinforceHooks()
+    if (
         credit_allocator == "comas_interaction_reward"
         or recipe == "comas_peer_review_math"
         or "trajweave_comas_interaction_reinforce" in extension_names

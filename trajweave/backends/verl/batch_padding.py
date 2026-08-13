@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from trajweave.backends.verl.schema import comlrl_extra_field_defaults
+
 
 def pad_session_batch(
     *,
@@ -65,6 +67,8 @@ def pad_session_batch(
             loss_mask=response_mask.clone(),
             rm_scores=torch.zeros_like(sample["rm_scores"], dtype=torch.float32),
         )
+        comlrl_padding_fields = comlrl_extra_field_defaults(row_id=pad_uid, is_padding=True)
+        sample.update(comlrl_padding_fields)
         for key, value in {
             "turn_id": -1,
             "round_id": -1,
@@ -111,6 +115,7 @@ def pad_session_batch(
             sample["reqs_id"] = padded_reqs_id
         if source_parent_reqs_id:
             sample["parent_reqs_id"] = parent_reqs_id
+        extra_fields.update(comlrl_padding_fields)
         extra_fields.update(
             {
                 "is_padding": True,

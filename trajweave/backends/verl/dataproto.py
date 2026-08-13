@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from trajweave.backends.verl.schema import COMLRL_EXTRA_FIELDS, resolve_comlrl_extra_fields
 from trajweave.core.trajectory import TrainingSample
 from verl.protocol import DataProto
 
@@ -26,6 +27,12 @@ def _pad(sequences: list[list[int]], pad_value: int = 0) -> torch.Tensor:
         values = torch.tensor(sequence, dtype=torch.long)
         tensor[row, : len(sequence)] = values
     return tensor
+
+
+def _object_array(values: list[object]) -> np.ndarray:
+    array = np.empty(len(values), dtype=object)
+    array[:] = values
+    return array
 
 
 @dataclass
@@ -80,6 +87,29 @@ class VerlDataProtoAdapter:
                 [sample.metadata.get("shared_model_id", sample.policy_group) for sample in samples], dtype=object
             ),
         }
+        if any(
+            sample.completion_id
+            or sample.tree_node_id
+            or sample.joint_action_ids
+            or sample.joint_transition_ids
+            or any(field in sample.metadata for field in COMLRL_EXTRA_FIELDS)
+            for sample in samples
+        ):
+            comlrl_rows = []
+            for sample in samples:
+                fields = dict(sample.metadata)
+                fields.update(
+                    {
+                        "completion_id": sample.completion_id,
+                        "tree_node_id": sample.tree_node_id,
+                        "joint_action_ids": sample.joint_action_ids,
+                        "joint_transition_ids": sample.joint_transition_ids,
+                    }
+                )
+                comlrl_rows.append(resolve_comlrl_extra_fields(fields, row_id=sample.sample_id))
+            non_tensors.update(
+                {field: _object_array([row[field] for row in comlrl_rows]) for field in COMLRL_EXTRA_FIELDS}
+            )
         tensors = {
             "prompts": prompts,
             "responses": responses,

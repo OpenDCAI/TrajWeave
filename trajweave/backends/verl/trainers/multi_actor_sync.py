@@ -8,6 +8,7 @@ from typing import Any
 import torch
 import transfer_queue as tq
 from omegaconf import OmegaConf, open_dict
+from transfer_queue import KVBatchMeta
 
 from trajweave.backends.verl.extensions.drmas.agent_wise_grpo import TrajWeaveActorRolloutRefWorker
 from trajweave.backends.verl.routing import safe_actor_role_key, split_tq_batch_by_field
@@ -22,6 +23,7 @@ from verl.single_controller.ray import (
     create_colocated_worker_cls,
 )
 from verl.trainer.ppo.core_algos import agg_loss
+from verl.trainer.ppo.padding_utils import upsample_batch_to_divisible_size
 from verl.trainer.ppo.utils import Role
 from verl.trainer.ppo.v1.trainer_base import (
     TrainingWorkerConfig,
@@ -35,6 +37,11 @@ from verl.utils.debug import marked_timer
 from verl.utils.debug.metrics import calculate_debug_metrics
 from verl.utils.metric import reduce_metrics
 from verl.utils.py_functional import rename_dict
+from verl.utils.seqlen_balancing import (
+    calculate_workload,
+    get_seqlen_balanced_partitions,
+    log_seqlen_unbalance,
+)
 from verl.workers.engine_workers import TrainingWorker
 
 logger = logging.getLogger(__name__)
@@ -72,11 +79,12 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
     """按 ``worker_group`` 将 Actor 计算和更新路由到多个 VERL Worker Group。"""
 
     def _setup(self):
+        self._init_multi_actor_specs()
+        self._align_global_actor_assets()
+        self._validate_multi_actor_specs()
         self._init_tokenizer()
         self._init_dataloader()
         self._init_dump_executor()
-        self._init_multi_actor_specs()
-        self._validate_multi_actor_specs()
         self._init_resource_pool_mgr()
         self.resource_pool_manager.create_resource_pool()
         self._create_worker_groups()
@@ -87,6 +95,42 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             self._recipe_name(),
             sorted(self.actor_rollout_wgs),
         )
+
+    def _align_global_actor_assets(self) -> None:
+        """Make VERL's single global model/tokenizer represent the primary actor group."""
+
+        primary_group = self.multi_actor_worker_group_specs[self.multi_actor_trainable_group_ids[0]]
+        if not primary_group.model_path or not primary_group.tokenizer_path:
+            return
+        model_config = self.config.actor_rollout_ref.model
+        previous_model = str(model_config.get("path") or "")
+        previous_tokenizer = str(model_config.get("tokenizer_path") or previous_model)
+        with open_dict(model_config):
+            model_config.path = primary_group.model_path
+            model_config.tokenizer_path = primary_group.tokenizer_path
+        if previous_model != primary_group.model_path or previous_tokenizer != primary_group.tokenizer_path:
+            logger.info(
+                "Aligned VERL global actor assets with primary worker group %s (model=%s, tokenizer=%s).",
+                primary_group.group_id,
+                primary_group.model_path,
+                primary_group.tokenizer_path,
+            )
+
+    def _init_tokenizer(self):
+        """Honor ``model.tokenizer_path`` instead of loading VERL's model path as a tokenizer."""
+
+        from verl.utils import hf_processor, hf_tokenizer
+        from verl.utils.fs import copy_to_local
+
+        model_config = self.config.actor_rollout_ref.model
+        tokenizer_source = model_config.get("tokenizer_path") or model_config.path
+        local_tokenizer_path = copy_to_local(
+            tokenizer_source,
+            use_shm=model_config.get("use_shm", False),
+        )
+        trust_remote_code = self.config.data.get("trust_remote_code", False)
+        self.tokenizer = hf_tokenizer(local_tokenizer_path, trust_remote_code=trust_remote_code)
+        self.processor = hf_processor(local_tokenizer_path, trust_remote_code=trust_remote_code, use_fast=True)
 
     def _init_multi_actor_specs(self) -> None:
         groups = _worker_groups_from_config(self.config)
@@ -287,6 +331,41 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             metrics.update(calculate_debug_metrics(data_proto))
         return batch
 
+    def _balance_batch(self, batch, metrics: dict, logging_prefix="global_seqlen", keep_minibatch=False):
+        """Pad and balance each actor route independently across its own data-parallel ranks."""
+
+        del keep_minibatch
+        balanced_routes = []
+        for routed in split_tq_batch_by_field(batch, field="worker_group"):
+            if routed.group_id not in self.actor_rollout_wgs:
+                raise KeyError(f"Unknown worker_group {routed.group_id!r} during multi-actor balancing.")
+            worker_group = self.actor_rollout_wgs[routed.group_id]
+            dp_size = _actor_data_parallel_size(worker_group)
+            balanced = upsample_batch_to_divisible_size(
+                routed.batch,
+                dp_size,
+                self.tokenizer.eos_token_id,
+            )
+            sequence_lengths = torch.tensor([tag["seq_len"] for tag in balanced.tags], dtype=torch.int64)
+            workloads = calculate_workload(sequence_lengths)
+            partitions = get_seqlen_balanced_partitions(workloads, k_partitions=dp_size, equal_size=True)
+            balanced.reorder([row for partition in partitions for row in partition])
+            metrics.update(
+                log_seqlen_unbalance(
+                    seqlen_list=sequence_lengths.tolist(),
+                    partitions=partitions,
+                    prefix=f"{logging_prefix}/{_safe_metric_name(routed.group_id)}",
+                )
+            )
+            balanced_routes.append(balanced)
+        return KVBatchMeta(
+            keys=[key for routed in balanced_routes for key in routed.keys],
+            tags=[tag for routed in balanced_routes for tag in routed.tags],
+            partition_id=batch.partition_id,
+            fields=batch.fields,
+            extra_info=batch.extra_info,
+        )
+
     def _compute_ref_log_prob(self, batch, metrics: dict):
         batch.extra_info.update(
             {
@@ -389,9 +468,20 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
 
     def _load_checkpoint(self):
         self.global_steps = 0
-        if self.config.trainer.resume_mode == "disable":
+        mode = str(self.config.trainer.resume_mode)
+        if mode == "disable":
             return
-        raise ValueError("TrajWeave multi-actor checkpoint resume is not enabled yet; use trainer.resume_mode=disable.")
+        resume_from_path = self.config.trainer.get("resume_from_path", None)
+        marker = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
+        if mode == "auto" and not resume_from_path and not os.path.exists(marker):
+            logger.info("No multi-actor checkpoint marker found; training from scratch.")
+            return
+        marker_exists = os.path.exists(marker)
+        raise ValueError(
+            "TrajWeave multi-actor checkpoint resume is not implemented. "
+            f"Refusing resume_mode={mode!r}, resume_from_path={resume_from_path!r}, "
+            f"marker_exists={marker_exists}."
+        )
 
     def _route_batch(self, batch):
         routed = split_tq_batch_by_field(batch, field="worker_group")
@@ -405,11 +495,11 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             if item.group_id not in self.actor_rollout_wgs:
                 known = ", ".join(sorted(self.actor_rollout_wgs))
                 raise KeyError(f"Unknown worker_group {item.group_id!r}. Known groups: {known}.")
-            world_size = int(self.actor_rollout_wgs[item.group_id].world_size)
-            if _batch_len(item.batch) % world_size != 0:
+            dp_size = _actor_data_parallel_size(self.actor_rollout_wgs[item.group_id])
+            if _batch_len(item.batch) % dp_size != 0:
                 raise ValueError(
-                    "Routed batch must be divisible by its actor worker-group world size; "
-                    f"group={item.group_id!r}, samples={_batch_len(item.batch)}, world_size={world_size}. "
+                    "Routed batch must be divisible by its actor data-parallel size; "
+                    f"group={item.group_id!r}, samples={_batch_len(item.batch)}, dp_size={dp_size}. "
                     "Increase rollout.n/train_batch_size or reduce worker_groups.<id>.gpus."
                 )
         return routed
@@ -429,7 +519,8 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
         return _safe_metric_name(recipe.split("_", 1)[0])
 
     def on_init_end(self):
-        self.checkpoint_manager.update_weights(self.global_steps)
+        if getattr(self, "agent_loop_manager", None) is not None:
+            self.checkpoint_manager.update_weights(self.global_steps)
 
     def on_step_end(self):
         with marked_timer("update_weights", self.timing_raw, color="red"):
@@ -496,3 +587,20 @@ def _positive_gpu_count(value: Any, *, group_id: str) -> int:
     if gpus <= 0:
         raise ValueError(f"Worker group {group_id!r} gpus must be a positive integer.")
     return gpus
+
+
+def _actor_data_parallel_size(worker_group: Any) -> int:
+    dispatch_info = getattr(worker_group, "_dispatch_info", None)
+    query = getattr(worker_group, "_query_dispatch_info", None)
+    if isinstance(dispatch_info, dict) and callable(query):
+        role = "actor"
+        mapping = dispatch_info.get(role)
+        if mapping is None:
+            mapping = query(role)
+            dispatch_info[role] = mapping
+        if mapping:
+            return max(int(rank) for rank in mapping) + 1
+    world_size = int(getattr(worker_group, "world_size", 1))
+    if world_size < 1:
+        raise ValueError("Actor worker-group world_size must be positive.")
+    return world_size

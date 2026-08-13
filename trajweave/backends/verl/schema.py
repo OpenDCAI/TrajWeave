@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,55 @@ DRMAS_AGENT_IDS = {
     "searcher": "Search Agent",
     "search": "Search Agent",
     "answer": "Answer Agent",
+}
+
+COMLRL_EXTRA_FIELDS = (
+    "prompt_text",
+    "response_text",
+    "completion_id",
+    "tree_node_id",
+    "joint_action_ids",
+    "joint_return_components",
+    "projected_joint_return",
+    "joint_advantage",
+    "effective_projected_joint_return",
+    "joint_transition_ids",
+    "joint_reward",
+    "joint_done",
+    "joint_truncated",
+    "joint_stop_reason",
+    "joint_sampling_mode",
+    "critic_group",
+    "critic_type",
+    "critic_input_ids",
+    "critic_attention_mask",
+    "critic_position_ids",
+    "critic_loss_mask",
+    "preference_pair_id",
+    "preference_side",
+    "chosen_reward",
+    "rejected_reward",
+    "candidate_mean",
+    "preference_loss_mask",
+    "raw_policy_reward",
+    "raw_comparator_reward",
+    "raw_candidate_rewards",
+    "policy_provenance",
+    "comparator_provenance",
+    "winner_source",
+    "loser_source",
+)
+
+COMLRL_ID_FIELDS = (
+    "completion_id",
+    "tree_node_id",
+    "critic_group",
+    "preference_pair_id",
+)
+
+COMLRL_FIELD_ALIASES = {
+    "completion_id": "reqs_id",
+    "tree_node_id": "node_id",
 }
 
 MAS_EXTRA_FIELDS = (
@@ -64,7 +114,118 @@ MAS_EXTRA_FIELDS = (
     "branch_index",
     "selected_for_expansion",
     "local_score",
-)
+) + COMLRL_EXTRA_FIELDS
+
+
+def comlrl_extra_field_defaults(*, row_id: str, is_padding: bool = False) -> dict[str, Any]:
+    prefix = "__padding__" if is_padding else "__missing__"
+    unique_prefix = f"{prefix}:{row_id}"
+    defaults: dict[str, Any] = {field: f"{unique_prefix}:{field}" for field in COMLRL_ID_FIELDS}
+    defaults.update(
+        {
+            "prompt_text": "",
+            "response_text": "",
+            "joint_action_ids": [],
+            "joint_return_components": [],
+            "joint_transition_ids": [],
+            "projected_joint_return": 0.0,
+            "joint_advantage": 0.0,
+            "effective_projected_joint_return": 0.0,
+            "joint_reward": 0.0,
+            "joint_done": bool(is_padding),
+            "joint_truncated": bool(is_padding),
+            "joint_stop_reason": "padding" if is_padding else "",
+            "joint_sampling_mode": prefix,
+            "critic_type": prefix,
+            "critic_input_ids": [],
+            "critic_attention_mask": [],
+            "critic_position_ids": [],
+            "critic_loss_mask": 0.0,
+            "preference_side": prefix,
+            "chosen_reward": 0.0,
+            "rejected_reward": 0.0,
+            "candidate_mean": 0.0,
+            "preference_loss_mask": 0.0,
+            "raw_policy_reward": 0.0,
+            "raw_comparator_reward": 0.0,
+            "raw_candidate_rewards": [],
+            "policy_provenance": {},
+            "comparator_provenance": {},
+            "winner_source": prefix,
+            "loser_source": prefix,
+        }
+    )
+    return defaults
+
+
+def resolve_comlrl_extra_fields(extra_fields: Mapping[str, Any], *, row_id: str) -> dict[str, Any]:
+    resolved = comlrl_extra_field_defaults(row_id=row_id)
+    for field in COMLRL_EXTRA_FIELDS:
+        if field in extra_fields:
+            value = to_python(extra_fields[field])
+            if value is not None and (field not in COMLRL_ID_FIELDS or value != ""):
+                resolved[field] = value
+                continue
+        alias = COMLRL_FIELD_ALIASES.get(field)
+        if alias is not None and alias in extra_fields:
+            alias_value = to_python(extra_fields[alias])
+            if alias_value is not None and alias_value != "":
+                resolved[field] = alias_value
+    resolved["joint_action_ids"] = _string_list(resolved["joint_action_ids"], "joint_action_ids")
+    resolved["joint_transition_ids"] = _string_list(resolved["joint_transition_ids"], "joint_transition_ids")
+    resolved["joint_return_components"] = _finite_float_list(
+        resolved["joint_return_components"], "joint_return_components"
+    )
+    if len(resolved["joint_action_ids"]) != len(set(resolved["joint_action_ids"])):
+        raise ValueError("joint_action_ids must be unique")
+    if len(resolved["joint_transition_ids"]) != len(set(resolved["joint_transition_ids"])):
+        raise ValueError("joint_transition_ids must be unique")
+    action_count = len(resolved["joint_action_ids"])
+    if len(resolved["joint_transition_ids"]) != action_count:
+        raise ValueError("joint_action_ids and joint_transition_ids must have equal lengths")
+    if resolved["joint_return_components"] and len(resolved["joint_return_components"]) != action_count:
+        raise ValueError("joint_action_ids and joint_return_components must have equal lengths")
+    for field in (
+        "projected_joint_return",
+        "joint_advantage",
+        "effective_projected_joint_return",
+        "joint_reward",
+        "critic_loss_mask",
+        "chosen_reward",
+        "rejected_reward",
+        "candidate_mean",
+        "preference_loss_mask",
+        "raw_policy_reward",
+        "raw_comparator_reward",
+    ):
+        value = float(resolved[field])
+        if not isfinite(value):
+            raise ValueError(f"{field} must be finite")
+        resolved[field] = value
+    resolved["raw_candidate_rewards"] = _finite_float_list(resolved["raw_candidate_rewards"], "raw_candidate_rewards")
+    for field in ("policy_provenance", "comparator_provenance"):
+        if not isinstance(resolved[field], Mapping):
+            raise TypeError(f"{field} must be a mapping")
+        resolved[field] = dict(resolved[field])
+    return resolved
+
+
+def _string_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list | tuple):
+        raise TypeError(f"{field} must be a sequence")
+    normalized = [str(item) for item in value]
+    if any(not item for item in normalized):
+        raise ValueError(f"{field} must contain non-empty values")
+    return normalized
+
+
+def _finite_float_list(value: Any, field: str) -> list[float]:
+    if not isinstance(value, list | tuple):
+        raise TypeError(f"{field} must be a sequence")
+    normalized = [float(item) for item in value]
+    if any(not isfinite(item) for item in normalized):
+        raise ValueError(f"{field} must contain only finite values")
+    return normalized
 
 
 def padded_rm_scores(response_mask: torch.Tensor, reward_score: float, response_len: int) -> torch.Tensor:

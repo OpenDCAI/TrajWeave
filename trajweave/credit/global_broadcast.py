@@ -43,6 +43,10 @@ class GlobalBroadcastCreditAssigner:
                     branch_index=turn.branch_index,
                     selected_for_expansion=turn.selected_for_expansion,
                     local_score=turn.local_score,
+                    completion_id=turn.completion_id,
+                    tree_node_id=turn.tree_node_id,
+                    joint_action_ids=turn.joint_action_ids,
+                    joint_transition_ids=turn.joint_transition_ids,
                     metadata={
                         "credit": self.name,
                         "root_id": turn.root_id,

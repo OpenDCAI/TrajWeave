@@ -1,0 +1,21 @@
+recipe: comlrl.iac
+mode: smoke
+
+comlrl:
+  algorithm: iac
+  agent_ids: [agent_0, agent_1]
+  model_ids: [policy_0, policy_1]
+  joint_mode: aligned
+  max_turns: 2
+  actor_critic:
+    topology: independent
+    critic_type: v
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: comlrl-iac-smoke
+  tags: [comlrl, iac, smoke]
+
+logging:
+  level: INFO
+  console: true

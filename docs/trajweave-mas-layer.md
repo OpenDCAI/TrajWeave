@@ -255,6 +255,7 @@ flowchart TD
 | `MATPOParentBroadcastHooks` | MATPO. | Validates unique `reqs_id`/`parent_reqs_id`, computes main-row credit, then broadcasts scalar advantage/return to child rows. |
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 | `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
+| `CoMLRLReinforceHooks` | CoMLRL MAGRPO family. | Uses rollout-computed joint returns/baselines verbatim and enforces ratio-free sequence policy gradient fields. |
 
 AT-GRPO uses selected-spine sampling during training: each parent observation produces `K` sibling actions, only the locally selected child is expanded, and all siblings retain parent/node/observation-group lineage. Validation runs independent branch-factor-1 sessions instead of best-of-N selection. MATPO computes one parent-rollout reward before GRPO using `0.9 * accuracy + 0.1 * 0.5 * (planner_format + mean(worker_format))`, then broadcasts the resulting parent advantage to planner and worker generations.
 
@@ -291,6 +292,8 @@ Current configs:
 | `atgrpo/solver_verifier_math_qwen05b_2gpu.yaml` | AT-GRPO real Trainer entrypoint; `rollout.n` is sibling branch factor. |
 | `matpo/browse_smoke.yaml` | MATPO deterministic parent-child smoke. |
 | `matpo/browse_verl_tiny.yaml` | MATPO VERL bridge/command dry-run with planner tool-format shaping. |
+| `comlrl/*_smoke.yaml` | CPU smoke entries for all ten integrated CoMLRL algorithms. |
+| `comlrl/*_verl_tiny.yaml` | Command-only MADPO/MARLHF and iterative plans; model/tokenizer placeholders must be replaced before training. |
 | `drmas/math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
 | `drmas/math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |
@@ -302,5 +305,7 @@ The VERL path currently exposes four integration boundaries:
 2. `VerlTrainerLauncher` writes or runs a `verl.trainer.main_ppo` command from YAML overrides.
 3. `TrajWeaveAgentLoopManager` can be loaded through `actor_rollout_ref.rollout.agent.agent_loop_manager_class`.
 4. `PPOExtensionHooks` declares VERL-side TransferQueue fields, advantage grouping, and algorithm-specific advantage computation.
+
+CoMLRL is an intentional AgentLoop special dispatch: one logical prompt consumes the complete `rollout.n` candidate set before emitting rows, because aligned/cross joint actions and their shared return tree cannot be reconstructed correctly from independent one-candidate emitter calls. Its joint nodes, completions, actions, transitions, critic inputs, preference provenance, and padding-safe defaults are still carried through the shared schema and TransferQueue boundaries.
 
 `TrajWeaveAgentLoopManager` is an importable bridge over VERL V1 `AgentLoopManagerTQ`. It validates TrajWeave runtime metadata from Hydra overrides, then uses TrajWeave-managed TransferQueue workers for `synthetic_tq` and `hf_local_tq`. DrMAS Math and MAPoRL Debate Math both pass tiny 1-step VERL training smoke. MAPoRL now also has a same-tokenizer 0.5B two-GPU multi-actor validation path. Full paper-scale validation still needs larger LLM runs, Search native VERL training, heterogeneous-tokenizer MAPoRL worker groups, checkpoint resume, and per-group critic support.

@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from trajweave.core.preference import JointPreferencePair
 from trajweave.core.trajectory import MultiAgentTrajectory, TrainingSample
 from trajweave.metrics import JsonlMetricSink, MetricAggregator, MetricEvent, parse_verl_console_metrics
 from trajweave.rollout.engine import RolloutResult
@@ -72,6 +73,9 @@ class ExperimentTracker:
 
     def log_samples(self, samples: list[TrainingSample]) -> None:
         self.trajectories.write_samples(samples)
+
+    def log_preference_pairs(self, pairs: list[JointPreferencePair]) -> None:
+        self.trajectories.write_preference_pairs(pairs)
 
     def log_artifact(
         self,

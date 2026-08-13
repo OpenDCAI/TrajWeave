@@ -140,6 +140,24 @@ def test_comas_invalid_score_penalizes_only_scorer():
     assert all(sample.metadata["score_valid"] is False for sample in interaction)
 
 
+def test_comas_credit_propagates_joint_identifiers():
+    trajectory, _backend = _trajectory()
+    for index, turn in enumerate(trajectory.turns):
+        turn.completion_id = f"completion-{index}"
+        turn.tree_node_id = f"tree-{index}"
+        turn.joint_action_ids = [f"action-{index}"]
+        turn.joint_transition_ids = [f"transition-{index}"]
+
+    samples = CoMASInteractionCreditAssigner().assign([trajectory], default_comas_team(num_rounds=1))
+
+    assert [sample.completion_id for sample in samples] == [turn.completion_id for turn in trajectory.turns]
+    assert [sample.tree_node_id for sample in samples] == [turn.tree_node_id for turn in trajectory.turns]
+    assert [sample.joint_action_ids for sample in samples] == [turn.joint_action_ids for turn in trajectory.turns]
+    assert [sample.joint_transition_ids for sample in samples] == [
+        turn.joint_transition_ids for turn in trajectory.turns
+    ]
+
+
 def test_comas_smoke_emits_all_roles_for_both_independent_policies():
     summary, result = run_comas_math_smoke(num_rounds=2, num_references=2)
 

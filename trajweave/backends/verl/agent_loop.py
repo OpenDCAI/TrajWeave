@@ -15,6 +15,7 @@ from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
     ATGRPOEmitterMixin,
     CoMASEmitterMixin,
+    CoMLRLEmitterMixin,
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
@@ -45,6 +46,9 @@ from trajweave.backends.verl.schema import (
 )
 from trajweave.backends.verl.schema import (
     padded_rm_scores as _padded_rm_scores,
+)
+from trajweave.backends.verl.schema import (
+    resolve_comlrl_extra_fields as _resolve_comlrl_extra_fields,
 )
 from trajweave.backends.verl.schema import (
     to_python as _to_python,
@@ -146,12 +150,17 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
         logger.info("Released local rollout models from %d AgentLoop workers", len(results))
         return results
 
+    def set_comlrl_iterative_context(self, context: dict[str, Any] | None) -> list[dict[str, Any]]:
+        normalized = dict(context or {})
+        return ray.get([worker.set_comlrl_iterative_context.remote(normalized) for worker in self.agent_loop_workers])
+
 
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
     ATGRPOEmitterMixin,
     CoMASEmitterMixin,
+    CoMLRLEmitterMixin,
     MATPOEmitterMixin,
     MAPoRLEmitterMixin,
     GiGPOEmitterMixin,
@@ -174,6 +183,13 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
 
     def release_local_models(self) -> dict[str, Any]:
         return HFLocalGenerationMixin.release_local_models(self)
+
+    def set_comlrl_iterative_context(self, context: dict[str, Any]) -> dict[str, Any]:
+        self._trajweave_comlrl_iterative_context = dict(context)
+        return {
+            "phase": self._trajweave_comlrl_iterative_context.get("phase"),
+            "iteration": self._trajweave_comlrl_iterative_context.get("iteration"),
+        }
 
     async def generate_sequences(self, batch) -> None:
         validate = bool(_to_python(batch["validate"])) if "validate" in batch else False
@@ -209,8 +225,30 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 _to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
             )
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
+            iterative_context_getter = getattr(self, "_comlrl_iterative_context", None)
+            iterative_context = iterative_context_getter() if callable(iterative_context_getter) else {}
+            if iterative_context.get("phase") == "preference":
+                n = int(iterative_context.get("num_target_candidates", n))
             use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-            if runtime.recipe == "atgrpo_solver_verifier_math" and not trajectory["validate"]:
+            if runtime.recipe == "comlrl_joint_math":
+                tree_prompt = dict(prompt)
+                tree_prompt["__comlrl_num_candidates__"] = n
+                self._comlrl_num_candidates(tree_prompt)
+                self._comlrl_joint_mode()
+                if use_hf_local:
+                    outputs = self._build_hf_comlrl_joint_math_outputs(
+                        tree_prompt,
+                        session_id=0,
+                        validate=trajectory["validate"],
+                    )
+                else:
+                    outputs = self._build_comlrl_joint_math_outputs(
+                        tree_prompt,
+                        session_id=0,
+                        validate=trajectory["validate"],
+                    )
+                await self._put_outputs(outputs, validate=trajectory["validate"], session_id=0, **prompt)
+            elif runtime.recipe == "atgrpo_solver_verifier_math" and not trajectory["validate"]:
                 tree_prompt = dict(prompt)
                 tree_prompt["__atgrpo_branch_factor__"] = n
                 outputs = build_recipe_outputs(
@@ -328,6 +366,12 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             for mas_field in MAS_EXTRA_FIELDS:
                 if mas_field in output.extra_fields:
                     field[mas_field] = output.extra_fields[mas_field]
+            field.update(
+                _resolve_comlrl_extra_fields(
+                    output.extra_fields,
+                    row_id=f"{uid}_{session_id}_{index}",
+                )
+            )
             field["session_id"] = session_id
             field["loss_mask"] = field["response_mask"]
             field["input_ids"] = input_ids

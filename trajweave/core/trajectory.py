@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from trajweave.core.joint_trajectory import JointAction, JointCompletion, JointTransition, JointTreeNode
+
 
 @dataclass
 class AgentTurn:
@@ -31,6 +33,10 @@ class AgentTurn:
     selected_for_expansion: bool = False
     local_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    completion_id: str | None = None
+    tree_node_id: str | None = None
+    joint_action_ids: list[str] = field(default_factory=list)
+    joint_transition_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -44,6 +50,10 @@ class MultiAgentTrajectory:
     global_reward: float | None = None
     success: bool | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    joint_nodes: list[JointTreeNode] = field(default_factory=list)
+    joint_completions: list[JointCompletion] = field(default_factory=list)
+    joint_actions: list[JointAction] = field(default_factory=list)
+    joint_transitions: list[JointTransition] = field(default_factory=list)
 
     def add_turn(self, turn: AgentTurn) -> None:
         self.turns.append(turn)
@@ -76,3 +86,7 @@ class TrainingSample:
     selected_for_expansion: bool = False
     local_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    completion_id: str | None = None
+    tree_node_id: str | None = None
+    joint_action_ids: list[str] = field(default_factory=list)
+    joint_transition_ids: list[str] = field(default_factory=list)

@@ -10,13 +10,15 @@ from omegaconf import OmegaConf
 
 from trajweave.backends.policy import StableByteTokenizer
 from trajweave.backends.verl.batch_padding import pad_session_batch
+from trajweave.backends.verl.emitters.comlrl import CoMLRLEmitterMixin
+from trajweave.backends.verl.main_ppo import _bind_agent_loop_manager
 from trajweave.backends.verl.schema import flatten_token_ids
 from trajweave.backends.verl.trainers.maporl_multi_actor import _worker_groups_from_config
 from trajweave.backends.verl.weight_sync import sync_hf_local_rollout_weights
 from trajweave.backends.verl.workflow_runtime import build_hf_workflow_outputs
 
 
-class FakeWorkflowWorker:
+class FakeWorkflowWorker(CoMLRLEmitterMixin):
     def __init__(self, responses: list[str], *, matpo_overrides: dict | None = None):
         self.responses = list(responses)
         self.tokenizer = StableByteTokenizer()
@@ -51,6 +53,14 @@ class FakeWorkflowWorker:
             }
         }
         self.config["agent"]["orchestra"]["matpo"].update(matpo_overrides or {})
+        self.config["trajweave"] = {
+            "comlrl": {
+                "algorithm": "magrpo",
+                "joint_mode": "aligned",
+                "max_turns": 1,
+                "normalize_advantages": False,
+            }
+        }
 
     def _encode_prompt_text(self, text: str) -> list[int]:
         return self.tokenizer.encode(text)
@@ -207,6 +217,30 @@ def test_dynamic_turn_padding_preserves_real_worker_group_for_multi_actor_routin
     assert [field["agent_id"] for field in fields[2:]] == ["__padding__", "__padding__"]
     assert [field["raw_score"] for field in fields[2:]] == [0.0, 0.0]
     assert keys[2:] == ["real_0_-1", "real_0_-2"]
+
+
+def test_hf_comlrl_joint_math_emits_completion_rows_with_effective_returns():
+    prompt = _math_prompt()
+    prompt["__comlrl_num_candidates__"] = 2
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "Final answer: 2",
+                "Final answer: 3",
+                "Final answer: 2",
+                "Final answer: 4",
+            ]
+        ),
+        recipe="comlrl_joint_math",
+        prompt=prompt,
+        session_id=0,
+    )
+
+    assert len(outputs) == 4
+    assert {output.extra_fields["worker_group"] for output in outputs} == {"group_0", "group_1"}
+    assert all(output.extra_fields["completion_id"] for output in outputs)
+    assert all(output.extra_fields["joint_action_ids"] for output in outputs)
+    assert all(output.reward_score == output.extra_fields["effective_projected_joint_return"] for output in outputs)
 
 
 def test_hf_drmas_reward_comes_from_generated_answer_not_session_parity():
@@ -687,6 +721,22 @@ class FakeAgentLoopManager:
     def reload_local_models(self, model_paths: dict[str, str], *, policy_version: int):
         self.calls.append(("reload", model_paths, policy_version))
         return [{"policy_version": policy_version}]
+
+
+def test_agent_loop_manager_is_bound_before_initial_hf_local_weight_sync(monkeypatch):
+    manager = object()
+    trainer = SimpleNamespace(agent_loop_manager=None)
+    calls = []
+
+    def record_sync(actual_trainer):
+        assert actual_trainer.agent_loop_manager is manager
+        calls.append(actual_trainer)
+
+    monkeypatch.setattr("trajweave.backends.verl.weight_sync.sync_hf_local_rollout_weights", record_sync)
+
+    _bind_agent_loop_manager(trainer, manager)
+
+    assert calls == [trainer]
 
 
 def test_hf_local_weight_sync_exports_and_reloads_current_actor(tmp_path: Path):
