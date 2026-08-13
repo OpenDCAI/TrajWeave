@@ -15,6 +15,11 @@ class EmitterRoute:
 
 
 EMITTER_ROUTES: dict[str, EmitterRoute] = {
+    "c3_reasoner_actor_math": EmitterRoute(
+        recipe="c3_reasoner_actor_math",
+        synthetic_method="_build_c3_reasoner_actor_outputs",
+        hf_local_method="_build_hf_c3_reasoner_actor_outputs",
+    ),
     "doctor_mas_math": EmitterRoute(
         recipe="doctor_mas_math",
         synthetic_method="_build_solver_verifier_outputs",
@@ -86,4 +91,6 @@ def build_recipe_outputs(
             validate=validate,
         )
     method = getattr(worker, route.synthetic_method)
+    if route.recipe == "c3_reasoner_actor_math":
+        return method(prompt, session_id=session_id, validate=validate)
     return method(prompt, session_id=session_id)

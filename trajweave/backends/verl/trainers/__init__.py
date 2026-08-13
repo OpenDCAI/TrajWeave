@@ -15,6 +15,7 @@ from trajweave.backends.verl.trainers.comlrl_iterative import (
 
 def register_trajweave_trainers() -> None:
     from trajweave.backends.verl.trainers import (
+        c3_critic_sync,  # noqa: F401
         comlrl_staged,  # noqa: F401
         joint_preference_sync,  # noqa: F401
         maporl_multi_actor,  # noqa: F401

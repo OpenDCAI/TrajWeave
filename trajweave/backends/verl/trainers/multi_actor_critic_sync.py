@@ -868,7 +868,10 @@ def _materialize_critic_tq_batch(batch: Any, *, include_targets: bool) -> KVBatc
         positions = torch.as_tensor(to_python(data["critic_position_ids"][row]), dtype=torch.long)
         if ids.ndim != 1 or attention.shape != ids.shape or positions.shape != ids.shape or ids.numel() == 0:
             raise ValueError("Critic input ids, attention mask, and position ids must be aligned non-empty sequences.")
-        loss_mask = torch.zeros_like(attention, dtype=torch.float32)
+        # TransferQueue tracks one dtype per field within a partition. Rollout
+        # rows register both masks as int64, so temporary critic rows must keep
+        # that contract even though the loss consumes the mask as boolean.
+        loss_mask = torch.zeros_like(attention, dtype=torch.long)
         valid = torch.nonzero(attention.bool(), as_tuple=False).flatten()
         if valid.numel() == 0:
             raise ValueError("A real critic row must have at least one attended token.")
@@ -878,7 +881,7 @@ def _materialize_critic_tq_batch(batch: Any, *, include_targets: bool) -> KVBatc
             "attention_mask": attention,
             "position_ids": positions,
             "loss_mask": loss_mask,
-            "response_mask": loss_mask,
+            "response_mask": loss_mask.clone(),
         }
         if include_targets:
             target = float(to_python(data["critic_returns"][row]))

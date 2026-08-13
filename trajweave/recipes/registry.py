@@ -18,6 +18,14 @@ class RecipeDefinition:
 
 RECIPES: tuple[RecipeDefinition, ...] = (
     RecipeDefinition(
+        name="c3.reasoner_actor_math",
+        family="c3",
+        task="math",
+        runtime_recipe="c3_reasoner_actor_math",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("c3.math", "c3_reasoner_actor_math"),
+    ),
+    RecipeDefinition(
         name="comlrl.magrpo",
         family="comlrl",
         task="math",

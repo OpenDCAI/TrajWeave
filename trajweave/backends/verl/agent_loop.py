@@ -14,6 +14,7 @@ from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
     ATGRPOEmitterMixin,
+    C3EmitterMixin,
     CoMASEmitterMixin,
     CoMLRLEmitterMixin,
     DrMASEmitterMixin,
@@ -159,6 +160,7 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
     ATGRPOEmitterMixin,
+    C3EmitterMixin,
     CoMASEmitterMixin,
     CoMLRLEmitterMixin,
     MATPOEmitterMixin,
@@ -230,7 +232,19 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
             if iterative_context.get("phase") == "preference":
                 n = int(iterative_context.get("num_target_candidates", n))
             use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-            if runtime.recipe == "comlrl_joint_math":
+            if runtime.recipe == "c3_reasoner_actor_math":
+                if n != 1:
+                    raise ValueError("C3 uses trajweave.c3.fanout for nested alternatives and requires rollout.n=1.")
+                outputs = build_recipe_outputs(
+                    self,
+                    recipe=runtime.recipe,
+                    use_hf_local=use_hf_local,
+                    prompt=dict(prompt),
+                    session_id=0,
+                    validate=trajectory["validate"],
+                )
+                await self._put_outputs(outputs, validate=trajectory["validate"], session_id=0, **prompt)
+            elif runtime.recipe == "comlrl_joint_math":
                 tree_prompt = dict(prompt)
                 tree_prompt["__comlrl_num_candidates__"] = n
                 self._comlrl_num_candidates(tree_prompt)

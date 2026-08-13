@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了九条 MASRL 路径（部分论文方向含多个任务或算法变体）：
+TrajWeave 现在接入了十条 MASRL 路径（部分论文方向含多个任务或算法变体）：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -23,8 +23,9 @@ TrajWeave 现在接入了九条 MASRL 路径（部分论文方向含多个任务
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
 | MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
 | CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | MAGRPO family、separate-critic IAC/MAAC、MADPO、MARLHF 与 iterative 路径已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
+| C3 ReasonerActor Math | frozen-context Reasoner -> Actor nested prefix tree | Rule-B sibling LOO/full-mean credit、reward/value variants、centralized prefix-Q critic 已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
 
-当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。CoMLRL 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
+当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。CoMLRL 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
 
 验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
@@ -37,7 +38,7 @@ TrajWeave 现在接入了九条 MASRL 路径（部分论文方向含多个任务
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
 | 训练步数          | MATPO/AT-GRPO 修复后 synthetic 与 HF tiny 均完成 `2/2` step、return code `0`               |
-| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`222 passed`（含 AT-GRPO 训练/验证 TQ bridge）            |
+| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`642 passed`（含 C3 与 AT-GRPO 训练/验证 TQ bridge）     |
 | 代码边界          | 仅在 `verl/trainer/ppo/core_algos.py` 增加可复用的非 dual-clip 标准 PPO loss mode           |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
@@ -166,6 +167,7 @@ configs/                         按算法归档的 YAML 启动入口。
   comas/                         CoMAS peer-review interaction-reward 配置。
   matpo/                         MATPO planner-worker browse 配置。
   comlrl/                        CoMLRL 十种算法 smoke 与 VERL plan 配置。
+  c3/                            C3 Reasoner/Actor prefix-tree smoke 与 VERL plan 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
 trajweave/
@@ -186,6 +188,7 @@ trajweave/
     comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
     matpo/                       MATPO planner/worker parent-child protocol。
     comlrl/                      CoMLRL full joint-action tree 与 iterative comparator。
+    c3/                          C3 frozen-context nested prefix-tree protocol。
   credit/                        Reward propagation 和 credit assignment。
     common/                      可复用的 step grouping 和 discounted return。
     agentflow/                   Planner-only Flow-GRPO credit。
@@ -196,6 +199,7 @@ trajweave/
     comas/                       CoMAS score parser 和 interaction reward 真值表。
     matpo/                       MATPO parent-broadcast credit。
     comlrl/                      joint return/baseline、IAC/MAAC、MADPO/MARLHF credit。
+    c3/                          C3 Rule-B sibling contextual counterfactual credit。
   recipes/                       按论文隔离的可执行组合。
     doctor_mas/                  DrMAS Math/Search recipe。
     maporl/                      MAPoRL debate recipe。
@@ -204,10 +208,11 @@ trajweave/
     atgrpo/                      AT-GRPO tree sampling、credit、VERL override 和 plugin。
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
     comlrl/                      CoMLRL algorithm/config/plugin 组合。
+    c3/                          C3 Reasoner/Actor math、credit variant、VERL override 和 plugin。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、CoMLRL 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、CoMLRL、C3 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -224,8 +229,9 @@ trajweave/
     verl/extensions/comas/       CoMAS interaction REINFORCE advantage hook。
     verl/extensions/matpo/       MATPO parent-broadcast GRPO runtime extension。
     verl/extensions/comlrl/      CoMLRL ratio-free policy gradient、actor-critic 与 preference hooks。
+    verl/extensions/c3/          C3 contextual counterfactual advantage 和 prefix 字段 hooks。
     verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
-    verl/trainers/               多 Actor、CoMLRL critic/preference/staged/iterative Trainer。
+    verl/trainers/               多 Actor、CoMLRL critic/preference/staged/iterative、C3 prefix-Q Trainer。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -261,9 +267,9 @@ verl/                            保留的 VERL backend。
 
 | 概念          | 回答的问题                                      | 当前例子                                                                 |
 | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------ |
-| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `SearchAnswerEnvironment`, `CoMASMathEnvironment` |
-| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `GiGPOSolverVerifierOrchestra`, `CoMASPeerReviewOrchestra`, `PlannerWorkerOrchestra` |
-| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `GiGPOCreditAssigner`, `CoMASInteractionCreditAssigner`, `MATPOParentBroadcastCreditAssigner` |
+| Environment   | 任务是什么？observation、tool、reward 是什么？  | `SolverVerifierMathEnvironment`, `C3MathEnvironment`, `SearchAnswerEnvironment`, `CoMASMathEnvironment` |
+| Orchestra     | 谁先行动？谁看什么上下文？什么时候停止？        | `SolverVerifierOrchestra`, `SearchAnswerOrchestra`, `MAPoRLDebateOrchestra`, `AgentFlowPlannerToolOrchestra`, `GiGPOSolverVerifierOrchestra`, `CoMASPeerReviewOrchestra`, `PlannerWorkerOrchestra`, `C3PrefixTreeOrchestra` |
+| Credit        | reward 分给谁？怎么归一化？                     | `DoctorMASCreditAssigner`, `MAPoRLPPOScoreRuleCreditAssigner`, `FlowGRPOPlannerOnlyCreditAssigner`, `GiGPOCreditAssigner`, `CoMASInteractionCreditAssigner`, `MATPOParentBroadcastCreditAssigner`, `C3CreditAssigner` |
 
 不要假设“一篇论文等于一个环境”。例如 DrMAS 可以跑 Math，也可以跑 Search。真正决定组合关系的是 paper recipe。
 
@@ -340,6 +346,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/comlrl/magrpo_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/c3/reasoner_actor_math_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -363,6 +372,10 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 # CoMLRL command-only plan；运行前替换模型、tokenizer 与 train/val parquet placeholder。
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/comlrl/madpo_verl_tiny.yaml
+
+# C3 command-only plan；运行前替换两个 Actor、Q critic 与数据 placeholder。
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/c3/reasoner_actor_math_verl_tiny.yaml
 ```
 
 真实 Qwen2.5-0.5B 双卡回归入口：
@@ -685,6 +698,20 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 主要配置    | `configs/comlrl/*_smoke.yaml` 与每种算法对应的 `*_verl_tiny.yaml`；后者是显式小 batch/短序列/单 epoch 的 `verl_plan` 模板，仍需替换模型、tokenizer 和 train/val parquet 路径。 |
 | 已知限制    | TrajWeave 面向 cooperative multi-agent，至少 2 Agent；IAC 当前只支持每 Agent 独立 critic，不支持共享 actor backbone value head；IAC/MAAC 当前固定单候选，checkpoint resume 与 reference-policy KL rollout 尚未接线（非零 KL 配置会 fail-fast）；真实训练前需替换 plan 中的模型/tokenizer/数据 placeholder 并按 Actor/Critic 数量配置 GPU。 |
 
+### C3 ReasonerActor Math
+
+| 字段        | 内容 |
+| ----------- | ---- |
+| 参考实现    | [EIT-EAST-Lab/C3](https://github.com/EIT-EAST-Lab/C3)，对齐提交 `628185becc70732771393be28d087e88f0a4a5e8`。 |
+| 论文贡献    | 固定父 transcript/prompt 后重放同角色 alternatives，以 sibling counterfactual baseline 将 terminal reward 分配到局部前缀节点。 |
+| Environment | `C3MathEnvironment`；保留字符串 ground truth，并用 `math_verify` 判定 Actor leaf 的最终答案。 |
+| Orchestra   | `C3PrefixTreeOrchestra`；默认 `Reasoner -> Actor`，每层 fanout 独立展开，siblings 共用冻结上下文，父节点 return 是其子树 leaf reward 均值。 |
+| Credit      | `C3CreditAssigner` / `C3ContextualCounterfactualHooks`；支持 `reward_only`、`value_only`、`value_assisted` 和 LOO/full-mean baseline。 |
+| VERL 路径   | AgentLoop 一次 prompt 生成完整 nested prefix tree -> C3 schema/TQ -> reasoner/actor Worker Group -> sibling advantage；value variants 由 `trajweave_c3_critic_sync` 的 centralized prefix-Q critic 推断和训练。critic 推理将 raw logit 转为成功概率；训练使用按 descendant leaf 数加权的 BCE 和 batch Laplace bias，与上游逐 leaf 展开 prefix view 的目标等价。 |
+| 当前状态    | CPU smoke、完整 tree/schema、真实 TransferQueue bridge、reward-only hook、value-assisted advantage/critic target 和 trainer 注册测试已通过；尚无可声明完成的真实多 GPU run。 |
+| 主要配置    | `configs/c3/reasoner_actor_math_smoke.yaml`；`configs/c3/reasoner_actor_math_verl_tiny.yaml` 是三 GPU command plan，运行前必须替换 Actor、critic、tokenizer 和 parquet placeholder。 |
+| 已知限制    | 当前 recipe 固定两层 Reasoner/Actor 数学协议；每层 fanout 至少为 2；separate Q critic 固定单 GPU；每个 routed Actor group 当前按一个完整 mini-batch 更新，通用 `ppo_mini_batch_size` 不会进一步拆分该 route；checkpoint resume、真实三 GPU 更新/权重回流和 paper-scale 指标尚未验收。TrajWeave 与上游的 prefix 换行、可选 preamble 和 tokenizer rendering 不完全相同，因此不声明上游 Q-critic checkpoint 可直接兼容。 |
+
 ### CoMAS PeerReview Math
 
 | 字段        | 内容                                                                                                  |
@@ -732,3 +759,5 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 ## 16. 归属和许可
 
 TrajWeave 包含来自 VERL / HybridFlow 的代码。原始源码使用 Apache-2.0 license。复制上游源码时必须保留 upstream copyright headers。
+
+C3 集成参考 `EIT-EAST-Lab/C3` 提交 `628185becc70732771393be28d087e88f0a4a5e8`；上游使用 Apache-2.0，完整许可证见 `licenses/C3-Apache-2.0.txt`，来源声明见 `Notice.txt`。

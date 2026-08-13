@@ -10,3 +10,9 @@ Original CoMLRL copyright:
 Copyright (c) 2025 OpenMLRL
 
 The complete CoMLRL license is included in licenses/CoMLRL-BSD-3-Clause.txt.
+
+TrajWeave's C3 integration is adapted from EIT-EAST-Lab/C3 commit
+628185becc70732771393be28d087e88f0a4a5e8. C3 is distributed under
+the Apache License 2.0.
+
+The complete C3 license is included in licenses/C3-Apache-2.0.txt.

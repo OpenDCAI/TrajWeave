@@ -152,6 +152,13 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             )
 
     def _validate_multi_actor_specs(self) -> None:
+        recipe = self._recipe_name()
+        agent_loop_backend = str(OmegaConf.select(self.config, "trajweave.agent_loop_backend") or "")
+        if recipe == "c3_reasoner_actor_math" and agent_loop_backend != "hf_local_tq":
+            raise ValueError(
+                "C3 training requires trajweave.agent_loop_backend=hf_local_tq so updated Actor weights "
+                "are reloaded for the next rollout; synthetic_tq is diagnostic-only."
+            )
         tokenizer_mode = str(OmegaConf.select(self.config, "trajweave.multi_actor.tokenizer_mode") or "shared")
         if tokenizer_mode not in {"shared", "compatible"}:
             raise ValueError(

@@ -746,6 +746,14 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
     if (
+        credit_allocator == "c3_contextual_counterfactual"
+        or recipe == "c3_reasoner_actor_math"
+        or "trajweave_c3_contextual_counterfactual" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.c3 import C3ContextualCounterfactualHooks
+
+        return C3ContextualCounterfactualHooks()
+    if (
         credit_allocator
         in {
             "comlrl_reinforce",

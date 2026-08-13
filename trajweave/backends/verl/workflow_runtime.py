@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from trajweave.backends.local import extract_final_int
+from trajweave.backends.local import RuleBasedMathPolicyBackend, extract_final_int
 from trajweave.backends.policy import PolicyRequest, PolicyResponse
 from trajweave.backends.verl.emitters.comlrl import (
     _ACTOR_CRITIC_ALGORITHMS,
@@ -30,9 +30,11 @@ from trajweave.envs.base import evaluate_trajectory
 from trajweave.envs.comas import CoMASMathEnvironment
 from trajweave.envs.comlrl import JointMathEnvironment
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
+from trajweave.envs.math.c3 import C3MathEnvironment, C3MathTask
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
 from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
+from trajweave.orchestration.c3 import C3PrefixTreeOrchestra
 from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.comlrl import FullJointTreeBuilder
 from trajweave.orchestration.comlrl.comparator import (
@@ -48,6 +50,7 @@ from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
 from trajweave.recipes.atgrpo.solver_verifier_math import default_atgrpo_team
+from trajweave.recipes.c3.math_prefix import default_c3_team
 from trajweave.recipes.comas.peer_review_math import CoMASRulePolicyBackend, default_comas_team
 from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
@@ -111,6 +114,15 @@ def build_hf_workflow_outputs(
             worker,
             task=task,
             prompt=prompt,
+            session_id=session_id,
+            policy_backend=backend,
+            validate=validate,
+        )
+    if recipe == "c3_reasoner_actor_math":
+        task = C3MathTask(task_id=task_id, question=question, answer=ground_truth)
+        return _build_c3_outputs(
+            worker,
+            task=task,
             session_id=session_id,
             policy_backend=backend,
             validate=validate,
@@ -292,6 +304,57 @@ def _run_atgrpo_selected_spine(
     return trajectory
 
 
+def build_synthetic_c3_workflow_outputs(
+    worker: Any,
+    *,
+    prompt: dict[str, Any],
+    session_id: int,
+    validate: bool = False,
+) -> list[AgentLoopOutput]:
+    task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
+    raw_prompt = to_python(prompt.get("raw_prompt", []))
+    task = C3MathTask(
+        task_id=task_id,
+        question=_question_from_prompt(raw_prompt),
+        answer=required_ground_truth(prompt),
+    )
+    backend = _WorkerEncodedPolicyBackend(worker=worker, delegate=RuleBasedMathPolicyBackend())
+    return _build_c3_outputs(
+        worker,
+        task=task,
+        session_id=session_id,
+        policy_backend=backend,
+        validate=validate,
+    )
+
+
+def _build_c3_outputs(
+    worker: Any,
+    *,
+    task: C3MathTask,
+    session_id: int,
+    policy_backend: Any,
+    validate: bool,
+) -> list[AgentLoopOutput]:
+    team = default_c3_team(model_ids=worker._c3_model_ids())
+    configured_fanout = worker._c3_fanout()
+    # The upstream C3 evaluation default is one sample per prompt. Expanding the
+    # training tree here and selecting its highest-reward leaf would leak the
+    # ground truth into validation and report oracle best-of-tree accuracy.
+    fanout = tuple(1 for _ in configured_fanout) if validate else configured_fanout
+    episode_id = f"{task.task_id}_{session_id}:c3"
+    trajectory = C3PrefixTreeOrchestra(fanout=fanout, allow_singleton_fanout=validate).run_tree(
+        episode_id=episode_id,
+        rollout_group=task.task_id,
+        task=task,
+        team=team,
+        observation=task.question,
+        policy_backend=policy_backend,
+        environment=C3MathEnvironment(),
+    )
+    return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
+
+
 def _run_protocol(
     *,
     task: Any,
@@ -383,7 +446,7 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                     "local_score": float(turn.local_score or 0.0),
                 }
             )
-        if trajectory.team_name == "atgrpo_solver_verifier_math":
+        if trajectory.team_name in {"atgrpo_solver_verifier_math", "c3_reasoner_actor_math"}:
             # AT-GRPO's ATGRPOHooks groups advantages by (rollout_group, turn_id, agent_id),
             # so turn_id must be the orchestra's absolute turn index (SolverVerifierOrchestra's
             # own counter), not agent_loop.py's default of "position within trainable turns".
@@ -424,6 +487,8 @@ def _annotate_actor_critic_metadata(
     trajectory: MultiAgentTrajectory,
     team: TeamSpec,
 ) -> None:
+    if trajectory.team_name == "c3_reasoner_actor_math":
+        return
     if _actor_critic_runtime_settings(getattr(worker, "config", None)) is None:
         return
     trainable_names = {agent.name for agent in team.agents if agent.trainable}

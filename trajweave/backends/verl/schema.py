@@ -114,6 +114,18 @@ MAS_EXTRA_FIELDS = (
     "branch_index",
     "selected_for_expansion",
     "local_score",
+    "c3_group_id",
+    "c3_depth",
+    "c3_role_index",
+    "c3_parent_id",
+    "c3_is_leaf",
+    "c3_leaf_success",
+    "c3_question",
+    "c3_prefix_outputs",
+    "c3_prefix_prompts",
+    "c3_prefix_text",
+    "c3_subtree_return",
+    "c3_leaf_count",
 ) + COMLRL_EXTRA_FIELDS
 
 

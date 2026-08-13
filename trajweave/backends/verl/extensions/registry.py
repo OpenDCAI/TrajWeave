@@ -34,6 +34,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
         return ("trajweave_gigpo_hierarchical_grpo",)
     if credit_allocator == "atgrpo_agent_turn_wise_grpo" or recipe == "atgrpo_solver_verifier_math":
         return ("trajweave_atgrpo_agent_turn_wise_grpo",)
+    if credit_allocator == "c3_contextual_counterfactual" or recipe == "c3_reasoner_actor_math":
+        return ("trajweave_c3_contextual_counterfactual",)
     if credit_allocator in {
         "comlrl_reinforce",
         "comlrl_magrpo",
@@ -70,6 +72,7 @@ def _normalize_names(value: Any) -> tuple[str, ...]:
 def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.agentflow import apply_agentflow_planner_grpo_patch
     from trajweave.backends.verl.extensions.atgrpo import apply_atgrpo_agent_turn_wise_grpo_patch
+    from trajweave.backends.verl.extensions.c3 import apply_c3_contextual_counterfactual_patch
     from trajweave.backends.verl.extensions.comas import apply_comas_interaction_reinforce_patch
     from trajweave.backends.verl.extensions.comlrl import apply_comlrl_reinforce_patch
     from trajweave.backends.verl.extensions.common.nested_compat import apply_tq_nested_compat_patch
@@ -83,6 +86,7 @@ def _registry() -> dict[str, RuntimeExtension]:
         "trajweave_agentflow_planner_grpo": apply_agentflow_planner_grpo_patch,
         "trajweave_atgrpo_agent_turn_wise_grpo": apply_atgrpo_agent_turn_wise_grpo_patch,
         "trajweave_comas_interaction_reinforce": apply_comas_interaction_reinforce_patch,
+        "trajweave_c3_contextual_counterfactual": apply_c3_contextual_counterfactual_patch,
         "trajweave_comlrl_reinforce": apply_comlrl_reinforce_patch,
         "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,
         "trajweave_matpo_parent_broadcast": apply_matpo_parent_broadcast_patch,

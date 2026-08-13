@@ -1,0 +1,14 @@
+recipe: c3.reasoner_actor_math
+mode: smoke
+
+c3:
+  fanout: [2, 2]
+  role_order: [reasoner, actor]
+  credit_variant: reward_only
+  baseline_mode: loo
+  value_assisted_alpha: 1.0
+  normalize_advantages: true
+
+backend:
+  type: rule
+  device: cpu

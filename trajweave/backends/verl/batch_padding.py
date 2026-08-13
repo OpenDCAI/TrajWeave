@@ -99,6 +99,18 @@ def pad_session_batch(
             "branch_index": -1,
             "selected_for_expansion": False,
             "local_score": 0.0,
+            "c3_group_id": pad_uid,
+            "c3_depth": -1,
+            "c3_role_index": -1,
+            "c3_parent_id": "",
+            "c3_is_leaf": False,
+            "c3_leaf_success": False,
+            "c3_question": "",
+            "c3_prefix_outputs": {},
+            "c3_prefix_prompts": {},
+            "c3_prefix_text": "",
+            "c3_subtree_return": 0.0,
+            "c3_leaf_count": 0,
         }.items():
             if key in sample:
                 sample[key] = value
@@ -149,6 +161,18 @@ def pad_session_batch(
                 "branch_index": -1,
                 "selected_for_expansion": False,
                 "local_score": 0.0,
+                "c3_group_id": pad_uid,
+                "c3_depth": -1,
+                "c3_role_index": -1,
+                "c3_parent_id": "",
+                "c3_is_leaf": False,
+                "c3_leaf_success": False,
+                "c3_question": "",
+                "c3_prefix_outputs": {},
+                "c3_prefix_prompts": {},
+                "c3_prefix_text": "",
+                "c3_subtree_return": 0.0,
+                "c3_leaf_count": 0,
             }
         )
         if source_reqs_id:

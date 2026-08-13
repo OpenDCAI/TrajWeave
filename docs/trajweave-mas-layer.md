@@ -31,6 +31,7 @@ drmas.math.verl_tiny
 drmas.search.verl_tiny
 maporl.debate_math.full_verl_tiny
 agentflow.flow_grpo.planner_tool
+c3.reasoner_actor_math
 ```
 
 Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supported, but new configs should live under algorithm folders:
@@ -39,6 +40,7 @@ Legacy aliases such as `doctor_mas_math` and `drmas_native_math` remain supporte
 configs/drmas/
 configs/maporl/
 configs/agentflow/
+configs/c3/
 ```
 
 ## DrMAS First Slice
@@ -223,6 +225,39 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 The current validation includes the default 1-step tiny run plus a separate strict 3-step run that exercises AgentFlow rollout, TransferQueue fields, GRPO advantage calculation, and actor update.
 
+## C3 Reasoner-Actor Prefix Tree Slice
+
+```mermaid
+flowchart LR
+    A[MathTask] --> B[C3PrefixTreeOrchestra]
+    B --> C[Reasoner Siblings]
+    C --> D[Actor Siblings per Reasoner Prefix]
+    D --> E[Terminal Leaf Reward]
+    E --> F[Subtree Mean Return]
+    F --> G[Sibling LOO or Full-Mean Credit]
+    G --> H1[Reasoner Actor WG]
+    G --> H2[Actor Actor WG]
+    F --> I[Centralized Prefix-Q Critic]
+```
+
+C3 uses Rule-B nested prefix-tree semantics rather than a CoMLRL joint-action tree:
+
+1. One logical prompt generates the complete `Reasoner -> Actor` tree in one AgentLoop dispatch.
+2. Alternatives in a sibling group share the same frozen parent transcript, prompt, parent node, and group id.
+3. Each leaf receives the environment reward; each internal prefix receives the mean terminal reward of its descendant leaves.
+4. `reward_only` computes sibling counterfactual credit directly in `C3ContextualCounterfactualHooks`.
+5. `value_only` and `value_assisted` use `trajweave_c3_critic_sync`, which converts raw Q logits to success probabilities for credit and trains each distinct prefix with descendant-leaf-count-weighted BCE against `c3_subtree_return`. The compressed loss and Laplace batch prior are equivalent to upstream C3's explicit per-leaf prefix views.
+6. C3 prefix rows are never deduplicated as MAAC joint transitions: every node is an independent actor sample and Q target.
+
+Run the CPU smoke:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/c3/reasoner_actor_math_smoke.yaml
+```
+
+`configs/c3/reasoner_actor_math_verl_tiny.yaml` is a command plan for two Actor Worker Groups plus one Q critic GPU. Replace all model, tokenizer, and parquet placeholders before launching. The CPU smoke and real TransferQueue bridge are covered; a real three-GPU training run has not yet been accepted. Each routed Actor group currently updates as one complete mini-batch, so the generic `ppo_mini_batch_size` setting does not split a role route further. Prefix formatting, optional critic preamble, and tokenizer rendering are not byte-identical to upstream C3, so upstream Q-critic checkpoints are not claimed to be directly compatible.
+
 ## VERL Runtime Hook Boundary
 
 TrajWeave keeps paper-specific MASRL logic outside `verl/`, but it can add small upstream-style VERL extension points and compatibility fixes when the backend needs them. Runtime integration is split into two layers:
@@ -256,6 +291,7 @@ flowchart TD
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 | `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
 | `CoMLRLReinforceHooks` | CoMLRL MAGRPO family. | Uses rollout-computed joint returns/baselines verbatim and enforces ratio-free sequence policy gradient fields. |
+| `C3ContextualCounterfactualHooks` | C3 reward-only. | Groups frozen-context prefix siblings by `c3_group_id` and computes LOO/full-mean credit from `c3_subtree_return`; value variants are handled by the C3 prefix-Q Trainer. |
 
 AT-GRPO uses selected-spine sampling during training: each parent observation produces `K` sibling actions, only the locally selected child is expanded, and all siblings retain parent/node/observation-group lineage. Validation runs independent branch-factor-1 sessions instead of best-of-N selection. MATPO computes one parent-rollout reward before GRPO using `0.9 * accuracy + 0.1 * 0.5 * (planner_format + mean(worker_format))`, then broadcasts the resulting parent advantage to planner and worker generations.
 
@@ -294,6 +330,8 @@ Current configs:
 | `matpo/browse_verl_tiny.yaml` | MATPO VERL bridge/command dry-run with planner tool-format shaping. |
 | `comlrl/*_smoke.yaml` | CPU smoke entries for all ten integrated CoMLRL algorithms. |
 | `comlrl/*_verl_tiny.yaml` | Command-only MADPO/MARLHF and iterative plans; model/tokenizer placeholders must be replaced before training. |
+| `c3/reasoner_actor_math_smoke.yaml` | Deterministic Rule-B nested prefix-tree rollout and sibling credit check. |
+| `c3/reasoner_actor_math_verl_tiny.yaml` | Command-only two-Actor plus centralized prefix-Q critic plan; all data/model placeholders must be replaced. |
 | `drmas/math_verl_agent_loop_dryrun.yaml` | Optional DataProto export plus VERL V1 custom AgentLoopManager dry-run. |
 | `drmas/math_hf_gpu_smoke.yaml` | Local random Transformers model on CUDA for backend plumbing validation. |
 | `drmas/math_verl_tiny.yaml` | Namespaced DrMAS Math VERL tiny dry-run config. |
@@ -307,5 +345,7 @@ The VERL path currently exposes four integration boundaries:
 4. `PPOExtensionHooks` declares VERL-side TransferQueue fields, advantage grouping, and algorithm-specific advantage computation.
 
 CoMLRL is an intentional AgentLoop special dispatch: one logical prompt consumes the complete `rollout.n` candidate set before emitting rows, because aligned/cross joint actions and their shared return tree cannot be reconstructed correctly from independent one-candidate emitter calls. Its joint nodes, completions, actions, transitions, critic inputs, preference provenance, and padding-safe defaults are still carried through the shared schema and TransferQueue boundaries.
+
+C3 is also an intentional AgentLoop special dispatch, but its tree is not a CoMLRL joint-action tree. One prompt emits every nested role-prefix alternative so frozen sibling contexts, descendant leaf sets, subtree returns, and prefix-Q targets remain intact across the schema and TransferQueue boundaries.
 
 `TrajWeaveAgentLoopManager` is an importable bridge over VERL V1 `AgentLoopManagerTQ`. It validates TrajWeave runtime metadata from Hydra overrides, then uses TrajWeave-managed TransferQueue workers for `synthetic_tq` and `hf_local_tq`. DrMAS Math and MAPoRL Debate Math both pass tiny 1-step VERL training smoke. MAPoRL now also has a same-tokenizer 0.5B two-GPU multi-actor validation path. Full paper-scale validation still needs larger LLM runs, Search native VERL training, heterogeneous-tokenizer MAPoRL worker groups, checkpoint resume, and per-group critic support.
