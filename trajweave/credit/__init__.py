@@ -10,6 +10,7 @@ from trajweave.credit.maporl import (
     MAPoRLScoreBonusCreditAssigner,
     shape_maporl_reward,
 )
+from trajweave.credit.marft import MARFTCreditAssigner, MARFTStep, apply_marft_trajectory_credit
 from trajweave.credit.matpo import MATPOParentBroadcastCreditAssigner
 
 __all__ = [
@@ -21,8 +22,10 @@ __all__ = [
     "GlobalBroadcastCreditAssigner",
     "GiGPOCreditAssigner",
     "MAPoRLPPOScoreRuleCreditAssigner",
+    "MARFTCreditAssigner",
+    "MARFTStep",
     "MATPOParentBroadcastCreditAssigner",
     "MAPoRLScoreBonusCreditAssigner",
+    "apply_marft_trajectory_credit",
     "shape_maporl_reward",
 ]
-

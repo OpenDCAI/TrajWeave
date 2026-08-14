@@ -189,10 +189,12 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             )
         if tokenizer_mode == "compatible":
             assert_compatible_tokenizers(unique_tokenizers)
-        if self.use_reference_policy and not self.config.actor_rollout_ref.model.get("lora_adapter_path"):
+        lora_rank = int(self.config.actor_rollout_ref.model.get("lora_rank", 0) or 0)
+        has_in_actor_reference = lora_rank > 0 or bool(self.config.actor_rollout_ref.model.get("lora_adapter_path"))
+        if self.use_reference_policy and not has_in_actor_reference:
             raise ValueError(
-                "TrajWeave multi-actor currently supports reference policy only when ref is inside actor. "
-                "Set algorithm.use_kl_in_reward=false for the current TrajWeave multi-actor path."
+                "TrajWeave multi-actor reference policy requires actor LoRA so the frozen base model can be "
+                "evaluated with no_lora_adapter=true."
             )
         if int(self.config.trainer.nnodes) != 1:
             raise ValueError("TrajWeave per-group GPU pools currently support trainer.nnodes=1 only.")
@@ -232,7 +234,10 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
                 optimizer_config=critic_cfg.optim,
                 checkpoint_config=critic_cfg.checkpoint,
             )
-            critic_class = RayClassWithInitArgs(cls=__import__("ray").remote(TrainingWorker), config=worker_cfg)
+            critic_class = RayClassWithInitArgs(
+                cls=__import__("ray").remote(self._critic_training_worker_cls()),
+                config=worker_cfg,
+            )
             self._trajweave_critic_cfg = critic_cfg
 
         wg_kwargs = {"device_name": self.config.trainer.device}
@@ -278,6 +283,9 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
 
         self.ref_in_actor = True
         self.ref_policy_wg = None
+
+    def _critic_training_worker_cls(self) -> type[TrainingWorker]:
+        return TrainingWorker
 
     def _init_runtime_managers(self) -> None:
         from verl.experimental.reward_loop import RewardLoopManager

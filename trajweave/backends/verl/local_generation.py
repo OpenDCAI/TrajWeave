@@ -90,6 +90,7 @@ class HFLocalGenerationMixin:
         sample_seed: int | None = None,
         validate: bool = False,
         prompt_text: str | None = None,
+        generation_config: dict[str, Any] | None = None,
     ) -> list[int]:
         model = self._local_model(policy_group=policy_group)
         tokenizer = self._local_tokenizer(policy_group=policy_group)
@@ -103,16 +104,23 @@ class HFLocalGenerationMixin:
         temperature = float(config_get(self.rollout_config, "temperature", 1.0))
         top_p = float(config_get(self.rollout_config, "top_p", 1.0))
         top_k = int(config_get(self.rollout_config, "top_k", -1))
+        max_new_tokens = int(config_get(generation_config, "max_new_tokens", self.rollout_config.response_length))
+        if max_new_tokens <= 0:
+            raise ValueError("Agent generation_config.max_new_tokens must be positive.")
         if validate:
             val_kwargs = config_get(self.rollout_config, "val_kwargs", {}) or {}
             temperature = float(config_get(val_kwargs, "temperature", 0.0))
             top_p = float(config_get(val_kwargs, "top_p", 1.0))
             top_k = int(config_get(val_kwargs, "top_k", -1))
+        elif generation_config:
+            temperature = float(config_get(generation_config, "temperature", temperature))
+            top_p = float(config_get(generation_config, "top_p", top_p))
+            top_k = int(config_get(generation_config, "top_k", top_k))
         do_sample = temperature > 0.0
         generation_kwargs: dict[str, Any] = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "max_new_tokens": self.rollout_config.response_length,
+            "max_new_tokens": min(max_new_tokens, self.rollout_config.response_length),
             "do_sample": do_sample,
             "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id or 0,
             "eos_token_id": tokenizer.eos_token_id,

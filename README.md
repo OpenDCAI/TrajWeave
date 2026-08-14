@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了十一条 MASRL 路径（部分论文方向含多个任务或算法变体）：
+TrajWeave 现在接入了十二条 MASRL 路径（部分论文方向含多个任务或算法变体）：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -24,9 +24,10 @@ TrajWeave 现在接入了十一条 MASRL 路径（部分论文方向含多个任
 | MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
 | MrlX / M-GRPO Research | on-policy Main Explorer -> off-policy Sub Adapter -> research tool | 双独立策略、角色级 GRPO、Adapter 一步滞后 replay 已完成 CPU/TransferQueue 验证；真实双卡训练待验收 |
 | CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | MAGRPO family、separate-critic IAC/MAAC、MADPO、MARLHF 与 iterative 路径已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
+| MARFT Cooperative Math | planner -> solver/verifier static DAG | shared history、三种 credit、共享/角色 LoRA 和共享/独立 critic 已接入；CPU/bridge 门禁已覆盖，真实训练待验收 |
 | C3 ReasonerActor Math | frozen-context Reasoner -> Actor nested prefix tree | Rule-B sibling LOO/full-mean credit、reward/value variants、centralized prefix-Q critic 已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
 
-当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MrlX、CoMLRL 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
+当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MrlX、CoMLRL、MARFT 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
 
 验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
@@ -39,7 +40,7 @@ TrajWeave 现在接入了十一条 MASRL 路径（部分论文方向含多个任
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
 | 训练步数          | MATPO/AT-GRPO 修复后 synthetic 与 HF tiny 均完成 `2/2` step、return code `0`               |
-| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`669 passed`（含 MrlX delayed replay/TQ bridge）       |
+| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`700 passed`（含 MARFT static-DAG/credit/VERL bridge/FSDP snapshot） |
 | 代码边界          | 仅在 `verl/trainer/ppo/core_algos.py` 增加可复用的非 dual-clip 标准 PPO loss mode           |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
@@ -169,6 +170,7 @@ configs/                         按算法归档的 YAML 启动入口。
   matpo/                         MATPO planner-worker browse 配置。
   mrlx/                          MrlX / M-GRPO research co-evolution 配置。
   comlrl/                        CoMLRL 十种算法 smoke 与 VERL plan 配置。
+  marft/                         MARFT cooperative math smoke 与 tiny VERL 配置。
   c3/                            C3 Reasoner/Actor prefix-tree smoke 与 VERL plan 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
 
@@ -191,6 +193,7 @@ trajweave/
     matpo/                       MATPO planner/worker parent-child protocol。
     mrlx/                        MrlX Main Explorer/Sub Adapter research protocol。
     comlrl/                      CoMLRL full joint-action tree 与 iterative comparator。
+    marft/                       MARFT sequential/custom static DAG 和 shared-history protocol。
     c3/                          C3 frozen-context nested prefix-tree protocol。
   credit/                        Reward propagation 和 credit assignment。
     common/                      可复用的 step grouping 和 discounted return。
@@ -203,6 +206,7 @@ trajweave/
     matpo/                       MATPO parent-broadcast credit。
     mrlx/                        MrlX 角色 reward 和 M-GRPO normalization。
     comlrl/                      joint return/baseline、IAC/MAAC、MADPO/MARLHF credit。
+    marft/                       MARFT equal、step-discount 和 per-step credit projection。
     c3/                          C3 Rule-B sibling contextual counterfactual credit。
   recipes/                       按论文隔离的可执行组合。
     doctor_mas/                  DrMAS Math/Search recipe。
@@ -213,11 +217,12 @@ trajweave/
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
     mrlx/                        MrlX research recipe、双策略配置和 plugin。
     comlrl/                      CoMLRL algorithm/config/plugin 组合。
+    marft/                       MARFT math、DAG/LoRA/critic 配置和 plugin。
     c3/                          C3 Reasoner/Actor math、credit variant、VERL override 和 plugin。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、MrlX、CoMLRL、C3 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、MrlX、CoMLRL、MARFT、C3 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -235,9 +240,10 @@ trajweave/
     verl/extensions/matpo/       MATPO parent-broadcast GRPO runtime extension。
     verl/extensions/mrlx/        MrlX role-local M-GRPO runtime extension。
     verl/extensions/comlrl/      CoMLRL ratio-free policy gradient、actor-critic 与 preference hooks。
+    verl/extensions/marft/       MARFT projected-credit PPO/GAE 校验 hook。
     verl/extensions/c3/          C3 contextual counterfactual advantage 和 prefix 字段 hooks。
     verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
-    verl/trainers/               多 Actor、MrlX delayed Adapter、CoMLRL critic/preference/staged/iterative、C3 prefix-Q Trainer。
+    verl/trainers/               多 Actor、MrlX delayed Adapter、CoMLRL/MARFT critic、preference/staged/iterative、C3 prefix-Q Trainer。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -358,6 +364,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/c3/reasoner_actor_math_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marft/deepscaler_2agent_smoke.yaml
 ```
 
 Tiny VERL 运行：
@@ -377,6 +386,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/matpo/browse_verl_tiny.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marft/deepscaler_2agent_verl_tiny.yaml
 
 # MrlX 双 Worker Group command plan；默认不执行训练。
 PYTHONPATH=. python3 -m trajweave.cli.run \
@@ -725,6 +737,21 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 主要配置    | `configs/comlrl/*_smoke.yaml` 与每种算法对应的 `*_verl_tiny.yaml`；后者是显式小 batch/短序列/单 epoch 的 `verl_plan` 模板，仍需替换模型、tokenizer 和 train/val parquet 路径。 |
 | 已知限制    | TrajWeave 面向 cooperative multi-agent，至少 2 Agent；IAC 当前只支持每 Agent 独立 critic，不支持共享 actor backbone value head；IAC/MAAC 当前固定单候选，checkpoint resume 与 reference-policy KL rollout 尚未接线（非零 KL 配置会 fail-fast）；真实训练前需替换 plan 中的模型/tokenizer/数据 placeholder 并按 Actor/Critic 数量配置 GPU。 |
 
+### MARFT Cooperative Math
+
+| 字段        | 内容 |
+| ----------- | ---- |
+| 参考实现    | [jwliao-ai/MARFT](https://github.com/jwliao-ai/MARFT)，对齐提交 `fb9a99a3a59efff67a5088ebe3f27e29a750ac7e`。 |
+| Environment | `SolverVerifierMathEnvironment`；拼接后的共享 completion 按 math exact match 计算 team reward，与上游序列级 reward 输入一致。 |
+| Orchestra   | `MARFTWorkflowOrchestra`；支持 sequential 或 custom static DAG，同层节点读取同一冻结历史快照，层输出按节点声明顺序合并。 |
+| Credit      | `equal`、`step_discount`、`per_step`；TQ 同时记录上游稀疏 `marft_step_reward` 与跨角色反向折扣后的 `marft_projected_return`。 |
+| 策略拓扑    | shared policy/shared LoRA 使用一个 Actor；per-role LoRA/独立策略使用按角色路由的 Actor Worker Group。 |
+| 训练合约    | VERL 路径固定 `return_gamma=algorithm.gamma=algorithm.lam=1`；默认以 frozen base policy、`low_var_kl` 和 `kl_coef=0.1` 计算 token KL。 |
+| Critic      | 默认共享 CTDE critic + VERL GAE；`independent_critic=lora/separate` 是按角色路由的 row-level critic，以 projected return 训练 value target，并要求 `kl_coef=0`。 |
+| 当前状态    | CPU smoke、真实 DataProto/TransferQueue bridge、共享/独立 critic 路由和 CPU FSDP LoRA snapshot 严格加载已通过；tiny VERL 已完成两步配置解析并进入 Ray 资源校验，但当前机器无 GPU，尚无完整 GPU run。 |
+| 主要配置    | `configs/marft/deepscaler_2agent_smoke.yaml`, `configs/marft/deepscaler_2agent_verl_tiny.yaml`。 |
+| 已知限制    | 当前 recipe 只接 math 静态 DAG；上游 dynamic LLM orchestrator 和 `multi_head` critic 未实现；role-routed multi-actor/independent-critic checkpoint resume 会 fail-fast；value critic 不支持 `hf_model` 导出；tiny 配置不代表 DeepScaleR benchmark reproduction。 |
+
 ### C3 ReasonerActor Math
 
 | 字段        | 内容 |
@@ -788,5 +815,7 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 TrajWeave 包含来自 VERL / HybridFlow 的代码。原始源码使用 Apache-2.0 license。复制上游源码时必须保留 upstream copyright headers。
 
 C3 集成参考 `EIT-EAST-Lab/C3` 提交 `628185becc70732771393be28d087e88f0a4a5e8`；上游使用 Apache-2.0，完整许可证见 `licenses/C3-Apache-2.0.txt`，来源声明见 `Notice.txt`。
+
+MARFT 集成参考 `jwliao-ai/MARFT` 提交 `fb9a99a3a59efff67a5088ebe3f27e29a750ac7e`；上游使用 Apache-2.0，完整许可证见 `licenses/MARFT-Apache-2.0.txt`，来源声明见 `Notice.txt`。
 
 MrlX 集成参考 `AQ-MedAI/MrlX` 提交 `0d0478832564492a53be093b7f4cf95d3af21b80`；上游根仓库使用 MIT license，完整许可证见 `licenses/MrlX-MIT.txt`，来源声明见 `Notice.txt`。

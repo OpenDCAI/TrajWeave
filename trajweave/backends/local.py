@@ -23,9 +23,9 @@ def _parse_arithmetic(text: str) -> int | None:
 
 
 def extract_final_int(text: str) -> int | None:
-    match = _FINAL_RE.search(text)
-    if match:
-        return int(match.group(1))
+    matches = tuple(_FINAL_RE.finditer(text))
+    if matches:
+        return int(matches[-1].group(1))
     numbers = re.findall(r"-?\d+", text)
     return int(numbers[-1]) if numbers else None
 

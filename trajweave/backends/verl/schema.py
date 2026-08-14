@@ -135,6 +135,16 @@ MAS_EXTRA_FIELDS = (
     "c3_prefix_text",
     "c3_subtree_return",
     "c3_leaf_count",
+    "marft_node_id",
+    "marft_layer",
+    "marft_role_index",
+    "marft_transition_message",
+    "marft_context_snapshot",
+    "marft_credit_strategy",
+    "marft_credit_discount",
+    "marft_return_gamma",
+    "marft_step_reward",
+    "marft_projected_return",
 ) + COMLRL_EXTRA_FIELDS
 
 

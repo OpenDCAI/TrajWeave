@@ -25,6 +25,7 @@ from trajweave.credit.comlrl import (
     preference_pairs_to_training_samples,
 )
 from trajweave.credit.comlrl.iterative import compare_policy_candidates_by_index, select_policy_comparisons
+from trajweave.credit.marft import apply_marft_trajectory_credit
 from trajweave.credit.matpo.parent_broadcast import apply_matpo_trajectory_reward
 from trajweave.credit.mrlx import apply_mrlx_trajectory_rewards
 from trajweave.envs.base import evaluate_trajectory
@@ -46,6 +47,7 @@ from trajweave.orchestration.comlrl.comparator import (
 )
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
+from trajweave.orchestration.marft import MARFTWorkflowGraph, MARFTWorkflowOrchestra
 from trajweave.orchestration.matpo import PlannerWorkerOrchestra
 from trajweave.orchestration.mrlx import MrlXResearchOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
@@ -58,6 +60,8 @@ from trajweave.recipes.doctor_mas.math_smoke import default_team
 from trajweave.recipes.doctor_mas.search_smoke import default_search_team
 from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
 from trajweave.recipes.maporl.debate_math import default_debate_team
+from trajweave.recipes.marft.config import load_reward_callable
+from trajweave.recipes.marft.math_workflow import DEFAULT_ROLE_PROMPTS, default_marft_team
 from trajweave.recipes.matpo.smoke import default_team as default_matpo_team
 from trajweave.recipes.mrlx.research_qa import default_mrlx_team
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
@@ -80,6 +84,7 @@ class HFLocalWorkerPolicyBackend:
             sample_seed=seed,
             validate=self.validate,
             prompt_text=request.prompt,
+            generation_config=request.agent.generation_config,
         )
         resolver = getattr(self.worker, "_worker_group_model_path", None)
         if resolver is None:
@@ -130,7 +135,19 @@ def build_hf_workflow_outputs(
             policy_backend=backend,
             validate=validate,
         )
-    if recipe == "doctor_mas_math":
+    if recipe == "marft_math_workflow":
+        task = MathTask(task_id=task_id, question=question, answer=ground_truth)
+        team, protocol, environment = _marft_runtime_components(worker)
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=protocol,
+            environment=environment,
+            backend=backend,
+            session_id=session_id,
+        )
+        _apply_marft_runtime_credit(worker, trajectory=trajectory, environment=environment, prompt=prompt)
+    elif recipe == "doctor_mas_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         max_turns = _drmas_math_max_turns(worker.config)
         team = default_team(max_turns=max_turns)
@@ -490,7 +507,11 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
                     "local_score": float(turn.local_score or 0.0),
                 }
             )
-        if trajectory.team_name in {"atgrpo_solver_verifier_math", "c3_reasoner_actor_math"}:
+        if trajectory.team_name in {
+            "atgrpo_solver_verifier_math",
+            "c3_reasoner_actor_math",
+            "marft_math_workflow",
+        }:
             # AT-GRPO's ATGRPOHooks groups advantages by (rollout_group, turn_id, agent_id),
             # so turn_id must be the orchestra's absolute turn index (SolverVerifierOrchestra's
             # own counter), not agent_loop.py's default of "position within trainable turns".
@@ -1582,6 +1603,32 @@ def build_rule_comas_workflow_outputs(
     return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
 
 
+def build_rule_marft_workflow_outputs(
+    worker: Any,
+    *,
+    prompt: dict[str, Any],
+    session_id: int,
+) -> list[AgentLoopOutput]:
+    task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
+    task = MathTask(
+        task_id=task_id,
+        question=_question_from_prompt(to_python(prompt.get("raw_prompt", []))),
+        answer=required_ground_truth(prompt),
+    )
+    team, protocol, environment = _marft_runtime_components(worker)
+    backend = _WorkerEncodedPolicyBackend(worker=worker, delegate=RuleBasedMathPolicyBackend())
+    trajectory = _run_protocol(
+        task=task,
+        team=team,
+        protocol=protocol,
+        environment=environment,
+        backend=backend,
+        session_id=session_id,
+    )
+    _apply_marft_runtime_credit(worker, trajectory=trajectory, environment=environment, prompt=prompt)
+    return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
+
+
 @dataclass
 class _WorkerEncodedPolicyBackend:
     worker: Any
@@ -1611,6 +1658,58 @@ def _comas_runtime_components(worker: Any) -> tuple[TeamSpec, CoMASPeerReviewOrc
         assignment_seed=worker._comas_assignment_seed(),
     )
     return team, protocol, CoMASMathEnvironment()
+
+
+def _marft_runtime_components(
+    worker: Any,
+) -> tuple[TeamSpec, MARFTWorkflowOrchestra, SolverVerifierMathEnvironment]:
+    role_names = worker._marft_role_names()
+    model_ids = worker._marft_model_ids(role_names=role_names)
+    configured_roles = worker._marft_role_configs()
+    role_configs = {
+        role: {
+            **configured_roles.get(role, {}),
+            "system_prompt": configured_roles.get(role, {}).get(
+                "system_prompt",
+                DEFAULT_ROLE_PROMPTS.get(role, f"Act as the {role} role."),
+            ),
+        }
+        for role in role_names
+    }
+    graph_config = worker._marft_graph_config()
+    graph = MARFTWorkflowGraph.from_config(graph_config) if graph_config else MARFTWorkflowGraph.sequential(role_names)
+    unknown_roles = sorted({node.role_name for node in graph.nodes} - set(role_names))
+    if unknown_roles:
+        raise ValueError(f"MARFT runtime graph references unknown roles: {unknown_roles}.")
+    team = default_marft_team(
+        role_names=role_names,
+        model_ids=model_ids,
+        role_configs=role_configs,
+    )
+    prompts = {role: str(role_configs[role]["system_prompt"]) for role in role_names}
+    return team, MARFTWorkflowOrchestra(graph=graph, role_prompts=prompts), SolverVerifierMathEnvironment()
+
+
+def _apply_marft_runtime_credit(
+    worker: Any,
+    *,
+    trajectory: MultiAgentTrajectory,
+    environment: SolverVerifierMathEnvironment,
+    prompt: dict[str, Any],
+) -> None:
+    settings = worker._marft_credit_settings()
+    step_reward_path = settings["step_reward_fn"]
+    per_agent_paths = settings["per_agent_reward_fns"]
+    apply_marft_trajectory_credit(
+        trajectory,
+        strategy=settings["strategy"],
+        discount=settings["discount"],
+        gamma=settings["gamma"],
+        step_reward_fn=load_reward_callable(step_reward_path) if step_reward_path else None,
+        per_agent_reward_fns={role: load_reward_callable(path) for role, path in per_agent_paths.items()},
+        environment=environment,
+        data=to_python(prompt),
+    )
 
 
 def _turn_training_reward(turn: AgentTurn, *, trajectory: MultiAgentTrajectory) -> float:

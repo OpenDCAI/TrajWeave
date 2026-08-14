@@ -6,10 +6,9 @@ The parsing rules in this module are adapted from EIT-EAST-Lab/C3 commit
 ``c3/envs/math/parsing.py`` and ``c3/envs/math/reward.py``. C3 is licensed
 under Apache-2.0; see ``licenses/C3-Apache-2.0.txt`` and ``Notice.txt``.
 
-This module intentionally remains separate from ``MathTask`` and
-``SolverVerifierMathEnvironment``. Those classes implement TrajWeave's
-existing integer-only smoke recipes, while C3 consumes the original string
-label used by MATH, CMATH, and GSM8K-style datasets.
+``SolverVerifierMathEnvironment`` reuses this judge so math workflows can
+consume the original string labels used by MATH, CMATH, and GSM8K-style
+datasets without maintaining a second answer parser.
 """
 
 from __future__ import annotations
@@ -27,7 +26,9 @@ _HASH_LINE_RE = re.compile(r"(?m)^\s*####\s*(.+?)\s*$")
 _ANSWER_LINE_RE = re.compile(
     r"(?im)^\s*(?:final answer|the answer is|answer|答案是|最后答案|最终答案)\s*[:：=]\s*(.+?)\s*$"
 )
-_ANSWER_INLINE_RE = re.compile(r"(?i)(?:final answer|the answer is|answer|答案是|最后答案|最终答案)\s*[:：=]\s*(.+)$")
+_ANSWER_INLINE_RE = re.compile(
+    r"(?i)(?:final answer|the answer is|answer|答案是|最后答案|最终答案)\s*[:：=]\s*([^\r\n]+)"
+)
 _LATEX_FRACTION_RE = re.compile(
     r"\\(?:d?frac|tfrac)\s*\{\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\}"
     r"\s*\{\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\}"

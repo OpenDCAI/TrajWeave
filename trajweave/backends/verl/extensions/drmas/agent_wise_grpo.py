@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -39,15 +40,75 @@ class TrajWeaveActorRolloutRefWorker(ActorRolloutRefWorker):
         try:
             manager.checkpoint_save_contents = ["hf_model"]
             manager.previous_saved_paths = []
-            self.actor.engine.save_checkpoint(
-                local_path=local_path,
-                global_step=global_step,
-                max_ckpt_to_keep=None,
-            )
+            with _merged_lora_hf_state_dict(manager.model):
+                self.actor.engine.save_checkpoint(
+                    local_path=local_path,
+                    global_step=global_step,
+                    max_ckpt_to_keep=None,
+                )
         finally:
             manager.checkpoint_save_contents = previous_contents
             manager.previous_saved_paths = previous_paths
             manager.previous_global_step = previous_step
+
+
+@contextmanager
+def _merged_lora_hf_state_dict(model: Any):
+    """Make the FSDP HF exporter see merged base-model keys for PEFT actors."""
+
+    unwrapped = getattr(model, "_fsdp_wrapped_module", model)
+    if not getattr(unwrapped, "peft_config", None):
+        yield
+        return
+
+    from verl.utils.checkpoint import fsdp_checkpoint_manager
+
+    original_get_state_dict = fsdp_checkpoint_manager.get_fsdp_full_state_dict
+
+    def get_merged_state_dict(candidate: Any, *args: Any, **kwargs: Any):
+        if candidate is model:
+            return _collect_merged_lora_snapshot_state_dict(candidate)
+        return original_get_state_dict(candidate, *args, **kwargs)
+
+    # Actor workers are isolated Ray processes. Keep the override scoped to this
+    # snapshot so regular resumable checkpoints retain their PEFT state dicts.
+    fsdp_checkpoint_manager.get_fsdp_full_state_dict = get_merged_state_dict
+    try:
+        yield
+    finally:
+        fsdp_checkpoint_manager.get_fsdp_full_state_dict = original_get_state_dict
+
+
+def _collect_merged_lora_snapshot_state_dict(model: Any) -> dict[str, torch.Tensor]:
+    from verl.utils.fsdp_utils import collect_merged_lora_params
+
+    if not _has_cpu_parameters(model):
+        return collect_merged_lora_params(model)
+
+    # collect_merged_lora_params restores the live base weights before return.
+    # Its CPU tensors can alias those weights, which also erases the collected
+    # LoRA delta. Copy the full merged state while the merge context is active.
+    from verl.utils.fsdp_utils import get_fsdp_full_state_dict, merged_lora_context, normalize_peft_param_name
+
+    with merged_lora_context(model, backup_adapters=True):
+        merged = normalize_peft_param_name(get_fsdp_full_state_dict(model, offload_to_cpu=True, rank0_only=True))
+        return {name: _copied_cpu_tensor(value) for name, value in merged.items()}
+
+
+def _has_cpu_parameters(model: Any) -> bool:
+    parameters = getattr(model, "parameters", None)
+    if not callable(parameters):
+        return False
+    return any(
+        (device := getattr(parameter, "device", None)) is not None and device.type == "cpu"
+        for parameter in parameters()
+    )
+
+
+def _copied_cpu_tensor(value: Any) -> torch.Tensor:
+    if hasattr(value, "full_tensor"):
+        value = value.full_tensor()
+    return value.detach().to(device="cpu", copy=True)
 
 
 def apply_drmas_agent_wise_grpo_patch(config: Any = None) -> None:
@@ -293,7 +354,11 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             lora_rank = self.config.actor_rollout_ref.model.get("lora_rank", 0)
         self.ref_in_actor = lora_rank > 0 or self.config.actor_rollout_ref.model.get("lora_adapter_path") is not None
         if self.use_reference_policy:
-            self.ref_policy_wg = all_wg[str(tb.Role.ActorRolloutRef)]
+            self.ref_policy_wg = all_wg.get(str(tb.Role.ActorRolloutRef))
+            if not self.ref_in_actor and self.ref_policy_wg is None:
+                raise ValueError(
+                    "TrajWeave self-managed TQ reference policy requires actor LoRA or an ActorRolloutRef worker."
+                )
 
         resource_pool = (
             self.resource_pool_manager.get_resource_pool(tb.Role.RewardModel)
@@ -347,7 +412,9 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
         self.mapping[tb.Role.Actor] = "global_pool"
 
         if tb.need_critic(config):
-            self.role_worker_mapping[tb.Role.Critic] = tb.ray.remote(tb.TrainingWorker)
+            worker_factory = getattr(self, "_critic_training_worker_cls", None)
+            critic_worker_cls = worker_factory() if callable(worker_factory) else tb.TrainingWorker
+            self.role_worker_mapping[tb.Role.Critic] = tb.ray.remote(critic_worker_cls)
             self.mapping[tb.Role.Critic] = "global_pool"
 
         global_pool_id = "global_pool"

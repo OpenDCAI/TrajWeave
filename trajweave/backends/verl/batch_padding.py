@@ -111,6 +111,16 @@ def pad_session_batch(
             "c3_prefix_text": "",
             "c3_subtree_return": 0.0,
             "c3_leaf_count": 0,
+            "marft_node_id": pad_uid,
+            "marft_layer": -1,
+            "marft_role_index": -1,
+            "marft_transition_message": "",
+            "marft_context_snapshot": "",
+            "marft_credit_strategy": "__padding__",
+            "marft_credit_discount": 0.0,
+            "marft_return_gamma": 0.0,
+            "marft_step_reward": 0.0,
+            "marft_projected_return": 0.0,
         }.items():
             if key in sample:
                 sample[key] = value
@@ -173,6 +183,16 @@ def pad_session_batch(
                 "c3_prefix_text": "",
                 "c3_subtree_return": 0.0,
                 "c3_leaf_count": 0,
+                "marft_node_id": pad_uid,
+                "marft_layer": -1,
+                "marft_role_index": -1,
+                "marft_transition_message": "",
+                "marft_context_snapshot": "",
+                "marft_credit_strategy": "__padding__",
+                "marft_credit_discount": 0.0,
+                "marft_return_gamma": 0.0,
+                "marft_step_reward": 0.0,
+                "marft_projected_return": 0.0,
             }
         )
         if source_reqs_id:

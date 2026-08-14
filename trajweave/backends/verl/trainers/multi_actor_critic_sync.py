@@ -165,6 +165,7 @@ class TrajWeaveMultiActorCriticSyncTrainer(TrajWeaveMultiActorSyncTrainer):
 
         self.critic_wgs = {}
         self._critic_cfgs = {}
+        critic_worker_cls = self._critic_training_worker_cls()
         for route in self.critic_route_specs.values():
             critic_cfg = _critic_worker_config_for_route(self.config, route)
             worker_cfg = TrainingWorkerConfig(
@@ -176,7 +177,7 @@ class TrajWeaveMultiActorCriticSyncTrainer(TrajWeaveMultiActorSyncTrainer):
             )
             role_key = safe_critic_role_key(route.critic_group)
             class_dict = {
-                role_key: RayClassWithInitArgs(cls=ray.remote(TrainingWorker), config=worker_cfg),
+                role_key: RayClassWithInitArgs(cls=ray.remote(critic_worker_cls), config=worker_cfg),
             }
             worker_cls = create_colocated_worker_cls(class_dict=class_dict)
             pool = self.resource_pool_manager.resource_pool_dict[role_key]
@@ -198,6 +199,9 @@ class TrajWeaveMultiActorCriticSyncTrainer(TrajWeaveMultiActorSyncTrainer):
         self.critic_wg = self.critic_wgs[next(iter(self.critic_wgs))]
         self.ref_in_actor = True
         self.ref_policy_wg = None
+
+    def _critic_training_worker_cls(self) -> type[TrainingWorker]:
+        return TrainingWorker
 
     def _critic_tokenizer(self, route: CriticRouteSpec):
         if not hasattr(self, "_critic_tokenizers"):

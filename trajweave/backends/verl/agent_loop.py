@@ -20,6 +20,7 @@ from trajweave.backends.verl.emitters import (
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
+    MARFTEmitterMixin,
     MATPOEmitterMixin,
     MrlXEmitterMixin,
 )
@@ -164,6 +165,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
     C3EmitterMixin,
     CoMASEmitterMixin,
     CoMLRLEmitterMixin,
+    MARFTEmitterMixin,
     MATPOEmitterMixin,
     MrlXEmitterMixin,
     MAPoRLEmitterMixin,

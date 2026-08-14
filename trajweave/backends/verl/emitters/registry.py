@@ -15,6 +15,11 @@ class EmitterRoute:
 
 
 EMITTER_ROUTES: dict[str, EmitterRoute] = {
+    "marft_math_workflow": EmitterRoute(
+        recipe="marft_math_workflow",
+        synthetic_method="_build_marft_math_workflow_outputs",
+        hf_local_method="_build_hf_marft_math_workflow_outputs",
+    ),
     "c3_reasoner_actor_math": EmitterRoute(
         recipe="c3_reasoner_actor_math",
         synthetic_method="_build_c3_reasoner_actor_outputs",
@@ -96,6 +101,6 @@ def build_recipe_outputs(
             validate=validate,
         )
     method = getattr(worker, route.synthetic_method)
-    if route.recipe == "c3_reasoner_actor_math":
+    if route.recipe in {"c3_reasoner_actor_math", "marft_math_workflow"}:
         return method(prompt, session_id=session_id, validate=validate)
     return method(prompt, session_id=session_id)

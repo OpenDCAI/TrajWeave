@@ -11,6 +11,7 @@ from trajweave.recipes.doctor_mas.plugin import DoctorMASRecipePlugin
 from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
 from trajweave.recipes.gigpo.plugin import GiGPORecipePlugin
 from trajweave.recipes.maporl.plugin import MAPoRLRecipePlugin
+from trajweave.recipes.marft.plugin import MARFTRecipePlugin
 from trajweave.recipes.matpo.plugin import MATPORecipePlugin
 from trajweave.recipes.mrlx.plugin import MrlXRecipePlugin
 
@@ -18,6 +19,7 @@ from trajweave.recipes.mrlx.plugin import MrlXRecipePlugin
 def recipe_plugins() -> tuple[RecipePlugin, ...]:
     return (
         DrMASNativeRecipePlugin(),
+        MARFTRecipePlugin(),
         MrlXRecipePlugin(),
         C3RecipePlugin(),
         CoMLRLRecipePlugin(),

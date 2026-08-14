@@ -745,6 +745,10 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     recipe = _config_get(trajweave, "recipe", None)
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
+    if credit_allocator == "marft_ctde" or recipe == "marft_math_workflow" or "trajweave_marft_ctde" in extension_names:
+        from trajweave.backends.verl.extensions.marft import MARFTPPOHooks
+
+        return MARFTPPOHooks()
     if (
         credit_allocator == "c3_contextual_counterfactual"
         or recipe == "c3_reasoner_actor_math"

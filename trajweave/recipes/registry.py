@@ -18,6 +18,14 @@ class RecipeDefinition:
 
 RECIPES: tuple[RecipeDefinition, ...] = (
     RecipeDefinition(
+        name="marft.cooperative_math",
+        family="marft",
+        task="math",
+        runtime_recipe="marft_math_workflow",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("marft_math_workflow", "marft.math"),
+    ),
+    RecipeDefinition(
         name="mrlx.mgrpo_research_qa",
         family="mrlx",
         task="browse_qa",
