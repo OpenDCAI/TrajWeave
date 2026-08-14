@@ -28,6 +28,8 @@ def _extension_names(config: Any) -> tuple[str, ...]:
     recipe = _get(trajweave, "recipe", default=None)
     if credit_allocator == "matpo_parent_broadcast_grpo" or recipe == "matpo_browse":
         return ("trajweave_matpo_parent_broadcast",)
+    if credit_allocator == "mrlx_mgrpo" or recipe == "mrlx_research_qa":
+        return ("trajweave_mrlx_mgrpo",)
     if credit_allocator == "agentflow_planner_only_grpo" or recipe == "agentflow_planner_tool":
         return ("trajweave_agentflow_planner_grpo",)
     if credit_allocator == "gigpo_hierarchical_grpo" or recipe == "gigpo_solver_verifier_math":
@@ -80,6 +82,7 @@ def _registry() -> dict[str, RuntimeExtension]:
     from trajweave.backends.verl.extensions.gigpo import apply_gigpo_hierarchical_grpo_patch
     from trajweave.backends.verl.extensions.maporl import apply_maporl_full_ppo_patch, apply_maporl_single_model_patch
     from trajweave.backends.verl.extensions.matpo import apply_matpo_parent_broadcast_patch
+    from trajweave.backends.verl.extensions.mrlx import apply_mrlx_mgrpo_patch
 
     return {
         "drmas_agent_wise_grpo": apply_drmas_agent_wise_grpo_patch,
@@ -90,6 +93,7 @@ def _registry() -> dict[str, RuntimeExtension]:
         "trajweave_comlrl_reinforce": apply_comlrl_reinforce_patch,
         "trajweave_gigpo_hierarchical_grpo": apply_gigpo_hierarchical_grpo_patch,
         "trajweave_matpo_parent_broadcast": apply_matpo_parent_broadcast_patch,
+        "trajweave_mrlx_mgrpo": apply_mrlx_mgrpo_patch,
         "trajweave_maporl_full_ppo": apply_maporl_full_ppo_patch,
         "trajweave_maporl_single_model": apply_maporl_single_model_patch,
         "tq_nested_compat": apply_tq_nested_compat_patch,

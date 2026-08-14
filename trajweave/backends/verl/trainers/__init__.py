@@ -19,6 +19,7 @@ def register_trajweave_trainers() -> None:
         comlrl_staged,  # noqa: F401
         joint_preference_sync,  # noqa: F401
         maporl_multi_actor,  # noqa: F401
+        mrlx_async,  # noqa: F401
         multi_actor_critic_sync,  # noqa: F401
         multi_actor_preference_sync,  # noqa: F401
         multi_actor_sync,  # noqa: F401

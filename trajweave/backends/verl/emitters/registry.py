@@ -45,6 +45,11 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         synthetic_method="_build_matpo_browse_outputs",
         hf_local_method="_build_hf_matpo_browse_outputs",
     ),
+    "mrlx_research_qa": EmitterRoute(
+        recipe="mrlx_research_qa",
+        synthetic_method="_build_mrlx_research_outputs",
+        hf_local_method="_build_hf_mrlx_research_outputs",
+    ),
     "gigpo_solver_verifier_math": EmitterRoute(
         recipe="gigpo_solver_verifier_math",
         synthetic_method="_build_gigpo_solver_verifier_outputs",

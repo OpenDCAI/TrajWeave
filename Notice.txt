@@ -16,3 +16,12 @@ TrajWeave's C3 integration is adapted from EIT-EAST-Lab/C3 commit
 the Apache License 2.0.
 
 The complete C3 license is included in licenses/C3-Apache-2.0.txt.
+
+TrajWeave's MrlX / M-GRPO integration is adapted from AQ-MedAI/MrlX
+commit 0d0478832564492a53be093b7f4cf95d3af21b80. The MrlX root repository
+is distributed under the MIT License.
+
+Original MrlX copyright:
+Copyright (c) 2025 Ant Group
+
+The complete MrlX license is included in licenses/MrlX-MIT.txt.

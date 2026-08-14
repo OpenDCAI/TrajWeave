@@ -18,6 +18,14 @@ class RecipeDefinition:
 
 RECIPES: tuple[RecipeDefinition, ...] = (
     RecipeDefinition(
+        name="mrlx.mgrpo_research_qa",
+        family="mrlx",
+        task="browse_qa",
+        runtime_recipe="mrlx_research_qa",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("mrlx.deep_research", "mrlx_research_qa", "m-grpo"),
+    ),
+    RecipeDefinition(
         name="c3.reasoner_actor_math",
         family="c3",
         task="math",

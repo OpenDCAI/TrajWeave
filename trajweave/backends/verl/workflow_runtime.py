@@ -26,6 +26,7 @@ from trajweave.credit.comlrl import (
 )
 from trajweave.credit.comlrl.iterative import compare_policy_candidates_by_index, select_policy_comparisons
 from trajweave.credit.matpo.parent_broadcast import apply_matpo_trajectory_reward
+from trajweave.credit.mrlx import apply_mrlx_trajectory_rewards
 from trajweave.envs.base import evaluate_trajectory
 from trajweave.envs.comas import CoMASMathEnvironment
 from trajweave.envs.comlrl import JointMathEnvironment
@@ -46,6 +47,7 @@ from trajweave.orchestration.comlrl.comparator import (
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
 from trajweave.orchestration.matpo import PlannerWorkerOrchestra
+from trajweave.orchestration.mrlx import MrlXResearchOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
@@ -57,6 +59,7 @@ from trajweave.recipes.doctor_mas.search_smoke import default_search_team
 from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
 from trajweave.recipes.maporl.debate_math import default_debate_team
 from trajweave.recipes.matpo.smoke import default_team as default_matpo_team
+from trajweave.recipes.mrlx.research_qa import default_mrlx_team
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
@@ -228,6 +231,47 @@ def build_hf_workflow_outputs(
             session_id=session_id,
         )
         _apply_matpo_training_reward(trajectory, config=worker.config)
+    elif recipe == "mrlx_research_qa":
+        extra_info = to_python(prompt.get("extra_info", {})) or {}
+        task = SearchTask(
+            task_id=task_id,
+            question=question,
+            answer=ground_truth,
+            search_query=str(extra_info.get("search_query") or question),
+            documents=_search_documents(extra_info),
+        )
+        explorer_agent, adapter_agent = worker._mrlx_agent_ids()
+        explorer_group, adapter_group = worker._mrlx_model_ids()
+        orchestra_config = worker._mrlx_orchestra_config()
+        research_rounds = int(config_get(orchestra_config, "research_rounds", 1))
+        team = default_mrlx_team(
+            explorer_agent=explorer_agent,
+            adapter_agent=adapter_agent,
+            explorer_model_id=explorer_group,
+            adapter_model_id=adapter_group,
+            tool_name=worker._mrlx_tool_name(),
+            research_rounds=research_rounds,
+        )
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=MrlXResearchOrchestra(
+                explorer_name=explorer_agent,
+                adapter_name=adapter_agent,
+                tool_name=worker._mrlx_tool_name(),
+                research_rounds=research_rounds,
+            ),
+            environment=SearchAnswerEnvironment(),
+            backend=backend,
+            session_id=session_id,
+        )
+        apply_mrlx_trajectory_rewards(
+            trajectory,
+            explorer_agent=explorer_agent,
+            adapter_agent=adapter_agent,
+            explorer_format_bonus=worker._mrlx_explorer_format_bonus(),
+            adapter_format_bonus=worker._mrlx_adapter_format_bonus(),
+        )
     elif recipe == "gigpo_solver_verifier_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
         team = default_gigpo_team(max_steps=_gigpo_max_steps(worker.config))

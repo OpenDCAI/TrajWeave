@@ -258,6 +258,43 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 `configs/c3/reasoner_actor_math_verl_tiny.yaml` is a command plan for two Actor Worker Groups plus one Q critic GPU. Replace all model, tokenizer, and parquet placeholders before launching. The CPU smoke and real TransferQueue bridge are covered; a real three-GPU training run has not yet been accepted. Each routed Actor group currently updates as one complete mini-batch, so the generic `ppo_mini_batch_size` setting does not split a role route further. Prefix formatting, optional critic preamble, and tokenizer rendering are not byte-identical to upstream C3, so upstream Q-critic checkpoints are not claimed to be directly compatible.
 
+## MrlX / M-GRPO Research Slice
+
+```mermaid
+flowchart LR
+    A[Question] --> B[On-policy Main Explorer]
+    B --> C[Sub-agent research call]
+    C --> D[Off-policy Sub Adapter]
+    D --> E[Search tool and evidence]
+    E --> B
+    B --> F[Final answer reward]
+    F --> G1[Explorer role-local GRPO]
+    F --> G2[Adapter inherited reward]
+    G2 --> H[One-step TransferQueue replay]
+    H --> I[Delayed Adapter clipped-PPO update]
+```
+
+This integration preserves the algorithmic boundary shown by the MrlX source rather than its SGLang/Megatron deployment shell:
+
+1. Main Explorer and Sub Adapter use distinct trainable Worker Groups.
+2. The Main receives `1.0` for a correct formatted answer, `0.1` for a valid but incorrect answer, and zero for invalid format.
+3. Invalid Sub format receives zero. A valid Sub receives `1.0` when Main succeeds and the `0.1` format bonus otherwise.
+4. `MrlXMGRPOHooks` normalizes GRPO rewards within role-specific prompt groups. Upstream does not define a separate loss named M-GRPO; both roles use GRPO.
+5. `trajweave_mrlx_async` forces `critic_warmup=0`, updates Main from the current batch, retains Sub rows in a separate TransferQueue partition, consumes them one step later, and drains the final batch before shutdown.
+6. The current slice is single-node, requires one shared tokenizer, is fixed to `research_rounds=1`, and is fixed to one-step lag. It does not claim process-level asynchronous overlap or compatibility with upstream Megatron checkpoints.
+
+The Trainer rejects a run that performs no Adapter update, as well as a final Adapter batch that cannot retain the configured one-step lag. The runtime emits one training row per assistant turn and collapses rows from the same role trajectory when computing the GRPO baseline. This prevents longer chats from receiving extra statistical weight, but it is still an approximation of upstream's single complete multi-turn sample with an explicit loss mask. The offline reward uses normalized exact match only; the external semantic LLM judge from MrlX-DeepResearch is not connected. The two-GPU tiny plan uses `rollout.n=2` as a structural check, while the upstream launch scripts use eight samples per prompt.
+
+Run the CPU smoke and generate the two-GPU command plan:
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/mrlx/mgrpo_research_qa_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/mrlx/mgrpo_research_qa_2gpu.yaml
+```
+
 ## VERL Runtime Hook Boundary
 
 TrajWeave keeps paper-specific MASRL logic outside `verl/`, but it can add small upstream-style VERL extension points and compatibility fixes when the backend needs them. Runtime integration is split into two layers:
@@ -288,6 +325,7 @@ flowchart TD
 | `AgentWiseGRPOHooks` | DrMAS. | Requires `agent_id`, `traj_uid`, and `turn_id`; builds agent-wise GRPO groups for DrMAS-style normalization. |
 | `ATGRPOHooks` | AT-GRPO. | Fetches `turn_id` and tree lineage (`root_id`, `node_id`, `parent_node_id`, `observation_group_id`); normalizes only sibling actions from one shared observation. |
 | `MATPOParentBroadcastHooks` | MATPO. | Validates unique `reqs_id`/`parent_reqs_id`, computes main-row credit, then broadcasts scalar advantage/return to child rows. |
+| `MrlXMGRPOHooks` | MrlX / M-GRPO. | Groups GRPO by agent role and preserves on-policy/off-policy scheduling, format, and policy-lag fields. |
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 | `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
 | `CoMLRLReinforceHooks` | CoMLRL MAGRPO family. | Uses rollout-computed joint returns/baselines verbatim and enforces ratio-free sequence policy gradient fields. |
@@ -328,6 +366,8 @@ Current configs:
 | `atgrpo/solver_verifier_math_qwen05b_2gpu.yaml` | AT-GRPO real Trainer entrypoint; `rollout.n` is sibling branch factor. |
 | `matpo/browse_smoke.yaml` | MATPO deterministic parent-child smoke. |
 | `matpo/browse_verl_tiny.yaml` | MATPO VERL bridge/command dry-run with planner tool-format shaping. |
+| `mrlx/mgrpo_research_qa_smoke.yaml` | MrlX two-policy research and role-reward smoke. |
+| `mrlx/mgrpo_research_qa_2gpu.yaml` | MrlX two-Worker-Group delayed-Adapter command plan. |
 | `comlrl/*_smoke.yaml` | CPU smoke entries for all ten integrated CoMLRL algorithms. |
 | `comlrl/*_verl_tiny.yaml` | Command-only MADPO/MARLHF and iterative plans; model/tokenizer placeholders must be replaced before training. |
 | `c3/reasoner_actor_math_smoke.yaml` | Deterministic Rule-B nested prefix-tree rollout and sibling credit check. |

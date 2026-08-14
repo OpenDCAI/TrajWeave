@@ -63,63 +63,52 @@ def prepare_verl_dataset(
 
 
 def _write_tiny_model(model_path: Path) -> None:
+    import torch
     from tokenizers import Tokenizer
-    from tokenizers.models import WordLevel
-    from tokenizers.pre_tokenizers import Whitespace
+    from tokenizers.decoders import ByteLevel as ByteLevelDecoder
+    from tokenizers.models import BPE
+    from tokenizers.pre_tokenizers import ByteLevel
+    from tokenizers.trainers import BpeTrainer
     from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
 
-    vocab = {
-        "<pad>": 0,
-        "<eos>": 1,
-        "<unk>": 2,
-        "system": 3,
-        "user": 4,
-        "assistant": 5,
-        ":": 6,
-        "Question": 7,
-        "Answer": 8,
-        "only": 9,
-        ".": 10,
-        "What": 11,
-        "is": 12,
-        "+": 13,
-        "?": 14,
-        "1": 15,
-        "2": 16,
-        "3": 17,
-        "4": 18,
-        "5": 19,
-        "6": 20,
-        "7": 21,
-        "8": 22,
-        "9": 23,
-        "10": 24,
-        "Final": 25,
-        "answer": 26,
-        "APPROVED": 27,
-        "SEARCH": 28,
-        "Paris": 29,
-        "Guido": 30,
-        "van": 31,
-        "Rossum": 32,
-    }
-    tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
-    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer = Tokenizer(BPE(unk_token="<unk>"))
+    tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = ByteLevelDecoder()
+    tokenizer.train_from_iterator(
+        (
+            "system user assistant Question Answer only What is the capital of France Japan Canada",
+            "Who created the Python programming language Guido van Rossum Paris Tokyo Ottawa",
+            "Final answer APPROVED SEARCH",
+            "MrlX main explorer adapter query evidence",
+            "CALL sub_adapter: capital France",
+            "CALL search_and_browse: capital France",
+            "Research result: France capital Paris",
+            "Final answer: Paris",
+            "1 2 3 4 5 6 7 8 9 10 + - * ? . :",
+        ),
+        trainer=BpeTrainer(
+            vocab_size=512,
+            min_frequency=1,
+            special_tokens=["<pad>", "<eos>", "<unk>"],
+            initial_alphabet=ByteLevel.alphabet(),
+            show_progress=False,
+        ),
+    )
     fast_tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         unk_token="<unk>",
         pad_token="<pad>",
         eos_token="<eos>",
         bos_token="<eos>",
-        model_max_length=128,
+        model_max_length=256,
     )
     fast_tokenizer.chat_template = (
         "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}assistant:"
     )
 
     config = Qwen2Config(
-        vocab_size=len(vocab),
-        max_position_embeddings=128,
+        vocab_size=len(fast_tokenizer),
+        max_position_embeddings=256,
         hidden_size=32,
         intermediate_size=64,
         num_hidden_layers=1,
@@ -132,7 +121,10 @@ def _write_tiny_model(model_path: Path) -> None:
     )
     config.attn_implementation = "eager"
     config._attn_implementation = "eager"
-    model = Qwen2ForCausalLM(config)
+    # Keep generated tiny assets reproducible without changing the caller's RNG state.
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        model = Qwen2ForCausalLM(config)
     model_path.mkdir(parents=True, exist_ok=True)
     fast_tokenizer.save_pretrained(model_path)
     model.save_pretrained(model_path)
@@ -273,9 +265,7 @@ def _browse_qa_rows(size: int, *, split: str, recipe_name: str | None = None) ->
                 "prompt": [
                     {
                         "role": "system",
-                        "content": (
-                            "You are a MATPO planner. You may call a browsing agent for focused factual subtasks."
-                        ),
+                        "content": _browse_system_prompt(recipe_name),
                     },
                     {
                         "role": "user",
@@ -314,6 +304,16 @@ def _default_recipe_name(task_family: str) -> str:
     if task_family == "browse_qa":
         return "matpo_browse"
     return task_family
+
+
+def _browse_system_prompt(recipe_name: str | None) -> str:
+    normalized_recipe = str(recipe_name or "").strip().lower()
+    if normalized_recipe.startswith("mrlx") or normalized_recipe == "m-grpo":
+        return (
+            "You are the MrlX main explorer. Delegate research with "
+            "'CALL sub_adapter: <query>' and finish with 'Final answer: <answer>'."
+        )
+    return "You are a MATPO planner. You may call a browsing agent for focused factual subtasks."
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:

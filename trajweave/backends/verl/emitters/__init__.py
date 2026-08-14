@@ -7,6 +7,7 @@ from trajweave.backends.verl.emitters.drmas import DrMASEmitterMixin
 from trajweave.backends.verl.emitters.gigpo import GiGPOEmitterMixin
 from trajweave.backends.verl.emitters.maporl import MAPoRLEmitterMixin
 from trajweave.backends.verl.emitters.matpo import MATPOEmitterMixin
+from trajweave.backends.verl.emitters.mrlx import MrlXEmitterMixin
 
 __all__ = [
     "C3EmitterMixin",
@@ -18,4 +19,5 @@ __all__ = [
     "GiGPOEmitterMixin",
     "MAPoRLEmitterMixin",
     "MATPOEmitterMixin",
+    "MrlXEmitterMixin",
 ]

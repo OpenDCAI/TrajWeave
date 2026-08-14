@@ -10,7 +10,7 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 ## 1. 当前状态
 
-TrajWeave 现在接入了十条 MASRL 路径（部分论文方向含多个任务或算法变体）：
+TrajWeave 现在接入了十一条 MASRL 路径（部分论文方向含多个任务或算法变体）：
 
 | 路径                  | MAS 形态                                      | 当前稳定能力                                                        |
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------- |
@@ -22,10 +22,11 @@ TrajWeave 现在接入了十条 MASRL 路径（部分论文方向含多个任务
 | AT-GRPO SolverVerifier | selected-spine solver/verifier tree | sibling 分组、训练/验证拓扑、标准 clipped-PPO 和 tiny Trainer 2-step 已验证；随机 HF tiny 仍可能出现组内零方差 |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
 | MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
+| MrlX / M-GRPO Research | on-policy Main Explorer -> off-policy Sub Adapter -> research tool | 双独立策略、角色级 GRPO、Adapter 一步滞后 replay 已完成 CPU/TransferQueue 验证；真实双卡训练待验收 |
 | CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | MAGRPO family、separate-critic IAC/MAAC、MADPO、MARLHF 与 iterative 路径已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
 | C3 ReasonerActor Math | frozen-context Reasoner -> Actor nested prefix tree | Rule-B sibling LOO/full-mean credit、reward/value variants、centralized prefix-Q critic 已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
 
-当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。CoMLRL 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
+当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MrlX、CoMLRL 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
 
 验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
@@ -38,7 +39,7 @@ TrajWeave 现在接入了十条 MASRL 路径（部分论文方向含多个任务
 | 机器              | 单机两张 Tesla P40                                                                         |
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
 | 训练步数          | MATPO/AT-GRPO 修复后 synthetic 与 HF tiny 均完成 `2/2` step、return code `0`               |
-| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`642 passed`（含 C3 与 AT-GRPO 训练/验证 TQ bridge）     |
+| 单元与集成测试    | 当前 `pytest -q tests/trajweave`：`669 passed`（含 MrlX delayed replay/TQ bridge）       |
 | 代码边界          | 仅在 `verl/trainer/ppo/core_algos.py` 增加可复用的非 dual-clip 标准 PPO loss mode           |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
@@ -166,6 +167,7 @@ configs/                         按算法归档的 YAML 启动入口。
   atgrpo/                        AT-GRPO selected-spine solver-verifier 配置。
   comas/                         CoMAS peer-review interaction-reward 配置。
   matpo/                         MATPO planner-worker browse 配置。
+  mrlx/                          MrlX / M-GRPO research co-evolution 配置。
   comlrl/                        CoMLRL 十种算法 smoke 与 VERL plan 配置。
   c3/                            C3 Reasoner/Actor prefix-tree smoke 与 VERL plan 配置。
 tests/trajweave/                 TrajWeave 单元测试和集成测试。
@@ -187,6 +189,7 @@ trajweave/
     atgrpo/                      AT-GRPO selected-spine solver/verifier 树采样 protocol。
     comas/                       CoMAS Solver/Evaluator/Scorer 同行评审 protocol 和原始 prompt。
     matpo/                       MATPO planner/worker parent-child protocol。
+    mrlx/                        MrlX Main Explorer/Sub Adapter research protocol。
     comlrl/                      CoMLRL full joint-action tree 与 iterative comparator。
     c3/                          C3 frozen-context nested prefix-tree protocol。
   credit/                        Reward propagation 和 credit assignment。
@@ -198,6 +201,7 @@ trajweave/
     atgrpo/                      AT-GRPO observation-group advantage 与 solver/verifier role-local mixed reward。
     comas/                       CoMAS score parser 和 interaction reward 真值表。
     matpo/                       MATPO parent-broadcast credit。
+    mrlx/                        MrlX 角色 reward 和 M-GRPO normalization。
     comlrl/                      joint return/baseline、IAC/MAAC、MADPO/MARLHF credit。
     c3/                          C3 Rule-B sibling contextual counterfactual credit。
   recipes/                       按论文隔离的可执行组合。
@@ -207,12 +211,13 @@ trajweave/
     gigpo/                       GiGPO solver-verifier recipe。
     atgrpo/                      AT-GRPO tree sampling、credit、VERL override 和 plugin。
     comas/                       CoMAS 拓扑、smoke backend、VERL override 和 plugin。
+    mrlx/                        MrlX research recipe、双策略配置和 plugin。
     comlrl/                      CoMLRL algorithm/config/plugin 组合。
     c3/                          C3 Reasoner/Actor math、credit variant、VERL override 和 plugin。
   rollout/                       离线 rollout engine。
   backends/                      Local、HF、tiny、search 和 VERL bridge backend。
     verl/agent_loop.py           VERL AgentLoopManager 和在线轨迹采集入口。
-    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、CoMLRL、C3 的真实 HF workflow runtime。
+    verl/workflow_runtime.py     DrMAS、MAPoRL、AgentFlow、GiGPO、AT-GRPO、CoMAS、MATPO、MrlX、CoMLRL、C3 的真实 HF workflow runtime。
     verl/local_generation.py     按 Worker Group 加载模型/tokenizer 并生成。
     verl/batch_padding.py        按 Worker Group 补齐 batch，不把 padding 泄漏到训练轨迹。
     verl/routing.py              按 worker_group 拆分和路由训练 batch。
@@ -228,10 +233,11 @@ trajweave/
     verl/extensions/gigpo/       GiGPO hierarchical GRPO runtime extension。
     verl/extensions/comas/       CoMAS interaction REINFORCE advantage hook。
     verl/extensions/matpo/       MATPO parent-broadcast GRPO runtime extension。
+    verl/extensions/mrlx/        MrlX role-local M-GRPO runtime extension。
     verl/extensions/comlrl/      CoMLRL ratio-free policy gradient、actor-critic 与 preference hooks。
     verl/extensions/c3/          C3 contextual counterfactual advantage 和 prefix 字段 hooks。
     verl/multi_actor/            论文无关的 Worker Group 规范化、校验和 Hydra 编码。
-    verl/trainers/               多 Actor、CoMLRL critic/preference/staged/iterative、C3 prefix-Q Trainer。
+    verl/trainers/               多 Actor、MrlX delayed Adapter、CoMLRL critic/preference/staged/iterative、C3 prefix-Q Trainer。
   storage/                       RunStore、ArtifactStore、trajectory JSONL helpers。
   metrics/                       MetricEvent、MetricRegistry、metrics JSONL sink、VERL metric parser。
   runtime/                       Logging 和 ExperimentTracker。
@@ -345,6 +351,9 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/matpo/browse_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/mrlx/mgrpo_research_qa_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/comlrl/magrpo_smoke.yaml
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
@@ -368,6 +377,10 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 PYTHONPATH=. python3 -m trajweave.cli.run \
   --config configs/matpo/browse_verl_tiny.yaml
+
+# MrlX 双 Worker Group command plan；默认不执行训练。
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/mrlx/mgrpo_research_qa_2gpu.yaml
 
 # CoMLRL command-only plan；运行前替换模型、tokenizer 与 train/val parquet placeholder。
 PYTHONPATH=. python3 -m trajweave.cli.run \
@@ -683,6 +696,20 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | 主要配置    | `configs/gigpo/solver_verifier_math_smoke.yaml`, `configs/gigpo/solver_verifier_math_qwen05b_2gpu.yaml` |
 | 已知限制    | 当前只验证数学可判定环境和单一共享 Actor；ALFWorld/WebShop、similarity grouping 的大规模效果与论文指标尚未验证。 |
 
+### MrlX / M-GRPO Research
+
+| 字段        | 内容 |
+| ----------- | ---- |
+| 参考实现    | [AQ-MedAI/MrlX](https://github.com/AQ-MedAI/MrlX)，对齐提交 `0d0478832564492a53be093b7f4cf95d3af21b80`。 |
+| 框架贡献    | Main Agent 作为 on-policy Explorer；Sub Agent 从共享交互数据做一步滞后的 off-policy Adapter 更新，两个策略持续协同演化。 |
+| Environment | `SearchAnswerEnvironment`；离线文档检索和 exact-match 最终结果奖励。 |
+| Orchestra   | `MrlXResearchOrchestra`；Main 委托查询，Sub 调用检索并返回研究结果，Main 汇总最终答案。 |
+| Credit      | `MrlXMGRPOCreditAssigner` / `MrlXMGRPOHooks`；Main 答对得 1.0、格式正确但答错得 0.1、格式错误得 0；Sub 格式错误得 0，格式正确且 Main 成功得 1.0，其余得 0.1。两个角色各自使用标准 GRPO normalization，上游没有独立名为 M-GRPO 的 loss。 |
+| VERL 路径   | HF AgentLoop -> 两个独立 Worker Group -> Main 当步更新 -> Sub batch 写入 TransferQueue replay -> 下一步 clipped-PPO 更新 -> 末轮排空；强制 `critic_warmup=0`。 |
+| 当前状态    | CPU smoke、HF fake workflow、M-GRPO hook、真实 TransferQueue 一步滞后/排空和 2-GPU command plan 已验证；尚无真实双卡模型训练记录。 |
+| 主要配置    | `configs/mrlx/mgrpo_research_qa_smoke.yaml`, `configs/mrlx/mgrpo_research_qa_2gpu.yaml`。 |
+| 已知限制    | 当前固定 `research_rounds=1`、共享 tokenizer、两个 trainable Worker Group、一步滞后和单机；Trainer 会拒绝零 Adapter 更新或无法保持一步延迟的末批。逐 turn 训练 row 只在 advantage 统计时按 trajectory 合并，是上游完整 multi-turn loss-mask sample 的近似。当前 reward 仅做 normalized exact match，未接上游外部 LLM semantic judge，也未复刻 SGLang/Megatron 跨集群服务。2-GPU tiny plan 使用 `rollout.n=2` 验证结构，不等同于上游 `n=8`/paper-scale 配置。 |
+
 ### CoMLRL Joint Collaboration
 
 | 字段        | 内容 |
@@ -761,3 +788,5 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 TrajWeave 包含来自 VERL / HybridFlow 的代码。原始源码使用 Apache-2.0 license。复制上游源码时必须保留 upstream copyright headers。
 
 C3 集成参考 `EIT-EAST-Lab/C3` 提交 `628185becc70732771393be28d087e88f0a4a5e8`；上游使用 Apache-2.0，完整许可证见 `licenses/C3-Apache-2.0.txt`，来源声明见 `Notice.txt`。
+
+MrlX 集成参考 `AQ-MedAI/MrlX` 提交 `0d0478832564492a53be093b7f4cf95d3af21b80`；上游根仓库使用 MIT license，完整许可证见 `licenses/MrlX-MIT.txt`，来源声明见 `Notice.txt`。
