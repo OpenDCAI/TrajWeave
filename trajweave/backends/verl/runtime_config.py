@@ -130,4 +130,5 @@ def _default_turn_padding_multiple(recipe: str | None) -> int:
         "gigpo_solver_verifier_math": 2,
         "atgrpo_solver_verifier_math": 2,
         "matpo_browse": 2,
+        "wideseek_r1_broad_search": 4,
     }.get(str(recipe), 1)

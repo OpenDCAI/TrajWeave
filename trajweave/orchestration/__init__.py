@@ -4,8 +4,10 @@ from trajweave.orchestration.base import TeamContext
 from trajweave.orchestration.comas import CoMASPeerReviewOrchestra
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
+from trajweave.orchestration.marshal import MARSHALSelfPlayOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
+from trajweave.orchestration.wideseek_r1 import WideSeekR1Orchestra
 
 __all__ = [
     "AgentFlowPlannerToolOrchestra",
@@ -13,7 +15,9 @@ __all__ = [
     "CoMASPeerReviewOrchestra",
     "GiGPOSolverVerifierOrchestra",
     "MAPoRLDebateOrchestra",
+    "MARSHALSelfPlayOrchestra",
     "SearchAnswerOrchestra",
     "SolverVerifierOrchestra",
     "TeamContext",
+    "WideSeekR1Orchestra",
 ]

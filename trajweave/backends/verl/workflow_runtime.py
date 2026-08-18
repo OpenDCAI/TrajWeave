@@ -28,12 +28,14 @@ from trajweave.credit.comlrl.iterative import compare_policy_candidates_by_index
 from trajweave.credit.marft import apply_marft_trajectory_credit
 from trajweave.credit.matpo.parent_broadcast import apply_matpo_trajectory_reward
 from trajweave.credit.mrlx import apply_mrlx_trajectory_rewards
+from trajweave.credit.wideseek_r1 import apply_wideseek_trajectory_reward
 from trajweave.envs.base import evaluate_trajectory
 from trajweave.envs.comas import CoMASMathEnvironment
 from trajweave.envs.comlrl import JointMathEnvironment
 from trajweave.envs.math import MathTask, SolverVerifierMathEnvironment
 from trajweave.envs.math.c3 import C3MathEnvironment, C3MathTask
 from trajweave.envs.search import SearchAnswerEnvironment, SearchDocument, SearchTask
+from trajweave.envs.strategic import TicTacToeEnvironment, TicTacToeTask
 from trajweave.orchestration.agentflow import AgentFlowPlannerToolOrchestra
 from trajweave.orchestration.atgrpo import SelectedSpineSolverVerifierOrchestra
 from trajweave.orchestration.c3 import C3PrefixTreeOrchestra
@@ -48,10 +50,12 @@ from trajweave.orchestration.comlrl.comparator import (
 from trajweave.orchestration.gigpo import GiGPOSolverVerifierOrchestra
 from trajweave.orchestration.maporl_debate import MAPoRLDebateOrchestra
 from trajweave.orchestration.marft import MARFTWorkflowGraph, MARFTWorkflowOrchestra
+from trajweave.orchestration.marshal import MARSHALSelfPlayOrchestra
 from trajweave.orchestration.matpo import PlannerWorkerOrchestra
 from trajweave.orchestration.mrlx import MrlXResearchOrchestra
 from trajweave.orchestration.search_answer import SearchAnswerOrchestra
 from trajweave.orchestration.solver_verifier import SolverVerifierOrchestra
+from trajweave.orchestration.wideseek_r1 import WideSeekR1Orchestra
 from trajweave.recipes.agentflow.planner_tool import default_agentflow_team
 from trajweave.recipes.atgrpo.solver_verifier_math import default_atgrpo_team
 from trajweave.recipes.c3.math_prefix import default_c3_team
@@ -62,8 +66,10 @@ from trajweave.recipes.gigpo.solver_verifier_math import default_gigpo_team
 from trajweave.recipes.maporl.debate_math import default_debate_team
 from trajweave.recipes.marft.config import load_reward_callable
 from trajweave.recipes.marft.math_workflow import DEFAULT_ROLE_PROMPTS, default_marft_team
+from trajweave.recipes.marshal.self_play import RuleBasedMARSHALPolicyBackend, default_marshal_team
 from trajweave.recipes.matpo.smoke import default_team as default_matpo_team
 from trajweave.recipes.mrlx.research_qa import default_mrlx_team
+from trajweave.recipes.wideseek_r1.broad_search import default_wideseek_r1_team
 from verl.experimental.agent_loop.agent_loop import AgentLoopMetrics, AgentLoopOutput
 
 
@@ -135,7 +141,20 @@ def build_hf_workflow_outputs(
             policy_backend=backend,
             validate=validate,
         )
-    if recipe == "marft_math_workflow":
+    if recipe == "marshal_tictactoe_selfplay":
+        extra_info = to_python(prompt.get("extra_info", {})) or {}
+        strategy = str(extra_info.get("strategy") or ("player0_win" if session_id % 2 == 0 else "player1_win"))
+        task = TicTacToeTask(task_id=task_id, strategy=strategy)
+        team, protocol, environment = _marshal_runtime_components(worker)
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=protocol,
+            environment=environment,
+            backend=backend,
+            session_id=session_id,
+        )
+    elif recipe == "marft_math_workflow":
         task = MathTask(task_id=task_id, question=question, answer=ground_truth)
         team, protocol, environment = _marft_runtime_components(worker)
         trajectory = _run_protocol(
@@ -288,6 +307,44 @@ def build_hf_workflow_outputs(
             adapter_agent=adapter_agent,
             explorer_format_bonus=worker._mrlx_explorer_format_bonus(),
             adapter_format_bonus=worker._mrlx_adapter_format_bonus(),
+        )
+    elif recipe == "wideseek_r1_broad_search":
+        extra_info = to_python(prompt.get("extra_info", {})) or {}
+        task = SearchTask(
+            task_id=task_id,
+            question=question,
+            answer=ground_truth,
+            search_query=str(extra_info.get("search_query") or question),
+            documents=_search_documents(extra_info),
+        )
+        lead_agent = worker._wideseek_lead_agent()
+        max_subagents = worker._wideseek_max_subagents()
+        team = default_wideseek_r1_team(
+            max_parallel_subagents=max_subagents,
+            lead_agent=lead_agent,
+            subagent_prefix=worker._wideseek_subagent_prefix(),
+            shared_model_id=worker._wideseek_shared_model_id(),
+        )
+        trajectory = _run_protocol(
+            task=task,
+            team=team,
+            protocol=WideSeekR1Orchestra(
+                lead_agent=lead_agent,
+                subagent_prefix=worker._wideseek_subagent_prefix(),
+                max_parallel_subagents=max_subagents,
+            ),
+            environment=SearchAnswerEnvironment(),
+            backend=backend,
+            session_id=session_id,
+        )
+        orchestra_config = worker._wideseek_orchestra_config()
+        apply_wideseek_trajectory_reward(
+            trajectory,
+            format_reward=float(config_get(orchestra_config, "format_reward", 0.1)),
+            search_reward=float(config_get(orchestra_config, "search_reward", 0.05)),
+            length_limit=int(config_get(orchestra_config, "length_limit", 3000)),
+            max_length_limit=int(config_get(orchestra_config, "max_length_limit", 5000)),
+            length_penalty=float(config_get(orchestra_config, "length_penalty", 0.1)),
         )
     elif recipe == "gigpo_solver_verifier_math":
         task = MathTask(task_id=task_id, question=question, answer=_integer_ground_truth(ground_truth))
@@ -510,6 +567,7 @@ def _trajectory_to_outputs(worker: Any, *, trajectory: MultiAgentTrajectory, tea
         if trajectory.team_name in {
             "atgrpo_solver_verifier_math",
             "c3_reasoner_actor_math",
+            "marshal_tictactoe_selfplay",
             "marft_math_workflow",
         }:
             # AT-GRPO's ATGRPOHooks groups advantages by (rollout_group, turn_id, agent_id),
@@ -1629,6 +1687,29 @@ def build_rule_marft_workflow_outputs(
     return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
 
 
+def build_rule_marshal_selfplay_outputs(
+    worker: Any,
+    *,
+    prompt: dict[str, Any],
+    session_id: int,
+) -> list[AgentLoopOutput]:
+    task_id = str(to_python(prompt.get("uid", prompt.get("index", "task"))))
+    extra_info = to_python(prompt.get("extra_info", {})) or {}
+    strategy = str(extra_info.get("strategy") or ("player0_win" if session_id % 2 == 0 else "player1_win"))
+    task = TicTacToeTask(task_id=task_id, strategy=strategy)
+    team, protocol, environment = _marshal_runtime_components(worker)
+    backend = _WorkerEncodedPolicyBackend(worker=worker, delegate=RuleBasedMARSHALPolicyBackend())
+    trajectory = _run_protocol(
+        task=task,
+        team=team,
+        protocol=protocol,
+        environment=environment,
+        backend=backend,
+        session_id=session_id,
+    )
+    return _trajectory_to_outputs(worker, trajectory=trajectory, team=team)
+
+
 @dataclass
 class _WorkerEncodedPolicyBackend:
     worker: Any
@@ -1658,6 +1739,25 @@ def _comas_runtime_components(worker: Any) -> tuple[TeamSpec, CoMASPeerReviewOrc
         assignment_seed=worker._comas_assignment_seed(),
     )
     return team, protocol, CoMASMathEnvironment()
+
+
+def _marshal_runtime_components(
+    worker: Any,
+) -> tuple[TeamSpec, MARSHALSelfPlayOrchestra, TicTacToeEnvironment]:
+    player_ids = worker._marshal_player_ids()
+    max_actions = worker._marshal_max_actions()
+    team = default_marshal_team(
+        player_ids=player_ids,
+        shared_model_id=worker._marshal_shared_model_id(),
+        max_actions=max_actions,
+    )
+    protocol = MARSHALSelfPlayOrchestra(
+        player_ids=player_ids,
+        max_actions=max_actions,
+        format_reward=worker._marshal_format_reward(),
+        allow_bare_actions=worker._marshal_allow_bare_actions(),
+    )
+    return team, protocol, TicTacToeEnvironment()
 
 
 def _marft_runtime_components(

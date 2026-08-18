@@ -18,6 +18,22 @@ class RecipeDefinition:
 
 RECIPES: tuple[RecipeDefinition, ...] = (
     RecipeDefinition(
+        name="marshal.tictactoe_selfplay",
+        family="marshal",
+        task="strategic_self_play",
+        runtime_recipe="marshal_tictactoe_selfplay",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("marshal", "marshal_selfplay", "marshal_tictactoe_selfplay"),
+    ),
+    RecipeDefinition(
+        name="wideseek_r1.broad_search",
+        family="wideseek_r1",
+        task="broad_information_seeking",
+        runtime_recipe="wideseek_r1_broad_search",
+        allowed_modes=("smoke", "verl_train", "verl_plan"),
+        aliases=("wideseek_r1", "wideseek-r1", "wideseek_r1_broad_search"),
+    ),
+    RecipeDefinition(
         name="marft.cooperative_math",
         family="marft",
         task="math",

@@ -15,6 +15,11 @@ class EmitterRoute:
 
 
 EMITTER_ROUTES: dict[str, EmitterRoute] = {
+    "marshal_tictactoe_selfplay": EmitterRoute(
+        recipe="marshal_tictactoe_selfplay",
+        synthetic_method="_build_marshal_tictactoe_outputs",
+        hf_local_method="_build_hf_marshal_tictactoe_outputs",
+    ),
     "marft_math_workflow": EmitterRoute(
         recipe="marft_math_workflow",
         synthetic_method="_build_marft_math_workflow_outputs",
@@ -54,6 +59,11 @@ EMITTER_ROUTES: dict[str, EmitterRoute] = {
         recipe="mrlx_research_qa",
         synthetic_method="_build_mrlx_research_outputs",
         hf_local_method="_build_hf_mrlx_research_outputs",
+    ),
+    "wideseek_r1_broad_search": EmitterRoute(
+        recipe="wideseek_r1_broad_search",
+        synthetic_method="_build_wideseek_r1_outputs",
+        hf_local_method="_build_hf_wideseek_r1_outputs",
     ),
     "gigpo_solver_verifier_math": EmitterRoute(
         recipe="gigpo_solver_verifier_math",

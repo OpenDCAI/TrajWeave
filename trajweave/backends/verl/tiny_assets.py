@@ -84,6 +84,8 @@ def _write_tiny_model(model_path: Path) -> None:
             "CALL search_and_browse: capital France",
             "Research result: France capital Paris",
             "Final answer: Paris",
+            "Tic-Tac-Toe player_0 player_1 Board Legal actions Game history",
+            "Return exactly <answer>0</answer> <answer>1</answer> <answer>2</answer>",
             "1 2 3 4 5 6 7 8 9 10 + - * ? . :",
         ),
         trainer=BpeTrainer(
@@ -293,6 +295,8 @@ def _rows(size: int, *, split: str, task_family: str, recipe_name: str | None = 
         return _search_rows(size, split=split, recipe_name=recipe_name)
     if task_family == "browse_qa":
         return _browse_qa_rows(size, split=split, recipe_name=recipe_name)
+    if task_family == "strategic_game":
+        return _strategic_game_rows(size, split=split, recipe_name=recipe_name)
     raise ValueError(f"Unknown tiny VERL task_family: {task_family}")
 
 
@@ -303,7 +307,39 @@ def _default_recipe_name(task_family: str) -> str:
         return "doctor_mas_search"
     if task_family == "browse_qa":
         return "matpo_browse"
+    if task_family == "strategic_game":
+        return "marshal_tictactoe_selfplay"
     return task_family
+
+
+def _strategic_game_rows(size: int, *, split: str, recipe_name: str | None = None) -> list[dict[str, Any]]:
+    rows = []
+    for index in range(size):
+        rows.append(
+            {
+                "data_source": "trajweave_tiny_strategic_game",
+                "prompt": [
+                    {
+                        "role": "system",
+                        "content": "Play both sides of Tic-Tac-Toe through MARSHAL self-play.",
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Start self-play game {index}. Choose only legal actions.",
+                    },
+                ],
+                "ability": "strategic_game",
+                "reward_model": {"style": "rule", "ground_truth": "self_play"},
+                "extra_info": {
+                    "index": index,
+                    "split": split,
+                    "trajweave_recipe": recipe_name or "marshal_tictactoe_selfplay",
+                    "game": "tictactoe",
+                    "strategy": "player0_win" if index % 2 == 0 else "player1_win",
+                },
+            }
+        )
+    return rows
 
 
 def _browse_system_prompt(recipe_name: str | None) -> str:

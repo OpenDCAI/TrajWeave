@@ -21,8 +21,10 @@ from trajweave.backends.verl.emitters import (
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
     MARFTEmitterMixin,
+    MARSHALSelfPlayEmitterMixin,
     MATPOEmitterMixin,
     MrlXEmitterMixin,
+    WideSeekR1EmitterMixin,
 )
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
@@ -165,9 +167,11 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
     C3EmitterMixin,
     CoMASEmitterMixin,
     CoMLRLEmitterMixin,
+    MARSHALSelfPlayEmitterMixin,
     MARFTEmitterMixin,
     MATPOEmitterMixin,
     MrlXEmitterMixin,
+    WideSeekR1EmitterMixin,
     MAPoRLEmitterMixin,
     GiGPOEmitterMixin,
     DrMASEmitterMixin,

@@ -12,12 +12,16 @@ from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
 from trajweave.recipes.gigpo.plugin import GiGPORecipePlugin
 from trajweave.recipes.maporl.plugin import MAPoRLRecipePlugin
 from trajweave.recipes.marft.plugin import MARFTRecipePlugin
+from trajweave.recipes.marshal.plugin import MARSHALRecipePlugin
 from trajweave.recipes.matpo.plugin import MATPORecipePlugin
 from trajweave.recipes.mrlx.plugin import MrlXRecipePlugin
+from trajweave.recipes.wideseek_r1.plugin import WideSeekR1RecipePlugin
 
 
 def recipe_plugins() -> tuple[RecipePlugin, ...]:
     return (
+        MARSHALRecipePlugin(),
+        WideSeekR1RecipePlugin(),
         DrMASNativeRecipePlugin(),
         MARFTRecipePlugin(),
         MrlXRecipePlugin(),

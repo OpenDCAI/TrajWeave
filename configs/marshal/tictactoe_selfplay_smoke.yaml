@@ -1,0 +1,33 @@
+recipe: marshal.tictactoe_selfplay
+mode: smoke
+
+marshal:
+  agent_loop_backend: synthetic_tq
+  game: tictactoe
+  player_ids: [player_0, player_1]
+  shared_model_id: shared_policy
+  max_actions: 9
+  format_reward: 0.05
+  allow_bare_actions: false
+  gamma: 1.0
+  reward_normalization: mean
+  advantage_normalization: mean
+  whiten_rewards: true
+  whiten_advantages: true
+  kl_loss_coef: 0.2
+  lora_rank: 8
+  lora_alpha: 16
+  lora_target_modules: all-linear
+  ref_log_prob_micro_batch_size_per_gpu: 1
+
+backend:
+  type: rule
+  device: cpu
+
+rollout:
+  rollouts_per_task: 2
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: marshal-tictactoe-selfplay-smoke
+  tags: [marshal, self-play, tictactoe, smoke]

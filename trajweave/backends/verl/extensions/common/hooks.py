@@ -780,6 +780,22 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
 
         return CoMASInteractionREINFORCEHooks()
     if (
+        credit_allocator == "marshal_turn_level_reinforce"
+        or recipe == "marshal_tictactoe_selfplay"
+        or "trajweave_marshal_turn_advantage" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.marshal import MARSHALHooks
+
+        return MARSHALHooks()
+    if (
+        credit_allocator == "wideseek_r1_multi_agent_grpo"
+        or recipe == "wideseek_r1_broad_search"
+        or "trajweave_wideseek_r1_grpo" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.wideseek_r1 import WideSeekR1GRPOHooks
+
+        return WideSeekR1GRPOHooks()
+    if (
         credit_allocator == "matpo_parent_broadcast_grpo"
         or recipe == "matpo_browse"
         or "trajweave_matpo_parent_broadcast" in extension_names

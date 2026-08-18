@@ -3,6 +3,21 @@ TrajWeave includes code derived from VERL / HybridFlow.
 Original VERL copyright:
 Copyright 2023-2024 Bytedance Ltd. and/or its affiliates
 
+TrajWeave's WideSeek-R1 integration is adapted from RLinf/RLinf commit
+9ad44393d15b0e93461d7415591110678ae17ef6. RLinf is distributed under
+the Apache License 2.0.
+
+Original RLinf copyright:
+Copyright 2025 The RLinf Authors
+
+The complete Apache License 2.0 is included in the repository root LICENSE.
+
+TrajWeave's MARSHAL integration is adapted from thu-nics/MARSHAL commit
+b53f38af12fe5ea1529c50c18ea3af97536c5a71. MARSHAL is distributed
+under the Apache License 2.0.
+
+The complete Apache License 2.0 is included in the repository root LICENSE.
+
 TrajWeave's MARFT integration is adapted from jwliao-ai/MARFT commit
 fb9a99a3a59efff67a5088ebe3f27e29a750ac7e. MARFT is distributed under
 the Apache License 2.0.

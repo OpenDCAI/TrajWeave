@@ -258,6 +258,86 @@ PYTHONPATH=. python3 -m trajweave.cli.run \
 
 `configs/c3/reasoner_actor_math_verl_tiny.yaml` is a command plan for two Actor Worker Groups plus one Q critic GPU. Replace all model, tokenizer, and parquet placeholders before launching. The CPU smoke and real TransferQueue bridge are covered; a real three-GPU training run has not yet been accepted. Each routed Actor group currently updates as one complete mini-batch, so the generic `ppo_mini_batch_size` setting does not split a role route further. Prefix formatting, optional critic preamble, and tokenizer rendering are not byte-identical to upstream C3, so upstream Q-critic checkpoints are not claimed to be directly compatible.
 
+## WideSeek-R1 Width-Scaling Slice
+
+```mermaid
+flowchart LR
+    A[Broad query] --> B[Shared-model lead]
+    B --> C1[Isolated subagent 1]
+    B --> C2[Isolated subagent 2]
+    B --> C3[Isolated subagent N]
+    C1 --> D[Search and access]
+    C2 --> D
+    C3 --> D
+    D --> E[Lead synthesis]
+    E --> F[Trajectory outcome advantage]
+    F --> G[Broadcast to every agent]
+    G --> H[Agent-level and token-level reweighting]
+```
+
+The integration keeps the WideSeek-R1 algorithmic boundary separate from RLinf's Megatron/SGLang deployment:
+
+1. Lead and subagents use one shared policy group but distinct agent identities and contexts.
+2. Lead emits up to `max_parallel_subagents` subtask calls; workers in the same `parallel_wave` never observe sibling internals.
+3. Every active subagent owns one subtrajectory containing search, access, and summary turns.
+4. Verifiable outcome, format, search-use, and length shaping produce one trajectory reward, which is broadcast to every trainable turn.
+5. `WideSeekR1GRPOHooks` first computes one GRPO advantage per trajectory, then gives each agent equal mass and normalizes that mass across the agent's valid response tokens.
+6. All rows route back to one shared Actor Worker Group.
+
+The synchronous local Orchestra records logical width but does not claim process-level parallel execution. The offline search environment also does not reproduce RLinf's Qdrant/Serper/Jina tools, markdown semantic judge, Qwen3-4B setup, or 20k training corpus.
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/wideseek_r1/broad_search_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/wideseek_r1/broad_search_verl_tiny.yaml
+
+TRAJWEAVE_QWEN05B_INSTRUCT_PATH=/path/to/Qwen2.5-0.5B-Instruct \
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/wideseek_r1/broad_search_qwen05b_1gpu.yaml
+```
+
+## MARSHAL Strategic Self-Play Slice
+
+```mermaid
+flowchart LR
+    A[Tic-Tac-Toe state] --> B[Shared policy as player 0]
+    B --> C[Environment transition]
+    C --> D[Shared policy as player 1]
+    D --> C
+    C --> E[Terminal zero-sum payoff]
+    E --> F[Per-player turn trajectories]
+    F --> G[Discounted REINFORCE returns]
+    G --> H[Agent-specific normalization]
+    H --> I[Shared Actor update]
+```
+
+The integration preserves MARSHAL's method boundary while using TrajWeave's VERL runtime:
+
+1. `player_0` and `player_1` are distinct logical agents routed to one shared trainable policy.
+2. Every action records the game id, player id, and player-local turn index; the terminal payoff is attached to each player's latest action.
+3. Rewards are normalized separately by player before discounted returns are computed over that player's own turns.
+4. Advantages are normalized from the set of unique return values for each player, matching upstream MARSHAL rather than frequency-weighting duplicated token values.
+5. `MARSHALHooks` writes scalar turn returns across each response mask and keeps padding rows inactive.
+6. The local Tic-Tac-Toe environment removes an OpenSpiel runtime dependency without changing legal-move or zero-sum terminal semantics.
+
+The Qwen2.5-0.5B acceptance config enables `allow_bare_actions` because this small model selects legal cells but does not reliably preserve the `<answer>` wrapper. A bare digit can therefore advance the game but remains `marshal_format_valid=false` and receives no format reward. The default smoke and tiny-plan configs keep strict upstream-style formatting. This slice does not claim support for upstream MARSHAL's Connect Four, poker, Hanabi, multi-game curriculum, Qwen3-4B training setup, or reported benchmark results.
+
+The accepted single-GPU run is `20260817-145340-marshal-tictactoe-qwen05b-1gpu-47e18814`: both steps saw two active players, a `0.6667` nonzero-advantage ratio, and nonzero Actor gradient norms (`19.64`, `14.29`). Online trajectories contain both policy versions 0 and 1, and the base, step-1, and step-2 model hashes differ.
+
+```bash
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marshal/tictactoe_selfplay_smoke.yaml
+
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marshal/tictactoe_selfplay_verl_tiny.yaml
+
+TRAJWEAVE_QWEN05B_INSTRUCT_PATH=/path/to/Qwen2.5-0.5B-Instruct \
+PYTHONPATH=. python3 -m trajweave.cli.run \
+  --config configs/marshal/tictactoe_selfplay_qwen05b_1gpu.yaml
+```
+
 ## MrlX / M-GRPO Research Slice
 
 ```mermaid
@@ -326,6 +406,8 @@ flowchart TD
 | `ATGRPOHooks` | AT-GRPO. | Fetches `turn_id` and tree lineage (`root_id`, `node_id`, `parent_node_id`, `observation_group_id`); normalizes only sibling actions from one shared observation. |
 | `MATPOParentBroadcastHooks` | MATPO. | Validates unique `reqs_id`/`parent_reqs_id`, computes main-row credit, then broadcasts scalar advantage/return to child rows. |
 | `MrlXMGRPOHooks` | MrlX / M-GRPO. | Groups GRPO by agent role and preserves on-policy/off-policy scheduling, format, and policy-lag fields. |
+| `WideSeekR1GRPOHooks` | WideSeek-R1. | Broadcasts one trajectory GRPO advantage, then applies equal-agent and per-agent token normalization for the shared Actor. |
+| `MARSHALHooks` | MARSHAL. | Computes per-player turn returns, player-specific reward/unique-value advantage normalization, and padding-safe shared-Actor tensors. |
 | `MAPoRLFullPPOHooks` | MAPoRL Debate Math. | Requires MAPoRL per-turn fields such as `round_id`, `agent_index`, `raw_score`, `correctness`, and `finished_round`; keeps GAE/PPO computation on the VERL path while preserving MAS metadata. |
 | `AgentFlowPlannerGRPOHooks` | AgentFlow Planner-Tool. | Requires `agentflow_stage`, `tool_name`, `sub_goal`, `tool_result`, `verifier_decision`, and `step_id`; keeps only planner turns trainable while preserving full flow metadata. |
 | `CoMLRLReinforceHooks` | CoMLRL MAGRPO family. | Uses rollout-computed joint returns/baselines verbatim and enforces ratio-free sequence policy gradient fields. |
@@ -368,6 +450,12 @@ Current configs:
 | `matpo/browse_verl_tiny.yaml` | MATPO VERL bridge/command dry-run with planner tool-format shaping. |
 | `mrlx/mgrpo_research_qa_smoke.yaml` | MrlX two-policy research and role-reward smoke. |
 | `mrlx/mgrpo_research_qa_2gpu.yaml` | MrlX two-Worker-Group delayed-Adapter command plan. |
+| `wideseek_r1/broad_search_smoke.yaml` | WideSeek-R1 shared-policy width-scaling CPU smoke. |
+| `wideseek_r1/broad_search_verl_tiny.yaml` | WideSeek-R1 shared-Actor HF workflow command plan. |
+| `wideseek_r1/broad_search_qwen05b_1gpu.yaml` | WideSeek-R1 Qwen2.5-0.5B single-GPU real-update gate. |
+| `marshal/tictactoe_selfplay_smoke.yaml` | Deterministic shared-policy Tic-Tac-Toe self-play and turn-credit smoke. |
+| `marshal/tictactoe_selfplay_verl_tiny.yaml` | MARSHAL synthetic TransferQueue command plan. |
+| `marshal/tictactoe_selfplay_qwen05b_1gpu.yaml` | MARSHAL Qwen2.5-0.5B single-GPU real-update gate. |
 | `comlrl/*_smoke.yaml` | CPU smoke entries for all ten integrated CoMLRL algorithms. |
 | `comlrl/*_verl_tiny.yaml` | Command-only MADPO/MARLHF and iterative plans; model/tokenizer placeholders must be replaced before training. |
 | `c3/reasoner_actor_math_smoke.yaml` | Deterministic Rule-B nested prefix-tree rollout and sibling credit check. |
