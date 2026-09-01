@@ -22,9 +22,21 @@ class MARTIMARS2TreeGRPOHooks(PPOExtensionHooks):
 
     def batch_schema_fields(self, stage: str) -> tuple[str, ...]:
         return (
-            "tree_id", "prompt_id", "node_id", "parent_idx", "path", "raw_score",
-            "search_stage", "traj_uid", "turn_id", "verifier_name", "verifier_success",
-            "verifier_terminal", "verifier_feedback", "failure_type", "verification_mode",
+            "tree_id",
+            "prompt_id",
+            "node_id",
+            "parent_idx",
+            "path",
+            "raw_score",
+            "search_stage",
+            "traj_uid",
+            "turn_id",
+            "verifier_name",
+            "verifier_success",
+            "verifier_terminal",
+            "verifier_feedback",
+            "failure_type",
+            "verification_mode",
             "verifier_metadata",
         )
 

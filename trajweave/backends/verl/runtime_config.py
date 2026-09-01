@@ -132,7 +132,7 @@ def _reward_range(value: Any) -> tuple[float, float] | None:
         return None
     if isinstance(value, str):
         value = [part.strip() for part in value.split(",")]
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
+    if not isinstance(value, list | tuple) or len(value) != 2:
         raise ValueError("trajweave.dynamic_filter_reward_range must contain [lower, upper]")
     result = (float(value[0]), float(value[1]))
     if result[0] >= result[1]:

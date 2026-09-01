@@ -41,12 +41,44 @@ def test_fidelity_acceptance_requires_mixed_real_verifier_rewards_and_training_s
             }
         },
         checkpoint_dir=checkpoint_dir,
+        allow_local_verifier_fallback=True,
     )
 
     assert audit["status"] == "passed"
     assert all(audit["checks"].values())
     assert audit["reward_groups"]["tree-0"]["rewards"] == [0.0, 1.0, 5 / 6]
     assert audit["tensor_diff_required"] is True
+
+
+def test_fidelity_acceptance_rejects_local_verifier_fallback_by_default(tmp_path):
+    trajectory_dir = tmp_path / "trajectories" / "online_turns"
+    trajectory_dir.mkdir(parents=True)
+    (trajectory_dir / "worker.jsonl").write_text(
+        json.dumps(
+            {
+                "reward_score": 1.0,
+                "metadata": {
+                    "tree_id": "tree-0",
+                    "verification_mode": "local_subprocess_fallback",
+                    "failure_type": None,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    audit = audit_fidelity_training_run(
+        tmp_path,
+        metric_summary={"latest": {}},
+        checkpoint_dir=None,
+        require_correction=False,
+        require_learning_signal=False,
+    )
+
+    assert audit["status"] == "failed"
+    assert audit["checks"]["real_verifier_without_errors"] is False
+    assert audit["local_verifier_fallback_allowed"] is False
 
 
 def test_fidelity_acceptance_rejects_uniform_rewards_and_zero_gradient(tmp_path):
@@ -132,6 +164,7 @@ def test_fidelity_acceptance_uses_nonzero_learning_signal_from_any_completed_ste
         },
         checkpoint_dir=run_dir / "checkpoints",
         require_correction=False,
+        allow_local_verifier_fallback=True,
     )
 
     assert audit["status"] == "passed"
@@ -176,6 +209,7 @@ def test_vanilla_grpo_acceptance_does_not_require_rollout_correction(tmp_path):
         },
         checkpoint_dir=checkpoint_dir,
         require_correction=False,
+        allow_local_verifier_fallback=True,
     )
 
     assert audit["status"] == "passed"
@@ -223,9 +257,7 @@ def test_fidelity_acceptance_reads_multi_actor_learning_metrics(tmp_path):
         encoding="utf-8",
     )
     for policy_group in ("policy_a", "policy_b"):
-        checkpoint = (
-            tmp_path / "global_step_1" / "actors" / policy_group / "model_world_size_1_rank_0.pt"
-        )
+        checkpoint = tmp_path / "global_step_1" / "actors" / policy_group / "model_world_size_1_rank_0.pt"
         checkpoint.parent.mkdir(parents=True)
         checkpoint.touch()
 
@@ -244,6 +276,7 @@ def test_fidelity_acceptance_reads_multi_actor_learning_metrics(tmp_path):
         checkpoint_dir=tmp_path,
         require_correction=False,
         require_multi_agent_routing=True,
+        allow_local_verifier_fallback=True,
     )
 
     assert audit["status"] == "passed"
@@ -341,6 +374,7 @@ def test_multi_actor_routing_acceptance_can_separate_zero_signal_from_route_fail
         require_correction=False,
         require_learning_signal=False,
         require_multi_agent_routing=True,
+        allow_local_verifier_fallback=True,
     )
     assert audit["status"] == "passed"
     assert audit["learning_signal_required"] is False

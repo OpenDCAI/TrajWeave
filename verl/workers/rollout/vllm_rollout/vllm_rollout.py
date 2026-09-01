@@ -108,8 +108,7 @@ class ServerAdapter(BaseRollout):
         local_rank = self.rollout_rank % local_world_size
         job_id = ray.get_runtime_context().get_job_id()
         self.zmq_handle = (
-            f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{self.replica_rank}"
-            f"{self.name_suffix}-rank-{local_rank}.sock"
+            f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{self.replica_rank}{self.name_suffix}-rank-{local_rank}.sock"
         )
 
         self.use_shm = not is_support_ipc()
@@ -128,9 +127,7 @@ class ServerAdapter(BaseRollout):
         # Lazy init http server adapter because http server is launched after hybrid engine.
         if self.server_handle is None:
             prefix = self._get_server_name_prefix()
-            self.server_handle = ray.get_actor(
-                f"{prefix}server_{self.replica_rank}_{self.node_rank}{self.name_suffix}"
-            )
+            self.server_handle = ray.get_actor(f"{prefix}server_{self.replica_rank}_{self.node_rank}{self.name_suffix}")
         return True
 
     async def _execute_method(

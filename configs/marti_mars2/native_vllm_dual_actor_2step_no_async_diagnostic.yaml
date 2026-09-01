@@ -2,7 +2,7 @@ recipe: marti_mars2.single_mcts.fidelity
 mode: verl_train
 
 run:
-  root_dir: /data/cxy-marti-v1-dual2/runs
+  root_dir: outputs/marti_mars2_native_vllm_dual_actor_2step/runs
   name: native-vllm-dual-actor-2step-no-async-dp2-fixed
 
 marti_mars2:
@@ -12,11 +12,11 @@ marti_mars2:
   model_ids: [policy_a, policy_b]
   worker_groups:
     policy_a:
-      model_path: /data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
-      tokenizer_path: /data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
     policy_b:
-      model_path: /data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
-      tokenizer_path: /data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
   agent_loop_backend: vllm_marti_tq
   multi_actor_training: true
   multi_actor_vllm:
@@ -39,7 +39,7 @@ acceptance:
 prepare:
   tiny_verl_assets:
     enabled: true
-    output_dir: /data/cxy-marti-v1-dual2/assets
+    output_dir: outputs/marti_mars2_native_vllm_dual_actor_2step/assets
     task_family: controlled_code
     recipe_name: marti_mars2_native_vllm_dual_actor_2step_no_async
     train_size: 1
@@ -49,23 +49,20 @@ prepare:
 verl:
   enabled: true
   execute: true
-  python: /data/chenxingyan/conda_envs/pettingllms-atgrpo/bin/python
-  cwd: /data/chenxingyan/TrajWeave
   module: trajweave.backends.verl.main_ppo
   env:
-    CUDA_VISIBLE_DEVICES: "0,3"
-    HF_HOME: /data/cxy-marti-v1-dual2/hf
-    HF_DATASETS_CACHE: /data/cxy-marti-v1-dual2/hf/datasets
-    TRANSFORMERS_CACHE: /data/cxy-marti-v1-dual2/hf/transformers
-    XDG_CACHE_HOME: /data/cxy-marti-v1-dual2/cache
-    TMPDIR: /data/cxy-marti-v1-dual2/tmp
-    RAY_TMPDIR: /data/cxy-marti-v1-dual2/ray
+    CUDA_VISIBLE_DEVICES: "0,1"
+    HF_HOME: outputs/marti_mars2_native_vllm_dual_actor_2step/hf
+    HF_DATASETS_CACHE: outputs/marti_mars2_native_vllm_dual_actor_2step/hf/datasets
+    TRANSFORMERS_CACHE: outputs/marti_mars2_native_vllm_dual_actor_2step/hf/transformers
+    XDG_CACHE_HOME: outputs/marti_mars2_native_vllm_dual_actor_2step/cache
+    TMPDIR: outputs/marti_mars2_native_vllm_dual_actor_2step/tmp
+    RAY_TMPDIR: outputs/marti_mars2_native_vllm_dual_actor_2step/ray
     NO_PROXY: localhost,127.0.0.1,::1
     TOKENIZERS_PARALLELISM: "false"
     VLLM_USE_V1: "1"
     RAY_DEDUP_LOGS: "0"
     PYTHONDONTWRITEBYTECODE: "1"
-    PYTHONPATH: /tmp/trajweave-tq-runtime:/data/chenxingyan/TrajWeave
   overrides:
     - trainer.use_v1=true
     - trainer.v1.trainer_mode=sync
@@ -81,8 +78,8 @@ verl:
     - trainer.logger=[console]
     - trainer.resume_mode=disable
     - trainer.default_local_dir=${oc.env:TRAJWEAVE_RUN_DIR}/checkpoints
-    - data.train_files=/data/cxy-marti-v1-dual2/assets/train.jsonl
-    - data.val_files=/data/cxy-marti-v1-dual2/assets/val.jsonl
+    - data.train_files=outputs/marti_mars2_native_vllm_dual_actor_2step/assets/train.jsonl
+    - data.val_files=outputs/marti_mars2_native_vllm_dual_actor_2step/assets/val.jsonl
     - data.train_batch_size=1
     - data.val_batch_size=1
     - data.max_prompt_length=128
@@ -91,8 +88,8 @@ verl:
     - data.filter_overlong_prompts=false
     - data.truncation=right
     - data.shuffle=false
-    - actor_rollout_ref.model.path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
-    - actor_rollout_ref.model.tokenizer_path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+    - actor_rollout_ref.model.path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    - actor_rollout_ref.model.tokenizer_path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
     - +actor_rollout_ref.model.override_config.attn_implementation=eager
     - actor_rollout_ref.model.use_remove_padding=false
     - actor_rollout_ref.model.enable_gradient_checkpointing=false

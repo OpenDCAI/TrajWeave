@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from trajweave.backends.verl.async_buffer import run_asymmetric_three_step_fixture
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
 from trajweave.recipes.marti_mars2 import build_marti_mars2_launch_overrides, run_single_mcts_smoke
-from trajweave.backends.verl.async_buffer import run_asymmetric_three_step_fixture
 from trajweave.recipes.marti_mars2.acceptance import audit_fidelity_training_run, checkpoint_dir_from_overrides
 
 
@@ -103,9 +103,14 @@ class MARTIMARS2RecipePlugin:
                 checkpoint_dir=checkpoint_dir_from_overrides(context.config, run_dir=context.run_dir),
                 require_correction=bool(context.config.get("marti_mars2", {}).get("enable_vllm_is_correction", False)),
                 require_learning_signal=bool(context.config.get("acceptance", {}).get("require_learning_signal", True)),
-                require_multi_agent_routing=bool(context.config.get("acceptance", {}).get("require_multi_agent_routing", False)),
+                require_multi_agent_routing=bool(
+                    context.config.get("acceptance", {}).get("require_multi_agent_routing", False)
+                ),
                 require_multi_actor_weight_sync=bool(
                     context.config.get("acceptance", {}).get("require_multi_actor_weight_sync", False)
+                ),
+                allow_local_verifier_fallback=bool(
+                    context.config.get("acceptance", {}).get("allow_local_verifier_fallback", False)
                 ),
             )
             acceptance.setdefault("name", "marti_mars2_fidelity")

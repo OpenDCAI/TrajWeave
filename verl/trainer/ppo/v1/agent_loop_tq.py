@@ -209,7 +209,9 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
                     "rollout_global_step": field["extra_fields"].get(
                         "rollout_global_step", kwargs.get("global_steps", 0)
                     ),
-                    "policy_group": field["extra_fields"].get("policy_group", field["extra_fields"].get("worker_group")),
+                    "policy_group": field["extra_fields"].get(
+                        "policy_group", field["extra_fields"].get("worker_group")
+                    ),
                 }
             )
 

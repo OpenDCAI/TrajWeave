@@ -3,12 +3,16 @@
 The functions operate on PyTorch tensors but do not depend on VERL internals,
 which makes the official GSPO/TIS/overlong formulas easy to audit on CPU.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from trajweave.credit.tree_grouping import importance_correction_weights
+
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass(frozen=True)
@@ -112,7 +116,6 @@ def apply_overlong_penalty(
     penalty_factor: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply the DAPO/MARS² overlong penalty before tree advantage shaping."""
-    torch = _torch()
     if buffer_len <= 0 or max_response_length < buffer_len:
         raise ValueError("max_response_length must be >= positive buffer_len")
     expected_len = max_response_length - buffer_len
@@ -182,7 +185,9 @@ def build_stable_launch_overrides(config: dict, *, config_path: str | None = Non
         f"+trajweave.stable.tis_threshold={float(stable.get('tis_threshold', 2.0))}",
         f"+trajweave.stable.overlong_buffer_len={stable.get('overlong_buffer_len', 1)}",
         f"+trajweave.stable.overlong_penalty_factor={float(stable.get('overlong_penalty_factor', 1.0))}",
-        f"++reward.reward_kwargs.overlong_buffer_cfg={{enable:true,len:{int(stable.get('overlong_buffer_len', 1))},penalty_factor:{float(stable.get('overlong_penalty_factor', 1.0))},log:true}}",
+        "++reward.reward_kwargs.overlong_buffer_cfg="
+        f"{{enable:true,len:{int(stable.get('overlong_buffer_len', 1))},"
+        f"penalty_factor:{float(stable.get('overlong_penalty_factor', 1.0))},log:true}}",
         "actor_rollout_ref.rollout.calculate_log_probs=true",
         "algorithm.rollout_correction.bypass_mode=false",
         f"algorithm.rollout_correction.rollout_is={tis_level}",

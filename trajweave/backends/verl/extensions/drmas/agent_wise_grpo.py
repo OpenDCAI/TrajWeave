@@ -266,9 +266,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
                     "worker_nsight_options",
                 )
                 assert worker_nsight_options is not None
-                wg_kwargs["worker_nsight_options"] = tb.OmegaConf.to_container(
-                    worker_nsight_options
-                )
+                wg_kwargs["worker_nsight_options"] = tb.OmegaConf.to_container(worker_nsight_options)
         wg_kwargs["device_name"] = self.config.trainer.device
 
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
@@ -432,9 +430,7 @@ def _patch_v1_trainer_transfer_queue_fields() -> None:
             output_fields.append("response_mask")
             if "rollout_is_weights" in data.batch:
                 output_fields.append("rollout_is_weights")
-        output_fields = list(
-            hooks.output_fields("advantage", tuple(output_fields), data, config=self.config.algorithm)
-        )
+        output_fields = list(hooks.output_fields("advantage", tuple(output_fields), data, config=self.config.algorithm))
 
         output = {}
         for field in output_fields:

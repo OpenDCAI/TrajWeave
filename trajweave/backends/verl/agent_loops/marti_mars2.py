@@ -4,7 +4,6 @@ from typing import Any
 
 from trajweave.backends.verl.runtime_config import as_bool, config_get
 
-
 SUPPORTED_RECIPES = ("marti_mars2_single_mcts",)
 
 

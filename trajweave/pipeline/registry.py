@@ -7,9 +7,9 @@ from trajweave.recipes.comas.plugin import CoMASRecipePlugin
 from trajweave.recipes.doctor_mas.plugin import DoctorMASRecipePlugin
 from trajweave.recipes.drmas_native.plugin import DrMASNativeRecipePlugin
 from trajweave.recipes.gigpo.plugin import GiGPORecipePlugin
+from trajweave.recipes.maporl.plugin import MAPoRLRecipePlugin
 from trajweave.recipes.marti_mars2.plugin import MARTIMARS2RecipePlugin
 from trajweave.recipes.marti_mars2.stable_plugin import MARTIMARS2StableRecipePlugin
-from trajweave.recipes.maporl.plugin import MAPoRLRecipePlugin
 
 
 def recipe_plugins() -> tuple[RecipePlugin, ...]:

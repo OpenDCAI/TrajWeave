@@ -76,8 +76,7 @@ class TreeTrajectory:
         existing_node_ids = {existing.node_id for existing in self.nodes}
         if node.parent_idx is not None and node.parent_idx not in existing_node_ids:
             raise ValueError(
-                f"SearchNode {node.node_id} in tree {self.tree_id!r} references missing parent_idx "
-                f"{node.parent_idx}."
+                f"SearchNode {node.node_id} in tree {self.tree_id!r} references missing parent_idx {node.parent_idx}."
             )
         if node.parent_idx == node.node_id:
             raise ValueError(f"SearchNode {node.node_id} in tree {self.tree_id!r} cannot parent itself.")

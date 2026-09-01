@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from trajweave.recipes.marti_mars2 import build_marti_mars2_launch_overrides, run_single_mcts_smoke
 from trajweave.backends.verl.async_buffer import run_asymmetric_three_step_fixture
+from trajweave.recipes.marti_mars2 import build_marti_mars2_launch_overrides, run_single_mcts_smoke
 from trajweave.recipes.registry import resolve_recipe
 from trajweave.runner import load_yaml_config, run_from_config
 
@@ -182,7 +182,7 @@ def test_marti_mars2_multi_agent_overrides_preserve_agent_policy_bindings():
     assert '+agent.orchestra.marti_mars2.model_ids=["policy_a","policy_b"]' in overrides
     assert "trainer.v1.trainer_mode=trajweave_multi_actor_sync" in overrides
     assert "+trajweave.multi_actor.enabled=true" in overrides
-    assert "+agent.worker_group_ids=[\"policy_a\",\"policy_b\"]" in overrides
+    assert '+agent.worker_group_ids=["policy_a","policy_b"]' in overrides
 
 
 def test_marti_mars2_rejects_multi_actor_vllm_without_explicit_lifecycle_opt_in():

@@ -1,3 +1,12 @@
+from trajweave.backends.verl.async_buffer import (
+    PerPolicyBufferCoordinator,
+    PolicyBufferCoordinator,
+    PolicyBufferState,
+    TransferQueueBufferCoordinator,
+    run_asymmetric_three_step_fixture,
+)
+
+
 def _ensure_torch_dtensor_import_compat() -> None:
     """Expose DTensor on the path expected by this vendored VERL snapshot."""
 
@@ -28,12 +37,17 @@ _ensure_torch_dtensor_import_compat()
 
 __all__ = [
     "TRAJWEAVE_AGENT_LOOP_MANAGER_FQN",
+    "PerPolicyBufferCoordinator",
+    "PolicyBufferCoordinator",
+    "PolicyBufferState",
     "TrajWeaveAgentLoopManager",
     "TrajWeaveAgentLoopRuntimeConfig",
+    "TransferQueueBufferCoordinator",
     "VerlDataProtoAdapter",
     "VerlTrainerLaunchConfig",
     "VerlTrainerLauncher",
     "export_dataproto",
+    "run_asymmetric_three_step_fixture",
 ]
 
 
@@ -67,18 +81,3 @@ def __getattr__(name: str):
             "TrajWeaveAgentLoopRuntimeConfig": TrajWeaveAgentLoopRuntimeConfig,
         }[name]
     raise AttributeError(name)
-from trajweave.backends.verl.async_buffer import (
-    PerPolicyBufferCoordinator,
-    PolicyBufferCoordinator,
-    PolicyBufferState,
-    TransferQueueBufferCoordinator,
-    run_asymmetric_three_step_fixture,
-)
-
-__all__ = [
-    "PerPolicyBufferCoordinator",
-    "PolicyBufferCoordinator",
-    "PolicyBufferState",
-    "TransferQueueBufferCoordinator",
-    "run_asymmetric_three_step_fixture",
-]

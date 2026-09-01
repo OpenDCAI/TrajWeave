@@ -4,7 +4,11 @@ from typing import Any
 
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.launch import maybe_run_verl_launch
-from trajweave.recipes.marti_mars2.stable import build_stable_launch_overrides, run_stable_cpu_fixture, stable_acceptance
+from trajweave.recipes.marti_mars2.stable import (
+    build_stable_launch_overrides,
+    run_stable_cpu_fixture,
+    stable_acceptance,
+)
 
 
 class MARTIMARS2StableRecipePlugin:
@@ -31,9 +35,12 @@ class MARTIMARS2StableRecipePlugin:
             )
         if context.mode == "verl_train":
             maybe_run_verl_launch(
-                context.config, output,
+                context.config,
+                output,
                 overrides=build_stable_launch_overrides(context.config, config_path=context.config_path),
-                default_enabled=True, default_module="trajweave.backends.verl.main_ppo", tracker=context.tracker,
+                default_enabled=True,
+                default_module="trajweave.backends.verl.main_ppo",
+                tracker=context.tracker,
             )
         if context.config.get("acceptance", {}).get("enabled", False):
             metrics = context.config.get("acceptance", {}).get("metrics", {}) or {}

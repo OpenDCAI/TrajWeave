@@ -126,8 +126,7 @@ class MultiActorWeightSyncContract:
         previous = self._versions.get(group_id)
         if previous is not None and global_step < previous.global_step:
             raise ValueError(
-                f"Weight version for {group_id!r} moved backwards from "
-                f"{previous.global_step} to {global_step}."
+                f"Weight version for {group_id!r} moved backwards from {previous.global_step} to {global_step}."
             )
         same_version = previous is not None and global_step == previous.global_step
         version = PolicyWeightVersion(
@@ -165,8 +164,7 @@ class MultiActorWeightSyncContract:
         global_step = int(global_step)
         if global_step != current.global_step:
             raise ValueError(
-                f"Rollout sync for {group_id!r} targets step {global_step}, "
-                f"but actor version is {current.global_step}."
+                f"Rollout sync for {group_id!r} targets step {global_step}, but actor version is {current.global_step}."
             )
         version = PolicyWeightVersion(
             group_id=group_id,

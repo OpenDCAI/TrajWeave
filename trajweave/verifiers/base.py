@@ -26,8 +26,7 @@ class VerifierResult:
 class VerifierAdapter(Protocol):
     name: str
 
-    def verify(self, request: VerifierRequest) -> VerifierResult:
-        ...
+    def verify(self, request: VerifierRequest) -> VerifierResult: ...
 
 
 @dataclass

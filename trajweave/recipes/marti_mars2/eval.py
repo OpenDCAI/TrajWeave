@@ -1,7 +1,7 @@
 """Standalone test-time search evaluation for MARTI-MARS²."""
+
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Literal
@@ -42,10 +42,14 @@ class SearchEvalResult:
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "strategy": self.strategy, "task_count": len(self.task_ids),
-            "passed_task_ids": list(self.passed_task_ids), "any_pass": self.any_pass,
-            "pass_at_1": self.pass_at_1, "mcts_final_pass": self.final_pass,
-            "tokens": self.tokens, "latency_seconds": self.latency_seconds,
+            "strategy": self.strategy,
+            "task_count": len(self.task_ids),
+            "passed_task_ids": list(self.passed_task_ids),
+            "any_pass": self.any_pass,
+            "pass_at_1": self.pass_at_1,
+            "mcts_final_pass": self.final_pass,
+            "tokens": self.tokens,
+            "latency_seconds": self.latency_seconds,
             "refinement_recovery": list(self.refinement_recovery),
         }
 
@@ -90,7 +94,9 @@ class VerifierBestSelector:
 class RewardModelSelector:
     name = "reward-model"
 
-    def __init__(self, selector: Callable[[list[tuple[str, VerifierResult]]], tuple[str, VerifierResult]] | None = None):
+    def __init__(
+        self, selector: Callable[[list[tuple[str, VerifierResult]]], tuple[str, VerifierResult]] | None = None
+    ):
         if selector is None:
             raise RuntimeError("Reward Model selector requested but no model is configured")
         self.selector = selector
@@ -100,9 +106,15 @@ class RewardModelSelector:
 
 
 def evaluate_search(
-    cases: Iterable[SearchEvalCase], *, strategy: Literal["greedy", "best_of_n", "mcts"],
-    policy_backend: PolicyBackend, verifier: VerifierAdapter, team: TeamSpec,
-    nodes: int = 8, initial_candidates: int = 2, refinement_concurrency: int = 2,
+    cases: Iterable[SearchEvalCase],
+    *,
+    strategy: Literal["greedy", "best_of_n", "mcts"],
+    policy_backend: PolicyBackend,
+    verifier: VerifierAdapter,
+    team: TeamSpec,
+    nodes: int = 8,
+    initial_candidates: int = 2,
+    refinement_concurrency: int = 2,
     selector: VerifierBestSelector | RewardModelSelector | None = None,
 ) -> SearchEvalResult:
     rows = list(cases)
@@ -116,21 +128,62 @@ def evaluate_search(
     for case in rows:
         candidates: list[tuple[str, VerifierResult]] = []
         if strategy == "greedy":
-            response = policy_backend.generate(PolicyRequest(agent=team.agents[0], task_id=case.task_id,
-                observation=case.prompt, prompt=case.prompt, metadata={"temperature": 0.0, "node_id": 0}))
-            result = verifier.verify(VerifierRequest(task_id=case.task_id, prompt=case.prompt, candidate=response.text, node_id=0, metadata=case.metadata))
-            candidates.append((response.text, result)); token_count += len(response.token_ids)
+            response = policy_backend.generate(
+                PolicyRequest(
+                    agent=team.agents[0],
+                    task_id=case.task_id,
+                    observation=case.prompt,
+                    prompt=case.prompt,
+                    metadata={"temperature": 0.0, "node_id": 0},
+                )
+            )
+            result = verifier.verify(
+                VerifierRequest(
+                    task_id=case.task_id, prompt=case.prompt, candidate=response.text, node_id=0, metadata=case.metadata
+                )
+            )
+            candidates.append((response.text, result))
+            token_count += len(response.token_ids)
         else:
-            protocol = TreeSearchProtocol(max_num_nodes=nodes, initial_candidates=(nodes if strategy == "best_of_n" else initial_candidates),
-                refinement_concurrency=refinement_concurrency, min_num_nodes=min(initial_candidates, nodes))
-            trajectory = protocol.run(tree_id=case.task_id, prompt_id=case.task_id, task=case, team=team,
-                                      observation=case.prompt, policy_backend=policy_backend, verifier=verifier)
-            candidates = [(node.action_text, VerifierResult(score=node.effective_reward,
-                success=bool(node.metadata.get("verifier_success")), terminal=node.is_terminal,
-                feedback=str(node.metadata.get("verifier_feedback", "")), metadata=node.metadata)) for node in trajectory.nodes]
+            protocol = TreeSearchProtocol(
+                max_num_nodes=nodes,
+                initial_candidates=(nodes if strategy == "best_of_n" else initial_candidates),
+                refinement_concurrency=refinement_concurrency,
+                min_num_nodes=min(initial_candidates, nodes),
+            )
+            trajectory = protocol.run(
+                tree_id=case.task_id,
+                prompt_id=case.task_id,
+                task=case,
+                team=team,
+                observation=case.prompt,
+                policy_backend=policy_backend,
+                verifier=verifier,
+            )
+            candidates = [
+                (
+                    node.action_text,
+                    VerifierResult(
+                        score=node.effective_reward,
+                        success=bool(node.metadata.get("verifier_success")),
+                        terminal=node.is_terminal,
+                        feedback=str(node.metadata.get("verifier_feedback", "")),
+                        metadata=node.metadata,
+                    ),
+                )
+                for node in trajectory.nodes
+            ]
             token_count += sum(len(node.action_token_ids) for node in trajectory.nodes)
-            root_success = any(result.success for node, (_, result) in zip(trajectory.nodes, candidates, strict=True) if node.parent_idx is None)
-            refinement_success = any(result.success for node, (_, result) in zip(trajectory.nodes, candidates, strict=True) if node.parent_idx is not None)
+            root_success = any(
+                result.success
+                for node, (_, result) in zip(trajectory.nodes, candidates, strict=True)
+                if node.parent_idx is None
+            )
+            refinement_success = any(
+                result.success
+                for node, (_, result) in zip(trajectory.nodes, candidates, strict=True)
+                if node.parent_idx is not None
+            )
             if refinement_success and not root_success:
                 recovered.append(case.task_id)
         _chosen_text, chosen = selector.select(candidates)
@@ -138,18 +191,50 @@ def evaluate_search(
             passed.append(case.task_id)
     elapsed = time.perf_counter() - started
     count = max(1, len(rows))
-    return SearchEvalResult(strategy=strategy, task_ids=[case.task_id for case in rows], passed_task_ids=passed,
-        any_pass=len(passed), pass_at_1=len(passed) / count, final_pass=len(passed) / count,
-        tokens=token_count, latency_seconds=elapsed, refinement_recovery=recovered)
+    return SearchEvalResult(
+        strategy=strategy,
+        task_ids=[case.task_id for case in rows],
+        passed_task_ids=passed,
+        any_pass=len(passed),
+        pass_at_1=len(passed) / count,
+        final_pass=len(passed) / count,
+        tokens=token_count,
+        latency_seconds=elapsed,
+        refinement_recovery=recovered,
+    )
 
 
-def run_livecodebench_subset(*, cases: Iterable[SearchEvalCase], policy_backend: PolicyBackend,
-                             verifier: VerifierAdapter, team: TeamSpec, nodes: int = 8) -> dict[str, Any]:
+def run_livecodebench_subset(
+    *,
+    cases: Iterable[SearchEvalCase],
+    policy_backend: PolicyBackend,
+    verifier: VerifierAdapter,
+    team: TeamSpec,
+    nodes: int = 8,
+) -> dict[str, Any]:
     """Run the fixed-budget Greedy/Best-of-N/MCTS comparison."""
     fixed_cases = list(cases)
-    return {strategy: evaluate_search(fixed_cases, strategy=strategy, policy_backend=policy_backend,
-        verifier=verifier, team=team, nodes=nodes, initial_candidates=2).as_dict()
-        for strategy in ("greedy", "best_of_n", "mcts")}
+    return {
+        strategy: evaluate_search(
+            fixed_cases,
+            strategy=strategy,
+            policy_backend=policy_backend,
+            verifier=verifier,
+            team=team,
+            nodes=nodes,
+            initial_candidates=2,
+        ).as_dict()
+        for strategy in ("greedy", "best_of_n", "mcts")
+    }
 
 
-__all__ = ["SearchEvalCase", "SearchBudget", "SearchEvalResult", "StandalonePolicyGroupEndpoints", "VerifierBestSelector", "RewardModelSelector", "evaluate_search", "run_livecodebench_subset"]
+__all__ = [
+    "SearchEvalCase",
+    "SearchBudget",
+    "SearchEvalResult",
+    "StandalonePolicyGroupEndpoints",
+    "VerifierBestSelector",
+    "RewardModelSelector",
+    "evaluate_search",
+    "run_livecodebench_subset",
+]

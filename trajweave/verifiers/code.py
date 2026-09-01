@@ -131,7 +131,9 @@ except Exception as error:
             )
         except subprocess.TimeoutExpired:
             return VerifierResult(
-                score=0.0, success=False, terminal=False,
+                score=0.0,
+                success=False,
+                terminal=False,
                 feedback="local code verifier timed out",
                 metadata={
                     "verification_mode": "local_subprocess_fallback",
@@ -144,7 +146,9 @@ except Exception as error:
         if isinstance(payload, dict) and "error" in payload:
             error_text = str(payload["error"])
             return VerifierResult(
-                score=0.0, success=False, terminal=False,
+                score=0.0,
+                success=False,
+                terminal=False,
                 feedback=f"local code tests failed: {error_text}",
                 metadata={
                     "verification_mode": "local_subprocess_fallback",
@@ -201,7 +205,9 @@ class StandardInputCodeVerifierAdapter(CodeVerifierAdapter):
     def _verify_test_cases(self, request: VerifierRequest, test_cases: Any) -> VerifierResult:
         examples = test_cases.get("examples", test_cases) if isinstance(test_cases, dict) else test_cases
         if not isinstance(examples, list) or not examples:
-            return self._verifier_error(ValueError("standard-input verifier requires non-empty examples"), mode="standard_input")
+            return self._verifier_error(
+                ValueError("standard-input verifier requires non-empty examples"), mode="standard_input"
+            )
         passed = 0
         details = []
         for example in examples:
@@ -212,8 +218,14 @@ class StandardInputCodeVerifierAdapter(CodeVerifierAdapter):
             expected = _normalize_output(str(example.get("output", "")))
             script = "import sys\n" + _extract_executable_code(request.candidate)
             try:
-                proc = subprocess.run([sys.executable, "-c", script], input=raw_input, text=True,
-                                      capture_output=True, timeout=self.timeout, check=False)
+                proc = subprocess.run(
+                    [sys.executable, "-c", script],
+                    input=raw_input,
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout,
+                    check=False,
+                )
                 actual = _normalize_output(proc.stdout)
                 ok = proc.returncode == 0 and actual == expected
                 detail = {"ok": ok, "actual": actual, "expected": expected, "returncode": proc.returncode}
@@ -226,9 +238,17 @@ class StandardInputCodeVerifierAdapter(CodeVerifierAdapter):
             details.append(detail)
         score = passed / len(examples)
         success = passed == len(examples)
-        return VerifierResult(score=score, success=success, terminal=success,
-                              feedback=f"standard-input tests passed {passed}/{len(examples)}",
-                              metadata={"verification_mode": "standard_input_subprocess", "failure_type": None if success else "wrong_answer", "test_details": details})
+        return VerifierResult(
+            score=score,
+            success=success,
+            terminal=success,
+            feedback=f"standard-input tests passed {passed}/{len(examples)}",
+            metadata={
+                "verification_mode": "standard_input_subprocess",
+                "failure_type": None if success else "wrong_answer",
+                "test_details": details,
+            },
+        )
 
 
 def _normalize_code(value: str) -> str:

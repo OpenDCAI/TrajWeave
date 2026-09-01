@@ -38,9 +38,7 @@ class TreeSearchController:
             candidate_id, _record = item
             count = self.visits.get(candidate_id, 0)
             mean = self.value_sums.get(candidate_id, 0.0) / max(count, 1)
-            exploration = self.exploration_constant * math.sqrt(
-                math.log(total_visits + 1) / (count + 1)
-            )
+            exploration = self.exploration_constant * math.sqrt(math.log(total_visits + 1) / (count + 1))
             return mean + exploration, -candidate_id
 
         return max(candidates, key=score)[0]

@@ -123,7 +123,11 @@ def build_marti_mars2_launch_overrides(
         )
     reward_range = mars2_cfg.get("dynamic_filter_reward_range")
     if reward_range is not None:
-        if not isinstance(reward_range, (list, tuple)) or len(reward_range) != 2 or float(reward_range[0]) >= float(reward_range[1]):
+        if (
+            not isinstance(reward_range, list | tuple)
+            or len(reward_range) != 2
+            or float(reward_range[0]) >= float(reward_range[1])
+        ):
             raise ValueError("marti_mars2.dynamic_filter_reward_range must be [lower, upper]")
         required.append(f"+trajweave.dynamic_filter_reward_range={list(map(float, reward_range))}")
     if multi_actor_training:
@@ -149,7 +153,7 @@ def build_marti_mars2_launch_overrides(
 
 
 def _hydra_list(values: tuple[str, ...]) -> str:
-    return "[" + ",".join(f'\"{value}\"' for value in values) + "]"
+    return "[" + ",".join(f'"{value}"' for value in values) + "]"
 
 
 def _hydra_string_list(values: tuple[str, ...]) -> str:
@@ -159,21 +163,19 @@ def _hydra_string_list(values: tuple[str, ...]) -> str:
 def _hydra_dict_list(groups: tuple[tuple[str, dict[str, Any]], ...]) -> str:
     items = []
     for group_id, group in groups:
-        fields = [f'id:\"{group_id}\"', f"trainable:{str(bool(group.get('trainable', True))).lower()}"]
+        fields = [f'id:"{group_id}"', f"trainable:{str(bool(group.get('trainable', True))).lower()}"]
         for key in ("model_path", "tokenizer_path", "gpus"):
             if key in group:
                 value = group[key]
                 rendered = str(value).lower() if isinstance(value, bool) else str(value)
-                if not isinstance(value, (int, float, bool)):
-                    rendered = f'\"{rendered}\"'
+                if not isinstance(value, int | float | bool):
+                    rendered = f'"{rendered}"'
                 fields.append(f"{key}:{rendered}")
         items.append("{" + ",".join(fields) + "}")
     return "[" + ",".join(items) + "]"
 
 
-def _normalize_worker_groups(
-    mars2_cfg: dict[str, Any], *, model_ids: tuple[str, ...]
-) -> dict[str, dict[str, Any]]:
+def _normalize_worker_groups(mars2_cfg: dict[str, Any], *, model_ids: tuple[str, ...]) -> dict[str, dict[str, Any]]:
     raw_groups = mars2_cfg.get("worker_groups", {}) or {}
     if not isinstance(raw_groups, dict):
         raise ValueError("marti_mars2.worker_groups must be a mapping keyed by model id.")

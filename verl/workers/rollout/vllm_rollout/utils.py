@@ -354,10 +354,7 @@ class vLLMColocateWorkerExtension:
         vllm_config = getattr(self.model_runner, "vllm_config", None)
         parallel_config = getattr(vllm_config, "parallel_config", None)
         local_rank = _resolve_vllm_weight_sync_local_rank(self.local_rank, parallel_config)
-        return (
-            f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{replica_rank}"
-            f"{rendered_suffix}-rank-{local_rank}.sock"
-        )
+        return f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{replica_rank}{rendered_suffix}-rank-{local_rank}.sock"
 
 
 class SuppressSignalInThread:

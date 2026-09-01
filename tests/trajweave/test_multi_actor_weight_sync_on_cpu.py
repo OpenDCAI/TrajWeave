@@ -5,6 +5,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
+from trajweave.backends.verl.async_buffer import PolicyBufferCoordinator
 from trajweave.backends.verl.trainers.maporl_multi_actor import (
     TrajWeaveMAPoRLMultiActorSyncTrainer,
     _multi_actor_worker_role,
@@ -16,7 +17,6 @@ from trajweave.backends.verl.weight_sync import (
     MultiActorWeightSyncContract,
     PolicyWeightVersion,
 )
-from trajweave.backends.verl.async_buffer import PolicyBufferCoordinator
 from verl.trainer.ppo.utils import Role
 
 
@@ -291,9 +291,7 @@ def test_grouped_policy_transport_does_not_fallback_between_endpoints():
             calls.append((self.group_id, version.group_id))
             return True
 
-    transport = GroupedPolicyWeightTransport(
-        {"policy_a": Endpoint("server_a"), "policy_b": Endpoint("server_b")}
-    )
+    transport = GroupedPolicyWeightTransport({"policy_a": Endpoint("server_a"), "policy_b": Endpoint("server_b")})
 
     assert transport.load_policy(PolicyWeightVersion(group_id="policy_b", global_step=1)) is True
     assert calls == [("server_b", "policy_b")]

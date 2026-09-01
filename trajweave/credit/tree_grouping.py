@@ -104,7 +104,9 @@ def importance_correction_weights(
             raise ValueError(f"Unsupported importance correction level: {level!r}.")
 
         if mode == "truncate":
-            row = [min(value, upper_threshold) if is_active else 0.0 for value, is_active in zip(raw, active, strict=True)]
+            row = [
+                min(value, upper_threshold) if is_active else 0.0 for value, is_active in zip(raw, active, strict=True)
+            ]
         elif mode == "mask":
             row = [
                 value if is_active and lower_threshold <= value <= upper_threshold else 0.0
@@ -130,6 +132,8 @@ def _validate_same_shape(
 ) -> None:
     if len(old_logprobs) != len(rollout_logprobs) or len(old_logprobs) != len(action_mask):
         raise ValueError("old_logprobs, rollout_logprobs, and action_mask must have the same batch size.")
-    for row, (old_row, rollout_row, mask_row) in enumerate(zip(old_logprobs, rollout_logprobs, action_mask, strict=True)):
+    for row, (old_row, rollout_row, mask_row) in enumerate(
+        zip(old_logprobs, rollout_logprobs, action_mask, strict=True)
+    ):
         if len(old_row) != len(rollout_row) or len(old_row) != len(mask_row):
             raise ValueError(f"importance correction inputs have mismatched lengths at row {row}.")

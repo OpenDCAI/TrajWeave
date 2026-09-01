@@ -1,3 +1,4 @@
+from trajweave.backends.verl.extensions.common.hooked_grpo import apply_hooked_grpo_patch
 from trajweave.backends.verl.extensions.common.hooks import (
     AgentFlowPlannerGRPOHooks,
     AgentWiseGRPOHooks,
@@ -9,7 +10,6 @@ from trajweave.backends.verl.extensions.common.nested_compat import (
     apply_tq_nested_compat_patch,
     install_worker_nested_tensor_compat,
 )
-from trajweave.backends.verl.extensions.common.hooked_grpo import apply_hooked_grpo_patch
 from trajweave.backends.verl.extensions.common.worker import TrajWeaveActorRolloutRefWorker
 
 __all__ = [

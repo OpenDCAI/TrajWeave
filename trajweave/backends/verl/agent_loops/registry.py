@@ -5,7 +5,6 @@ from typing import Any, Callable
 
 from trajweave.backends.verl.emitters.registry import supported_emitter_recipes
 
-
 WorkerLoader = Callable[[], Any]
 
 

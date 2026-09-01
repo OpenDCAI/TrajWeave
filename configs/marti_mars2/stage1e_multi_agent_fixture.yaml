@@ -23,6 +23,7 @@ acceptance:
   enabled: true
   require_learning_signal: true
   require_multi_agent_routing: true
+  allow_local_verifier_fallback: true
 
 prepare:
   tiny_verl_assets:
@@ -37,21 +38,18 @@ prepare:
 verl:
   enabled: true
   execute: true
-  python: /data/chenxingyan/conda_envs/pettingllms-atgrpo/bin/python
-  cwd: /data/chenxingyan/TrajWeave
   command_file: outputs/marti_mars2_stage1e_fixture/verl_ppo.sh
   stdout_path: outputs/marti_mars2_stage1e_fixture/verl_stdout.log
   stderr_path: outputs/marti_mars2_stage1e_fixture/verl_stderr.log
   module: trajweave.backends.verl.main_ppo
   env:
-    CUDA_VISIBLE_DEVICES: "2"
+    CUDA_VISIBLE_DEVICES: "0"
     HF_HOME: outputs/.hf_cache
     HF_DATASETS_CACHE: outputs/.hf_cache/datasets
     TRANSFORMERS_CACHE: outputs/.hf_cache/transformers
     NO_PROXY: localhost,127.0.0.1,::1
     TOKENIZERS_PARALLELISM: "false"
     RAY_DEDUP_LOGS: "0"
-    PYTHONPATH: /tmp/trajweave-tq-runtime:/data/chenxingyan/TrajWeave
   overrides:
     - trainer.use_v1=true
     - trainer.v1.trainer_mode=sync
@@ -77,8 +75,8 @@ verl:
     - data.filter_overlong_prompts=false
     - data.truncation=right
     - data.shuffle=false
-    - actor_rollout_ref.model.path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
-    - actor_rollout_ref.model.tokenizer_path=/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct
+    - actor_rollout_ref.model.path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    - actor_rollout_ref.model.tokenizer_path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
     - +actor_rollout_ref.model.override_config.attn_implementation=eager
     - actor_rollout_ref.model.use_remove_padding=false
     - actor_rollout_ref.model.enable_gradient_checkpointing=false

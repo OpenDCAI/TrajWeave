@@ -16,6 +16,7 @@ def audit_fidelity_training_run(
     require_learning_signal: bool = True,
     require_multi_agent_routing: bool = False,
     require_multi_actor_weight_sync: bool = False,
+    allow_local_verifier_fallback: bool = False,
 ) -> dict[str, Any]:
     run_path = Path(run_dir)
     rewards_by_tree: dict[str, list[float]] = defaultdict(list)
@@ -82,9 +83,12 @@ def audit_fidelity_training_run(
         for row in [json.loads(line)]
         if row.get("agent_id")
     }
+    accepted_verifier_modes = {"prime_code_subprocess"}
+    if allow_local_verifier_fallback:
+        accepted_verifier_modes.add("local_subprocess_fallback")
     checks: dict[str, bool] = {
         "real_verifier_without_errors": bool(verifier_modes)
-        and all(mode in {"prime_code_subprocess", "local_subprocess_fallback"} for mode in verifier_modes)
+        and all(mode in accepted_verifier_modes for mode in verifier_modes)
         and all(failure_type != "verifier_error" for failure_type in failure_types),
         "nonzero_verifier_reward": any(reward > 0 for rewards in rewards_by_tree.values() for reward in rewards),
         "mixed_rewards_within_tree": any(max(rewards) > min(rewards) for rewards in rewards_by_tree.values()),
@@ -98,9 +102,12 @@ def audit_fidelity_training_run(
     if require_multi_agent_routing:
         checks["multi_agent_routing"] = len(policy_groups) >= 2 and len(agent_ids) >= 2
     if require_multi_actor_weight_sync:
-        checks["multi_actor_weight_sync"] = bool(weight_sync_manifest) and bool(
-            weight_sync_manifest.get("synchronized")
-        ) and not weight_sync_manifest.get("pending_groups") and len(weight_sync_manifest.get("group_ids", [])) >= 2
+        checks["multi_actor_weight_sync"] = (
+            bool(weight_sync_manifest)
+            and bool(weight_sync_manifest.get("synchronized"))
+            and not weight_sync_manifest.get("pending_groups")
+            and len(weight_sync_manifest.get("group_ids", [])) >= 2
+        )
     if not require_learning_signal:
         for name in (
             "nonzero_verifier_reward",
@@ -134,6 +141,7 @@ def audit_fidelity_training_run(
         "learning_signal_required": require_learning_signal,
         "multi_agent_routing_required": require_multi_agent_routing,
         "multi_actor_weight_sync_required": require_multi_actor_weight_sync,
+        "local_verifier_fallback_allowed": allow_local_verifier_fallback,
         "tensor_diff_required": True,
     }
 

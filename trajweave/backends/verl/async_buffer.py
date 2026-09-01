@@ -5,6 +5,7 @@ trainer can feed completed tree records into :class:`PolicyBufferCoordinator`
 after reading them from TQ, while CPU fixtures can exercise ownership,
 filtering, and staleness without Ray or a running metadata server.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -88,7 +89,9 @@ class PolicyBufferCoordinator:
             raise ValueError(f"rollout sync step for {group_id!r} moved backwards")
         state.rollout_synced_step = step
 
-    def add_tree(self, samples: Iterable[Mapping[str, Any]], *, global_step: int | None = None) -> dict[str, int | float | bool]:
+    def add_tree(
+        self, samples: Iterable[Mapping[str, Any]], *, global_step: int | None = None
+    ) -> dict[str, int | float | bool]:
         rows = [dict(sample) for sample in samples]
         self.metrics["trees_seen"] += 1
         if not rows:
@@ -107,7 +110,13 @@ class PolicyBufferCoordinator:
                 group = str(row.get("policy_group", row.get("worker_group", "")))
                 if group in self.states:
                     self.states[group].filtered += 1
-            return {"accepted": 0, "filtered": len(rows), "stale": 0, "tree_filtered": True, "tree_mean_reward": mean_reward}
+            return {
+                "accepted": 0,
+                "filtered": len(rows),
+                "stale": 0,
+                "tree_filtered": True,
+                "tree_mean_reward": mean_reward,
+            }
 
         accepted = stale = filtered = 0
         for row in rows:
@@ -117,8 +126,20 @@ class PolicyBufferCoordinator:
                 filtered += 1
                 continue
             state = self.states[group]
-            rollout_step = int(row.get("rollout_policy_step", row.get("policy_step", row.get("rollout_global_step", global_step if global_step is not None else state.rollout_synced_step))))
-            rollout_global = int(row.get("rollout_global_step", global_step if global_step is not None else rollout_step))
+            rollout_step = int(
+                row.get(
+                    "rollout_policy_step",
+                    row.get(
+                        "policy_step",
+                        row.get(
+                            "rollout_global_step", global_step if global_step is not None else state.rollout_synced_step
+                        ),
+                    ),
+                )
+            )
+            rollout_global = int(
+                row.get("rollout_global_step", global_step if global_step is not None else rollout_step)
+            )
             lag = max(0, state.actor_step - rollout_step)
             row.update({"rollout_policy_step": rollout_step, "rollout_global_step": rollout_global, "policy_lag": lag})
             if lag > self.max_policy_lag:
@@ -131,7 +152,13 @@ class PolicyBufferCoordinator:
             accepted += 1
         self.metrics["samples_accepted"] += accepted
         self.metrics["samples_filtered"] += filtered
-        return {"accepted": accepted, "filtered": filtered, "stale": stale, "tree_filtered": False, "tree_mean_reward": mean_reward}
+        return {
+            "accepted": accepted,
+            "filtered": filtered,
+            "stale": stale,
+            "tree_filtered": False,
+            "tree_mean_reward": mean_reward,
+        }
 
     def ready_groups(self) -> tuple[str, ...]:
         return tuple(group for group in self.policy_groups if self.states[group].buffer_depth >= self.min_batch_size)
@@ -277,7 +304,12 @@ def run_asymmetric_three_step_fixture() -> dict[str, Any]:
         coordinator.update_actor_step("policy_b", updates["policy_b"])
         coordinator.add_tree(
             [
-                {"policy_group": "policy_a", "reward": 0.75, "rollout_policy_step": global_step, "rollout_global_step": global_step},
+                {
+                    "policy_group": "policy_a",
+                    "reward": 0.75,
+                    "rollout_policy_step": global_step,
+                    "rollout_global_step": global_step,
+                },
                 {
                     "policy_group": "policy_b",
                     "reward": 0.25,
@@ -293,6 +325,11 @@ def run_asymmetric_three_step_fixture() -> dict[str, Any]:
                 updates[group] += 1
                 coordinator.update_actor_step(group, updates[group])
                 coordinator.mark_rollout_sync(group, updates[group])
-    result = {"updates": updates, "pending": coordinator.pending, "metrics": coordinator.metric_fields(), "snapshot": coordinator.snapshot()}
+    result = {
+        "updates": updates,
+        "pending": coordinator.pending,
+        "metrics": coordinator.metric_fields(),
+        "snapshot": coordinator.snapshot(),
+    }
     result["acceptance"] = async_buffer_acceptance(result)
     return result

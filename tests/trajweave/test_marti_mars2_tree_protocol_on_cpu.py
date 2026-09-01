@@ -218,11 +218,15 @@ def test_marti_emitter_known_correct_candidate_sets_terminal_stop():
 
     class Harness(MARTIMARS2EmitterMixin):
         config = {
-            "agent": {"orchestra": {"marti_mars2": {
-                "max_num_nodes": 3,
-                "initial_candidates": 2,
-                "stop_on_success": True,
-            }}}
+            "agent": {
+                "orchestra": {
+                    "marti_mars2": {
+                        "max_num_nodes": 3,
+                        "initial_candidates": 2,
+                        "stop_on_success": True,
+                    }
+                }
+            }
         }
 
     prompt = {
@@ -289,18 +293,33 @@ def test_tree_search_controller_persists_ucb_state_and_paths():
     assert controller.select_parent(0) == -1
     assert controller.select_parent(1) == -1
     controller.record(
-        node_id=0, parent_idx=-1, path=(0,), reward=0.2,
-        feedback="retry", success=False, terminal=False,
+        node_id=0,
+        parent_idx=-1,
+        path=(0,),
+        reward=0.2,
+        feedback="retry",
+        success=False,
+        terminal=False,
     )
     controller.record(
-        node_id=1, parent_idx=-1, path=(1,), reward=0.8,
-        feedback="retry", success=False, terminal=False,
+        node_id=1,
+        parent_idx=-1,
+        path=(1,),
+        reward=0.8,
+        feedback="retry",
+        success=False,
+        terminal=False,
     )
     assert controller.select_parent(2) in {0, 1}
     assert controller.path_for(2, 1) == (1, 2)
     controller.record(
-        node_id=2, parent_idx=1, path=(1, 2), reward=1.0,
-        feedback="passed", success=True, terminal=True,
+        node_id=2,
+        parent_idx=1,
+        path=(1, 2),
+        reward=1.0,
+        feedback="passed",
+        success=True,
+        terminal=True,
     )
     assert controller.select_parent(3) in {0, 1}
     assert controller.select_parent(3) != 2
@@ -309,12 +328,22 @@ def test_tree_search_controller_persists_ucb_state_and_paths():
 def test_tree_search_controller_stops_after_success_when_enabled():
     controller = TreeSearchController(max_num_nodes=4, initial_candidates=2, stop_on_success=True)
     controller.record(
-        node_id=0, parent_idx=-1, path=(0,), reward=0.0,
-        feedback="retry", success=False, terminal=False,
+        node_id=0,
+        parent_idx=-1,
+        path=(0,),
+        reward=0.0,
+        feedback="retry",
+        success=False,
+        terminal=False,
     )
     controller.record(
-        node_id=1, parent_idx=-1, path=(1,), reward=1.0,
-        feedback="passed", success=True, terminal=True,
+        node_id=1,
+        parent_idx=-1,
+        path=(1,),
+        reward=1.0,
+        feedback="passed",
+        success=True,
+        terminal=True,
     )
     assert controller.should_stop(success=True, pending_node=False) is True
 

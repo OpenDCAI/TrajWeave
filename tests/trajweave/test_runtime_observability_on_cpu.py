@@ -171,18 +171,20 @@ def test_generic_recipe_acceptance_failure_marks_output_failed():
     )
 
     assert reason == (
-        "custom_recipe_contract acceptance failed: "
-        "failed checks: mixed_rewards_within_tree, finite_nonzero_gradient."
+        "custom_recipe_contract acceptance failed: failed checks: mixed_rewards_within_tree, finite_nonzero_gradient."
     )
 
 
 def test_legacy_recipe_specific_acceptance_field_does_not_control_runner_status():
-    assert _output_failure_reason(
-        {
-            "verl_launch": {"status": "ok", "returncode": 0},
-            "marti_mars2_acceptance": {"status": "failed", "checks": {"legacy": False}},
-        }
-    ) is None
+    assert (
+        _output_failure_reason(
+            {
+                "verl_launch": {"status": "ok", "returncode": 0},
+                "marti_mars2_acceptance": {"status": "failed", "checks": {"legacy": False}},
+            }
+        )
+        is None
+    )
 
 
 def test_trajectory_store_writes_online_turn_shards(tmp_path):

@@ -122,8 +122,15 @@ class TreeSearchProtocol:
         return trajectory
 
     async def run_async(
-        self, *, tree_id: str, prompt_id: str, task: Any, team: TeamSpec, observation: str,
-        policy_backend: PolicyBackend, verifier: VerifierAdapter,
+        self,
+        *,
+        tree_id: str,
+        prompt_id: str,
+        task: Any,
+        team: TeamSpec,
+        observation: str,
+        policy_backend: PolicyBackend,
+        verifier: VerifierAdapter,
     ) -> TreeTrajectory:
         """Run initial candidates and refinement waves concurrently.
 
@@ -136,7 +143,10 @@ class TreeSearchProtocol:
         concurrency = max(1, int(self.refinement_concurrency))
         task_id = str(getattr(task, "task_id", prompt_id))
         trajectory = TreeTrajectory(
-            tree_id=tree_id, prompt_id=prompt_id, task_id=task_id, rollout_group=tree_id,
+            tree_id=tree_id,
+            prompt_id=prompt_id,
+            task_id=task_id,
+            rollout_group=tree_id,
             metadata={"control": "async_wave_mcts", "max_num_nodes": self.max_num_nodes, "verifier": verifier.name},
         )
         visits: dict[int, int] = {}
@@ -144,52 +154,99 @@ class TreeSearchProtocol:
         next_id = 0
         # Initial candidates are independent and can be generated together.
         while next_id < self.max_num_nodes:
-            wave_ids = list(range(next_id, min(next_id + (self.initial_candidates if next_id == 0 else concurrency), self.max_num_nodes)))
+            wave_ids = list(
+                range(
+                    next_id,
+                    min(next_id + (self.initial_candidates if next_id == 0 else concurrency), self.max_num_nodes),
+                )
+            )
             next_id += len(wave_ids)
             requests = []
             for node_id in wave_ids:
-                parent = None if node_id < self.initial_candidates else self.select(trajectory, visits=visits, value_sums=value_sums)
+                parent = (
+                    None
+                    if node_id < self.initial_candidates
+                    else self.select(trajectory, visits=visits, value_sums=value_sums)
+                )
                 agent = team.agents[node_id % len(team.agents)]
                 prompt = self.build_expansion_prompt(observation, parent=parent)
                 requests.append((node_id, parent, agent, prompt))
 
             async def produce(item):
                 node_id, parent, agent, prompt = item
-                response = await _maybe_await(policy_backend.generate, PolicyRequest(
-                    agent=agent, task_id=task_id, observation=observation, prompt=prompt,
-                    metadata={"tree_id": tree_id, "prompt_id": prompt_id, "node_id": node_id,
-                              "parent_idx": None if parent is None else parent.node_id,
-                              "search_stage": "expand" if parent is None else "refine"},
-                ))
-                result = await _maybe_await(verifier.verify, VerifierRequest(
-                    task_id=task_id, prompt=observation, candidate=response.text, node_id=node_id,
-                    parent_idx=None if parent is None else parent.node_id, metadata=response.metadata,
-                ))
+                response = await _maybe_await(
+                    policy_backend.generate,
+                    PolicyRequest(
+                        agent=agent,
+                        task_id=task_id,
+                        observation=observation,
+                        prompt=prompt,
+                        metadata={
+                            "tree_id": tree_id,
+                            "prompt_id": prompt_id,
+                            "node_id": node_id,
+                            "parent_idx": None if parent is None else parent.node_id,
+                            "search_stage": "expand" if parent is None else "refine",
+                        },
+                    ),
+                )
+                result = await _maybe_await(
+                    verifier.verify,
+                    VerifierRequest(
+                        task_id=task_id,
+                        prompt=observation,
+                        candidate=response.text,
+                        node_id=node_id,
+                        parent_idx=None if parent is None else parent.node_id,
+                        metadata=response.metadata,
+                    ),
+                )
                 path = (node_id,) if parent is None else (*parent.path, node_id)
                 return SearchNode(
-                    tree_id=tree_id, prompt_id=prompt_id, node_id=node_id,
-                    parent_idx=None if parent is None else parent.node_id, turn_id=node_id,
-                    agent_name=agent.name, role=agent.role, policy_group=agent.policy_group,
-                    prompt=prompt, action_text=response.text, action_token_ids=response.token_ids,
-                    rollout_logprobs=response.logprobs, reward=result.score, path=path,
+                    tree_id=tree_id,
+                    prompt_id=prompt_id,
+                    node_id=node_id,
+                    parent_idx=None if parent is None else parent.node_id,
+                    turn_id=node_id,
+                    agent_name=agent.name,
+                    role=agent.role,
+                    policy_group=agent.policy_group,
+                    prompt=prompt,
+                    action_text=response.text,
+                    action_token_ids=response.token_ids,
+                    rollout_logprobs=response.logprobs,
+                    reward=result.score,
+                    path=path,
                     is_terminal=result.terminal,
                     rollout_policy_step=_as_int(response.metadata.get("rollout_policy_step")),
                     rollout_global_step=_as_int(response.metadata.get("rollout_global_step")),
                     policy_lag=_as_int(response.metadata.get("policy_lag")),
-                    metadata=response.metadata | result.metadata | {"verifier_feedback": result.feedback,
-                        "verifier_success": result.success, "search_stage": "expand" if parent is None else "refine"},
+                    metadata=response.metadata
+                    | result.metadata
+                    | {
+                        "verifier_feedback": result.feedback,
+                        "verifier_success": result.success,
+                        "search_stage": "expand" if parent is None else "refine",
+                    },
                 )
 
             nodes = await asyncio.gather(*(produce(item) for item in requests))
             for node in sorted(nodes, key=lambda item: item.node_id):
                 trajectory.add_node(node)
                 self.backpropagate(node, float(node.reward or 0.0), trajectory, visits=visits, value_sums=value_sums)
-            if nodes and any(bool(node.metadata.get("verifier_success")) for node in nodes) and self.stop_on_success and len(trajectory.nodes) >= self.min_num_nodes:
+            if (
+                nodes
+                and any(bool(node.metadata.get("verifier_success")) for node in nodes)
+                and self.stop_on_success
+                and len(trajectory.nodes) >= self.min_num_nodes
+            ):
                 break
         best = self.aggregate(trajectory)
         trajectory.final_answer, trajectory.global_reward = best.action_text, best.effective_reward
         trajectory.success = any(bool(node.metadata.get("verifier_success")) for node in trajectory.nodes)
-        trajectory.metadata.update({"best_node_id": best.node_id, "node_count": len(trajectory.nodes), "completion_order_independent": True})
+        trajectory.metadata.update(
+            {"best_node_id": best.node_id, "node_count": len(trajectory.nodes), "completion_order_independent": True}
+        )
         return trajectory
 
     def select(

@@ -10,6 +10,8 @@ import transfer_queue as tq
 from tensordict import NonTensorData, NonTensorStack
 
 from trajweave.backends.verl.batch_padding import pad_session_batch
+from trajweave.backends.verl.agent_loops.common import write_online_turn_rows
+from trajweave.backends.verl.agent_loops.registry import load_agent_loop_worker
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
     CoMASEmitterMixin,
@@ -20,13 +22,10 @@ from trajweave.backends.verl.emitters import (
 )
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs, cleanup_recipe_state
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
-from trajweave.backends.verl.agent_loops.common import write_online_turn_rows
-from trajweave.backends.verl.agent_loops.registry import load_agent_loop_worker
 from trajweave.backends.verl.runtime_config import (
     TrajWeaveAgentLoopRuntimeConfig,
 )
 from trajweave.backends.verl.runtime_config import (
-    as_bool as _as_bool,
     config_get as _get,
 )
 from trajweave.backends.verl.runtime_config import (
@@ -41,7 +40,6 @@ from trajweave.backends.verl.schema import (
 from trajweave.backends.verl.schema import (
     canonical_drmas_agent_id as _canonical_drmas_agent_id,
 )
-from trajweave.backends.verl.schema import flatten_token_ids as _flatten_token_ids
 from trajweave.backends.verl.schema import (
     pad_or_trim_1d as _pad_or_trim_1d,
 )
@@ -222,8 +220,7 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 )
                 await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
                 if any(
-                    bool(output.extra_fields.get("verifier_terminal"))
-                    or bool(output.extra_fields.get("search_stop"))
+                    bool(output.extra_fields.get("verifier_terminal")) or bool(output.extra_fields.get("search_stop"))
                     for output in outputs
                 ):
                     break
@@ -325,9 +322,7 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
             base_prompt = prompt.get("raw_prompt")
             for session_id in range(n):
                 parent_idx = self._marti_select_parent(prompt, node_id=session_id)
-                prompt["raw_prompt"] = self._marti_refinement_prompt(
-                    base_prompt, prompt, parent_idx=parent_idx
-                )
+                prompt["raw_prompt"] = self._marti_refinement_prompt(base_prompt, prompt, parent_idx=parent_idx)
                 self._trajweave_active_marti_context = {
                     "prompt": prompt,
                     "node_id": session_id,
@@ -436,21 +431,21 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
             prompt_ids = _to_python(output.prompt_ids)
             response_ids = _to_python(output.response_ids)
             response_mask_ids = _to_python(output.response_mask)
-            if prompt_ids and isinstance(prompt_ids[0], (list, tuple)):
+            if prompt_ids and isinstance(prompt_ids[0], list | tuple):
                 prompt_ids = prompt_ids[0]
-            if response_ids and isinstance(response_ids[0], (list, tuple)):
+            if response_ids and isinstance(response_ids[0], list | tuple):
                 response_ids = response_ids[0]
-            if response_mask_ids and isinstance(response_mask_ids[0], (list, tuple)):
+            if response_mask_ids and isinstance(response_mask_ids[0], list | tuple):
                 response_mask_ids = response_mask_ids[0]
             prompt_ids = list(prompt_ids[-self.rollout_config.prompt_length :])
             response_ids = list(response_ids[: self.rollout_config.response_length])
             response_mask_ids = list(response_mask_ids[: len(response_ids)])
             pad_token_id = _to_python(self.tokenizer.pad_token_id)
-            if isinstance(pad_token_id, (list, tuple)):
+            if isinstance(pad_token_id, list | tuple):
                 pad_token_id = pad_token_id[0] if pad_token_id else 0
             if pad_token_id is None:
                 pad_token_id = _to_python(self.tokenizer.eos_token_id) or 0
-                if isinstance(pad_token_id, (list, tuple)):
+                if isinstance(pad_token_id, list | tuple):
                     pad_token_id = pad_token_id[0] if pad_token_id else 0
 
             prompt_pad = self.rollout_config.prompt_length - len(prompt_ids)

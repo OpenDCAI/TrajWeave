@@ -54,7 +54,9 @@ class TreePathCreditAllocator:
         path_returns = discounted_path_returns(nodes, shaped, discount=self.path_discount)
         indices = [index for index, node in enumerate(nodes) if node.agent_name in trainable]
         values = [path_returns[index] for index in indices]
-        advantages = group_normalized_advantages(values, [list(range(len(indices)))]) if self.normalize_advantage else values
+        advantages = (
+            group_normalized_advantages(values, [list(range(len(indices)))]) if self.normalize_advantage else values
+        )
         samples = []
         for index, advantage in zip(indices, advantages, strict=True):
             node = nodes[index]
@@ -92,7 +94,9 @@ class TreeGroupCreditAllocator:
         nodes = list(trajectory.nodes)
         indices = [index for index, node in enumerate(nodes) if node.agent_name in trainable]
         rewards = [float(nodes[index].reward or 0.0) for index in indices]
-        advantages = group_normalized_advantages(rewards, [list(range(len(indices)))]) if self.normalize_advantage else rewards
+        advantages = (
+            group_normalized_advantages(rewards, [list(range(len(indices)))]) if self.normalize_advantage else rewards
+        )
         samples = []
         for index, advantage in zip(indices, advantages, strict=True):
             node = nodes[index]
