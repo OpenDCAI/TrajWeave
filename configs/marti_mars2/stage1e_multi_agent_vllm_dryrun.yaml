@@ -1,5 +1,5 @@
 recipe: marti_mars2.single_mcts.fidelity
-mode: verl_train
+mode: verl_plan
 
 marti_mars2:
   max_num_nodes: 2

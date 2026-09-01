@@ -20,11 +20,11 @@ TrajWeave 现在接入了六个论文方向，对应七条可运行的 MASRL 路
 | AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
 | GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
-| MARTI-MARS² Code      | multi-agent MCTS tree search and refinement  | tree-group credit、code verifier、native vLLM 多 Actor 和异步 buffer 已接入 |
+| MARTI-MARS² Code      | multi-agent MCTS tree search and refinement  | tree-group credit、code verifier和native vLLM 多 Actor 同步训练已接入 |
 
 当前成熟度是“框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。
 
-最新严格验收基线：
+合并 MARTI 前的六条稳定链路验收基线：
 
 | 项目              | 结果                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------ |
@@ -34,7 +34,7 @@ TrajWeave 现在接入了六个论文方向，对应七条可运行的 MASRL 路
 | 真实模型          | Qwen2.5-0.5B-Instruct；MAPoRL 额外使用 Qwen2.5-0.5B Base                                  |
 | 训练步数          | 六条链路均完成 `2/2` step，return code 均为 `0`                                            |
 | 单元与集成测试    | `162 passed`                                                                               |
-| 代码边界          | `git status --short -- verl` 为空，当前 MASRL runtime 加固没有修改 `verl/` 源码            |
+| 代码边界          | 该六条基线未修改 `verl/`；MARTI 另有 5 处受兼容性测试约束的小型扩展点      |
 
 | Recipe                | 配置入口                                                      | 最新真实 run                                                        | 轨迹数 |
 | --------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | -----: |
@@ -291,7 +291,7 @@ VERL 本身是否需要通用 extension point？
   -> 只在有兼容性测试时小范围修改 verl/
 ```
 
-当前六条稳定链路都没有新增 `verl/` 修改。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
+原有六条稳定链路没有新增 `verl/` 修改。MARTI 为了传递 tree/rollout 扩展字段、区分多 vLLM endpoint，对 5 个 VERL 文件增加了窄接口；算法、路由和 credit 逻辑仍位于 `trajweave/`。新增论文时，先证明 `trajweave/backends/verl` 的外部扩展点无法表达需求，再考虑修改上游目录。
 
 ## 8. 运行命令
 
@@ -569,7 +569,7 @@ online trajectory 没有 padding 泄漏、空训练 prompt 或错误 Worker Grou
 logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 ```
 
-如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。当前六条稳定路径不依赖新增 `verl/` 源码修改。
+如果改了 retained VERL internals，还要跑相关 VERL 兼容性测试。最低要求是检查 import，以及受影响的 trainer、worker 或 protocol tests。原有六条稳定路径不依赖新增 `verl/` 修改；MARTI 的 tree field 和 endpoint namespace 扩展必须额外通过 VERL bridge 兼容性测试。
 
 ## 14. Paper Recipe Catalog
 
@@ -672,13 +672,13 @@ logs、metrics、artifact index、trajectory、checkpoint 全部存在且可读
 | ----------- | ----------------------------------------------------------- |
 | 论文贡献    | 在多 Agent 树搜索中联合扩展、改写、验证与路径级 credit。 |
 | Environment | `CodeExecutionEnvironment`，使用可执行 test case 产生 verifier reward。 |
-| Orchestra   | `tree_search` protocol，显式记录 tree/node/parent/path 和终止状态。 |
+| Orchestra   | `TreeSearchProtocol`，显式记录 tree/node/parent/path 和终止状态。 |
 | Credit      | fidelity tree-group GRPO；parent/sibling/path shaping 只作为可选实验路径。 |
 | VERL 路径   | MARTI emitter -> native vLLM AgentLoop -> TransferQueue -> MARTI extension -> 通用多 Actor Trainer。 |
 | 推理流      | code task -> generator/critic 扩展树 -> verifier 执行 -> 继续搜索或停止。 |
 | 训练流      | node verifier reward -> tree identity grouping -> GRPO advantage -> 按 Worker Group 路由 -> Actor 更新与权重同步。 |
-| 主要配置    | `configs/marti_mars2/single_mcts_smoke.yaml`, `configs/marti_mars2/single_mcts_verl_tiny.yaml`, `configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml` |
-| 已知限制    | 当前是工程闭环验收，不代表已复现论文 benchmark 指标。 |
+| 主要配置    | `configs/marti_mars2/single_mcts_smoke.yaml`, `configs/marti_mars2/single_mcts_verl_tiny.yaml`, `configs/marti_mars2/stage1e_multi_agent_vllm_smoke.yaml` |
+| 已知限制    | 当前是工程闭环验收，不代表已复现论文 benchmark 指标。跨 step 异步 buffer 仍缺完整 TQ 样本生命周期，真实训练开启时会 fail fast，不会静默丢样本。 |
 
 ## 15. 贡献者规则
 

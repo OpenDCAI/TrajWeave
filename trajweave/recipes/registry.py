@@ -94,6 +94,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="marti_mars2",
         task="code",
         runtime_recipe="marti_mars2_single_mcts",
+        allowed_modes=("smoke", "verl_train", "verl_plan", "marti_eval"),
         aliases=("marti_mars2_fidelity", "marti-mars2-fidelity"),
     ),
     RecipeDefinition(
@@ -101,6 +102,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="marti_mars2",
         task="code",
         runtime_recipe="marti_mars2_single_mcts",
+        allowed_modes=("verl_train", "verl_plan"),
         aliases=("marti_mars2_vanilla_grpo", "marti-mars2-vanilla-grpo"),
     ),
     RecipeDefinition(
@@ -108,6 +110,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="marti_mars2",
         task="code",
         runtime_recipe="marti_mars2_single_mcts",
+        allowed_modes=("smoke",),
         aliases=("marti_mars2_tree_credit_experimental", "marti-mars2-tree-credit-experimental"),
     ),
     RecipeDefinition(
@@ -115,6 +118,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="marti_mars2_stable",
         task="code",
         runtime_recipe="marti_mars2_stable",
+        allowed_modes=("smoke",),
         aliases=("marti_mars2_stable", "mars2.stable.token"),
     ),
     RecipeDefinition(
@@ -122,6 +126,7 @@ RECIPES: tuple[RecipeDefinition, ...] = (
         family="marti_mars2_stable",
         task="code",
         runtime_recipe="marti_mars2_stable",
+        allowed_modes=("smoke",),
         aliases=("mars2.stable.sequence",),
     ),
 )

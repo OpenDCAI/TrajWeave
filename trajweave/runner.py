@@ -99,13 +99,8 @@ def _output_failure_reason(output: dict[str, Any]) -> str | None:
             return f"VERL training validation failed: {validation_error}"
         return f"VERL launch failed with status={status!r}, returncode={returncode!r}."
     acceptance = output.get("acceptance")
-    legacy_marti_acceptance = not isinstance(acceptance, dict)
-    if legacy_marti_acceptance:
-        acceptance = output.get("marti_mars2_acceptance")
     if isinstance(acceptance, dict) and acceptance.get("status") == "failed":
         failed_checks = [name for name, passed in acceptance.get("checks", {}).items() if not passed]
-        if legacy_marti_acceptance:
-            return f"MARTI-MARS2 fidelity acceptance failed: {', '.join(failed_checks) or 'unknown check'}."
         name = str(acceptance.get("name") or "recipe")
         message = str(acceptance.get("message") or "").strip()
         detail = message or f"failed checks: {', '.join(failed_checks) or 'unknown check'}"

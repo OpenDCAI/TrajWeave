@@ -96,7 +96,7 @@ def test_runner_does_not_register_prepared_asset_metadata_as_missing_files(tmp_p
     result = run_from_config(
         {
             "recipe": "marti_mars2.single_mcts.fidelity",
-            "mode": "verl_train",
+            "mode": "smoke",
             "run": {"root_dir": str(tmp_path), "name": "asset-metadata"},
             "logging": {"console": False},
             "prepare": {

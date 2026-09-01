@@ -20,6 +20,14 @@ from trajweave.backends.verl.weight_sync import (
 from verl.trainer.ppo.utils import Role
 
 
+def test_live_multi_actor_trainer_rejects_metadata_only_cross_step_async_buffer():
+    trainer = object.__new__(TrajWeaveMAPoRLMultiActorSyncTrainer)
+    trainer.config = OmegaConf.create({"trajweave": {"async_buffer": {"enabled": True}}})
+
+    with pytest.raises(ValueError, match="clears the sampled TransferQueue batch"):
+        trainer._validate_multi_actor_specs()
+
+
 def test_checkpoint_engine_policy_endpoint_adapts_success_and_failure():
     calls = []
 
@@ -216,6 +224,7 @@ def test_hf_local_sync_advances_buffer_rollout_version_without_transport():
         checkpoint_manager=manager,
         maporl_buffer_coordinator=coordinator,
         maporl_trainable_group_ids=["policy_a", "policy_b"],
+        _write_weight_sync_manifest=lambda: None,
     )
 
     TrajWeaveMAPoRLMultiActorSyncTrainer._sync_multi_actor_weights(trainer)

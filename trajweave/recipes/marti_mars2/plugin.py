@@ -18,7 +18,7 @@ class MARTIMARS2RecipePlugin:
     def run(self, context: RunContext) -> dict:
         if context.mode == "marti_eval":
             return self._run_marti_eval(context)
-        if context.mode == "verl_train":
+        if context.mode in {"verl_train", "verl_plan"}:
             return self._run_verl_train(context)
         return self._run_smoke(context)
 
@@ -95,6 +95,7 @@ class MARTIMARS2RecipePlugin:
             default_enabled=True,
             default_module="trajweave.backends.verl.main_ppo",
             tracker=context.tracker,
+            mode=context.mode,
         )
         if context.config.get("acceptance", {}).get("enabled", False):
             acceptance = audit_fidelity_training_run(

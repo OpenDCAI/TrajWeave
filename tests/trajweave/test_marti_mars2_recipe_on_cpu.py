@@ -253,7 +253,7 @@ def test_yaml_runner_builds_marti_mars2_verl_vllm_dryrun(tmp_path):
     result = run_from_config(
         {
             "recipe": "marti_mars2.single_mcts.smoke",
-            "mode": "verl_train",
+            "mode": "verl_plan",
             "run": {"root_dir": str(tmp_path), "name": "unit-marti-mars2-verl-dryrun"},
             "logging": {"console": False},
             "marti_mars2": {"max_num_nodes": 2, "agent_loop_backend": "synthetic_tq"},
@@ -269,7 +269,8 @@ def test_yaml_runner_builds_marti_mars2_verl_vllm_dryrun(tmp_path):
 
     assert result["verl_launch"]["status"] == "dry_run"
     assert result["marti_mars2"]["training_backend"] == "verl_v1_single_actor_wg"
-    assert command_file.exists()
-    command = command_file.read_text(encoding="utf-8")
+    tracked_command_file = Path(result["verl_command_file"])
+    assert tracked_command_file.exists()
+    command = tracked_command_file.read_text(encoding="utf-8")
     assert "actor_rollout_ref.rollout.name=vllm" in command
     assert "trajweave_marti_mars2_tree_grpo" in command

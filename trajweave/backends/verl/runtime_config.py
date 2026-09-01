@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from trajweave.backends.verl.agent_loops.registry import validate_agent_loop_backend
 
 @dataclass(frozen=True)
 class TrajWeaveAgentLoopRuntimeConfig:

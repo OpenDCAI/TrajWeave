@@ -8,14 +8,14 @@
 | --- | --- | --- |
 | 官方仓库 | 已固定 | `TsinghuaC3I/MARTI@a2fe2c7` |
 | 论文归档 | 已定位 | arXiv `2602.07848`，MARTI-MARS2 technical report |
-| 独立验证仓库 | 已完成 | `/data/chenxingyan/MARTI-verify-patched` |
-| 独立环境 | 已完成 | `/data/chenxingyan/conda_envs/marti-mars2-verify` |
+| 独立验证记录 | 历史记录 | 贡献者本地副本和 run 目录未随仓库提交，不作为当前可复验 artifact。 |
 | 原仓库最小训练 | 已通过 | 当前 vLLM 0.8.5 下关闭 IS/TIS，完成 MCTS rollout -> reward -> group advantage -> policy update -> vLLM weight sync |
 | grouping 语义验真 | 已通过最小场景 | 单 prompt 与双 prompt batch 均显示固定连续分组与显式 tree_id 分组一致 |
 | vLLM IS/TIS | token-level 已通过 | native vLLM correction 已进入 TrajWeave one-step，finite correction 与 actor→vLLM sync 均有真实证据 |
-| TrajWeave 实现 | Stage 1E 双 actor native vLLM async 3-step 闭环完成 | 两个独立 policy endpoint 已完成真实路由、连续更新、live weight sync/wake、checkpoint、per-agent buffer 与零 policy lag 验收 |
+| TrajWeave 实现 | 双 Actor native vLLM 同步闭环已接入 | 路由、权重版本、checkpoint/resume 和 endpoint 命名空间有 CPU 回归；待 GPU 环境恢复后重跑。 |
+| 跨 step 异步 buffer | 暂不可用 | VERL 会在 step 末清理当前 TQ batch，原实现只缓存 metadata，可能丢失跨 step 样本；真实训练现已 fail fast。 |
 
-当前阶段结论：MARTI-MARS2 的单 Agent native vLLM fidelity、Vanilla GRPO 单步对照，以及 Stage 1E 双 actor、双 native vLLM endpoint 的 async 3-step 训练/同步均已验收。下一阶段是 resume、stale sample、policy lag 压力测试和稳定 GPU 配方；论文规模训练、PRIME `pyext` 与完整 LiveCodeBench 仍未完成。原 MARTI-MARS2 仓库继续保持原样，以独立验证补丁和实验记录作为语义审计依据。
+当前阶段结论：MARTI-MARS2 的 tree schema、code verifier、tree-group credit、多 Actor 路由和 native vLLM endpoint 扩展已进入 TrajWeave。同步路径可继续验收；跨 step 异步 buffer 在完成 TQ 样本所有权和清理协议前不得宣称已支持。后文保留的 GPU 结果是贡献者历史开发记录，由于原始 run artifacts 未入库，不替代当前分支的可复验验收。
 
 ## 1. 原仓库验真
 
@@ -36,13 +36,13 @@
 验证仓库：
 
 ```text
-/data/chenxingyan/MARTI-verify-patched
+CONTRIBUTOR_LOCAL_ARTIFACT/MARTI-verify-patched
 ```
 
 最小运行脚本：
 
 ```text
-/data/chenxingyan/marti-verification/run_stage1c1d_minimal.sh
+CONTRIBUTOR_LOCAL_ARTIFACT/marti-verification/run_stage1c1d_minimal.sh
 ```
 
 关键运行约束：
@@ -57,13 +57,13 @@
 单 prompt smoke：
 
 ```text
-/data/chenxingyan/marti-verification/runs/group-audit-20260802-1604
+CONTRIBUTOR_LOCAL_ARTIFACT/marti-verification/runs/group-audit-20260802-1604
 ```
 
 双 prompt batch smoke：
 
 ```text
-/data/chenxingyan/marti-verification/runs/group-audit-2prompts-20260802-1605
+CONTRIBUTOR_LOCAL_ARTIFACT/marti-verification/runs/group-audit-2prompts-20260802-1605
 ```
 
 已观察到：
@@ -237,8 +237,8 @@ parent/sibling/path shaping 不是当前已确认的 MARTI 官方核心路径。
 ### 7.1 配置与环境
 
 - 配置：`configs/marti_mars2/single_mcts_verl_vllm_fidelity_smoke.yaml`
-- 运行环境：`/data/chenxingyan/conda_envs/pettingllms-atgrpo/bin/python`
-- 训练模型：`/data/chenxingyan/models/marti-mars2/Qwen2.5-Coder-0.5B-Instruct`
+- 运行环境：`CONTRIBUTOR_LOCAL_ENV/pettingllms-atgrpo/bin/python`
+- 训练模型：`CONTRIBUTOR_LOCAL_MODEL/marti-mars2/Qwen2.5-Coder-0.5B-Instruct`
 - vLLM：0.10.0；Torch：2.7.1+cu128；单卡 GPU 0；`gpu_memory_utilization=0.20`
 - 配方：single-agent、`max_num_nodes=2`、`credit_mode=fidelity`、token-level truncated correction、1 个 optimizer step
 - 为兼容当前 TrajWeave bridge，在隔离测试环境使用 `tensordict>=0.10`；旧版本 0.8.3 会在传输 non-tensor tree fields 时被仓库断言拒绝。
@@ -618,9 +618,11 @@ CPU 验证：`tests/trajweave` `112 passed, 2 warnings`；`compileall -q trajwea
 - 该 run 初次暴露 no-transport HF 路径没有推进 buffer rollout-synced version，已补上同步 bookkeeping 和 manifest 回写，并加入 CPU 回归。
 - 同配置 native vLLM 3-step 尝试在第一个 step 后续请求触发 `CUDA illegal memory access`，随后为 `EngineDeadError`；日志保留在临时 run 的 Ray worker error 中。该失败暂不能归因于 async buffer，当前把它作为 vLLM 多步生命周期/显存路径阻塞，不继续盲目重跑。
 
-本节最后一条是当时的阶段性判断，已被第 22 节的根因修复和正式 native vLLM async 3-step 验收取代。
+本节最后一条是当时的阶段性判断。第 22 节解决了 native vLLM 多步生命周期问题，但该次运行每步都有足量样本，没有覆盖样本真正跨 step 留在队列的场景。当前边界以第 0 节为准。
 
-## 22. 2026-08-10 native vLLM 多步 lifecycle 修复与正式验收
+## 22. 2026-08-10 native vLLM 多步 lifecycle 修复与历史验收
+
+> 本节是贡献者当时的本地实验记录，原始 run artifact 未入库。它证明了 vLLM sleep/wake 和权重同步问题的修复，但不证明跨 step 异步样本所有权完整。
 
 `CUDA illegal memory access` 不是显存不足，也不是 async buffer 或 data parallel 本身造成。真实触发链路是：
 
@@ -635,14 +637,14 @@ CPU 验证：`tests/trajweave` `112 passed, 2 warnings`；`compileall -q trajwea
 
 隔离验证依次通过：
 
-- 单 actor、单 endpoint、V1 sleep mode 2-step：`/data/cxy-marti-v1-single2/runs/20260810-073122-native-vllm-single-actor-2step-f31a7b84`；
-- 双 actor、双 endpoint、async 关闭、DP=1 2-step：`/data/cxy-marti-v1-dual2/runs/20260810-075807-native-vllm-dual-actor-2step-no-async-dp1-0cfb5b68`；
-- 双 actor、双 endpoint、async 关闭、DP=2 2-step：`/data/cxy-marti-v1-dual2/runs/20260810-080131-native-vllm-dual-actor-2step-no-async-dp2-fixed-b8298f0e`。
+- 单 actor、单 endpoint、V1 sleep mode 2-step：`CONTRIBUTOR_LOCAL_ARTIFACT/cxy-marti-v1-single2/runs/20260810-073122-native-vllm-single-actor-2step-f31a7b84`；
+- 双 actor、双 endpoint、async 关闭、DP=1 2-step：`CONTRIBUTOR_LOCAL_ARTIFACT/cxy-marti-v1-dual2/runs/20260810-075807-native-vllm-dual-actor-2step-no-async-dp1-0cfb5b68`；
+- 双 actor、双 endpoint、async 关闭、DP=2 2-step：`CONTRIBUTOR_LOCAL_ARTIFACT/cxy-marti-v1-dual2/runs/20260810-080131-native-vllm-dual-actor-2step-no-async-dp2-fixed-b8298f0e`。
 
 DP=1 与 DP=2 均成功，确认 vLLM data-parallel multiprocess 不是根因。正式配置
 `configs/marti_mars2/stage1e_multi_agent_vllm_async_smoke.yaml` 的 async 3-step run：
 
-`/data/cxy-marti-stage1e-vllm-async/runs/20260810-081019-marti-mars2-stage1e-multi-agent-vllm-async-smoke-a6ec40d7`
+`CONTRIBUTOR_LOCAL_ARTIFACT/cxy-marti-stage1e-vllm-async/runs/20260810-081019-marti-mars2-stage1e-multi-agent-vllm-async-smoke-a6ec40d7`
 
 最终状态为 `completed`，VERL return code `0`，自动 acceptance `passed`，且未再出现 CUDA 或 EngineDead
 错误。关键指标：
@@ -659,12 +661,10 @@ policy_a loss / grad_norm = 0.8599502444 / 14.42705345
 policy_b loss / grad_norm = -0.8702063560 / 4.81680727
 ```
 
-`global_step_3/multi_actor_weight_sync.json` 显示 `synchronized=true`、`pending_groups=[]`。因此 native vLLM
-多步生命周期阻塞已经解除，Stage 1E 双 actor async 3-step 工程闭环正式完成。下一阶段可推进 checkpoint
-resume、stale/lag 注入压力测试、stable GPU 配方和 LiveCodeBench；该结果仍不等价于论文规模收敛或完整
-MARS² benchmark 复现。
+`global_step_3/multi_actor_weight_sync.json` 显示 `synchronized=true`、`pending_groups=[]`。该历史结果说明 native vLLM
+多步生命周期阻塞已经解除，且当前 batch 每步均可立即训练的双 Actor 同步路径可行。由于它没有触发样本跨 step 等待，不能作为跨 step 异步 buffer 的验收证据；该能力在生产路径中会 fail fast。
 
-## 23. 2026-08-10 README 规范对齐、正式复验与推送状态
+## 23. 2026-08-10 README 规范对齐、历史复验与推送状态
 
 按照仓库 README 的 paper recipe 接入规范，对 MARTI-MARS² 做了完整工程结构清理：
 
@@ -685,7 +685,7 @@ CPU/静态回归最终为 `156 passed, 4 warnings`；`compileall -q trajweave ve
 
 规范清理后的双卡 native vLLM async 3-step 复验 run：
 
-`/data/cxy-marti-stage1e-vllm-async/runs/20260810-122415-marti-mars2-stage1e-multi-agent-vllm-async-smoke-a9ca470b`
+`CONTRIBUTOR_LOCAL_ARTIFACT/cxy-marti-stage1e-vllm-async/runs/20260810-122415-marti-mars2-stage1e-multi-agent-vllm-async-smoke-a9ca470b`
 
 该 run 使用 GPU 0、3，最终 `completed`、return code `0`、通用 `acceptance.status=passed`，并满足：
 
@@ -708,6 +708,4 @@ mode、通用 acceptance 和 checkpoint artifact 登记在真实双卡训练路�
 b4857f3 docs: register MARTI recipe and acceptance status
 ```
 
-当前结论：MARTI 已完成 README 所定义的工程接入与必要的 smoke/tiny/0.5B 双卡 native vLLM 多步验收。
-Qwen2.5-7B、Qwen3-8B 的正式训练评测、统一评测口径、公开权重和 paper-scale 复现尚未执行；已向学长确认
-是否等全部算法接入完成后再统一开展，等待回复期间不将这些项目作为当前 MARTI 工程接入的阻塞项。
+当时结论：MARTI 已完成 smoke/tiny/0.5B 双卡 native vLLM 多步历史验收，但该验收没有触发真正的跨 step 样本留存。当前可携带、可复验的能力边界和待办项以第 0 节为准。

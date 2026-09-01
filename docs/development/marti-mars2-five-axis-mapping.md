@@ -4,10 +4,10 @@
 
 ## 0. 固定源码
 
-- 官方仓库：`/data/chenxingyan/MARTI-original`
+- 官方仓库：`https://github.com/TsinghuaC3I/MARTI`
 - 固定提交：`a2fe2c7b9ec46cf24769c90575c51d847f41d04e`
-- 验证副本：`/data/chenxingyan/MARTI-verify-patched`
-- TrajWeave 接入仓库：`/data/chenxingyan/TrajWeave`
+- TrajWeave 接入仓库：`https://github.com/OpenDCAI/TrajWeave`
+- 验证说明：贡献者本地验证副本和 run 目录未包含在本仓库，不作为可携带的验收产物。
 
 ## 1. 五轴表
 

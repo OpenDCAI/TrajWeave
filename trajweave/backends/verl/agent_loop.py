@@ -9,9 +9,14 @@ import torch
 import transfer_queue as tq
 from tensordict import NonTensorData, NonTensorStack
 
-from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.agent_loops.common import write_online_turn_rows
-from trajweave.backends.verl.agent_loops.registry import load_agent_loop_worker
+from trajweave.backends.verl.agent_loops.registry import (
+    load_agent_loop_worker,
+)
+from trajweave.backends.verl.agent_loops.registry import (
+    validate_agent_loop_backend as _validate_agent_loop_backend,
+)
+from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
     CoMASEmitterMixin,
@@ -27,9 +32,6 @@ from trajweave.backends.verl.runtime_config import (
 )
 from trajweave.backends.verl.runtime_config import (
     config_get as _get,
-)
-from trajweave.backends.verl.runtime_config import (
-    validate_agent_loop_backend as _validate_agent_loop_backend,
 )
 from trajweave.backends.verl.schema import (
     MAS_EXTRA_FIELDS,

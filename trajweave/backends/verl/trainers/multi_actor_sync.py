@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+import json
 import logging
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import torch
 import transfer_queue as tq
 from omegaconf import OmegaConf, open_dict
 
+from trajweave.backends.verl.async_buffer import PolicyBufferCoordinator
 from trajweave.backends.verl.extensions.drmas.agent_wise_grpo import TrajWeaveActorRolloutRefWorker
+from trajweave.backends.verl.llm_routing import GroupedLLMServerClient
 from trajweave.backends.verl.routing import safe_actor_role_key, split_tq_batch_by_field
+from trajweave.backends.verl.runtime_config import TrajWeaveAgentLoopRuntimeConfig
 from trajweave.backends.verl.schema import to_python
 from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
-from trajweave.backends.verl.weight_sync import sync_hf_local_rollout_weights
+from trajweave.backends.verl.weight_sync import (
+    CheckpointEnginePolicyEndpoint,
+    GroupedPolicyWeightTransport,
+    MultiActorWeightSyncContract,
+    sync_hf_local_rollout_weights,
+)
 from verl import DataProto
 from verl.single_controller.ray import (
     RayClassWithInitArgs,
@@ -30,6 +42,7 @@ from verl.trainer.ppo.v1.trainer_base import (
     value_loss,
 )
 from verl.trainer.ppo.v1.trainer_sync import PPOTrainerSync
+from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
 from verl.utils.debug.metrics import calculate_debug_metrics
@@ -106,8 +119,30 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
                 "TrajWeave multi-actor training requires every agent model_id to reference a trainable "
                 f"worker group; frozen model_ids are not routed to PPO: {frozen_model_ids}."
             )
+        # 保留旧字段名作为内部兼容层，新 recipe 不应依赖 MAPoRL 命名。
+        self.maporl_worker_group_specs = self.multi_actor_worker_group_specs
+        self.maporl_trainable_group_ids = self.multi_actor_trainable_group_ids
+        groups = tuple(self.multi_actor_trainable_group_ids)
+        self.maporl_weight_sync = MultiActorWeightSyncContract(groups)
+        trajweave_cfg = self.config.get("trajweave", {}) or {}
+        reward_range = trajweave_cfg.get("dynamic_filter_reward_range")
+        if reward_range is not None:
+            reward_range = (float(reward_range[0]), float(reward_range[1]))
+        self.maporl_buffer_coordinator = PolicyBufferCoordinator(
+            groups,
+            min_batch_size=int(trajweave_cfg.get("buffer_min_batch_size", 1)),
+            reward_range=reward_range,
+            max_policy_lag=int(trajweave_cfg.get("max_policy_lag", 1)),
+        )
 
     def _validate_multi_actor_specs(self) -> None:
+        if self._async_buffer_enabled():
+            raise ValueError(
+                "trajweave.async_buffer.enabled=true is not supported by the live multi-actor trainer yet. "
+                "VERL clears the sampled TransferQueue batch at the end of each step, so buffering only metadata "
+                "would drop samples accumulated across steps. Use the CPU mechanism fixture for async-buffer "
+                "validation or disable async updates for real training."
+            )
         tokenizer_mode = str(OmegaConf.select(self.config, "trajweave.multi_actor.tokenizer_mode") or "shared")
         if tokenizer_mode not in {"shared", "compatible"}:
             raise ValueError(
@@ -194,6 +229,7 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
 
         self.actor_rollout_wgs = {}
         critic_wg = None
+        actor_role = _multi_actor_worker_role(self.config)
         for index, group_id in enumerate(self.multi_actor_trainable_group_ids):
             group = self.multi_actor_worker_group_specs[group_id]
             class_dict = {
@@ -201,7 +237,7 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
                     cls=__import__("ray").remote(TrajWeaveActorRolloutRefWorker),
                     config=_actor_rollout_ref_config_for_group(self.config, group),
                     distillation_config=self.config.get("distillation"),
-                    role=str(Role.Actor),
+                    role=str(actor_role),
                 )
             }
             if index == 0 and critic_class is not None:
@@ -238,9 +274,59 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
             raise ValueError("TrajWeave multi-actor trainer does not support teacher policy yet.")
         self.teacher_model_manager = None
         self.distillation_config = None
-        self.llm_server_manager = _NullLLMServerManager()
+        self.maporl_llm_server_managers = {}
+        self.maporl_checkpoint_managers = {}
+        self.maporl_weight_transport = None
+        if _multi_actor_vllm_enabled(self.config):
+            self._init_multi_actor_vllm_endpoints()
+        else:
+            self.llm_server_manager = _NullLLMServerManager()
+            self.checkpoint_manager = _NullCheckpointEngineManager()
+            self.checkpoint_manager.sleep_replicas()
+
+    def _init_multi_actor_vllm_endpoints(self) -> None:
+        """为每个可训练 policy group 创建独立 vLLM 端点和权重同步通道。"""
+
+        from verl.checkpoint_engine.base import CheckpointEngineManager
+        from verl.workers.rollout.llm_server import LLMServerManager
+
+        for group_index, group_id in enumerate(self.multi_actor_trainable_group_ids):
+            group = self.multi_actor_worker_group_specs[group_id]
+            group_config = OmegaConf.create(OmegaConf.to_container(self.config, resolve=True))
+            with open_dict(group_config):
+                group_config.actor_rollout_ref = _actor_rollout_ref_config_for_group(self.config, group)
+                rollout_seed = group_config.actor_rollout_ref.rollout.get("seed")
+                if rollout_seed is not None:
+                    group_config.actor_rollout_ref.rollout.seed = int(rollout_seed) + group_index
+            llm_manager = LLMServerManager(
+                config=group_config,
+                worker_group=self.actor_rollout_wgs[group_id],
+                rollout_resource_pool=None,
+            )
+            _namespace_rollout_replica_class(llm_manager, group_id)
+            _resolve_async(llm_manager._initialize_llm_servers(start_rank=0))
+            _resolve_async(llm_manager._init_global_load_balancer())
+            checkpoint_config = omega_conf_to_dataclass(group_config.actor_rollout_ref.rollout.checkpoint_engine)
+            checkpoint_config.backend = "naive"
+            checkpoint_manager = CheckpointEngineManager(
+                config=checkpoint_config,
+                actor_wg=self.actor_rollout_wgs[group_id],
+                replicas=llm_manager.get_replicas(),
+            )
+            checkpoint_manager.sleep_replicas()
+            self.maporl_llm_server_managers[group_id] = llm_manager
+            self.maporl_checkpoint_managers[group_id] = checkpoint_manager
+
+        self.llm_server_manager = GroupedLLMServerClient(
+            {group_id: manager.get_client() for group_id, manager in self.maporl_llm_server_managers.items()}
+        )
         self.checkpoint_manager = _NullCheckpointEngineManager()
-        self.checkpoint_manager.sleep_replicas()
+        self.maporl_weight_transport = GroupedPolicyWeightTransport(
+            {
+                group_id: CheckpointEnginePolicyEndpoint(manager)
+                for group_id, manager in self.maporl_checkpoint_managers.items()
+            }
+        )
 
     def _compute_old_log_prob(self, batch, metrics: dict):
         rollout_corr_config = self.config.algorithm.get("rollout_correction", None)
@@ -345,16 +431,19 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
         for routed in routed_batches:
             if routed.group_id not in self.multi_actor_trainable_group_ids:
                 continue
-            routed.batch.extra_info.update(batch.extra_info)
-            routed.batch.extra_info["global_batch_size"] = _batch_len(routed.batch)
-            routed.batch.extra_info["mini_batch_size"] = None
-            routed.batch.extra_info["num_mini_batch"] = 1
-            output = self._actor_wg(routed.group_id).update_actor(routed.batch)
+            routed_batch = routed.batch
+            routed_batch.extra_info.update(batch.extra_info)
+            routed_batch.extra_info["global_batch_size"] = _batch_len(routed_batch)
+            routed_batch.extra_info["mini_batch_size"] = None
+            routed_batch.extra_info["num_mini_batch"] = 1
+            output = self._actor_wg(routed.group_id).update_actor(routed_batch)
             output = rename_dict(output["metrics"], f"actor/{routed.group_id}/")
             if f"actor/{routed.group_id}/mfu" in output:
                 output[f"perf/mfu/actor/{routed.group_id}"] = output.pop(f"actor/{routed.group_id}/mfu")
             reduced = reduce_metrics(output)
             grouped_metrics.update(reduced)
+            self.maporl_weight_sync.record_actor_update(routed.group_id, self.global_steps)
+            self.maporl_buffer_coordinator.update_actor_step(routed.group_id, self.global_steps)
             updated_groups.append(routed.group_id)
             grouped_metrics[
                 f"trajweave/{self._metric_namespace()}/actor_groups/{_safe_metric_name(routed.group_id)}/updated"
@@ -363,9 +452,47 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
         metrics.update(grouped_metrics)
         metrics[f"trajweave/{self._metric_namespace()}/actor_groups/updated"] = len(updated_groups)
         metrics[f"trajweave/{self._metric_namespace()}/actor_groups/total"] = len(self.actor_rollout_wgs)
+        metrics.update(self.maporl_weight_sync.metric_fields())
+        metrics.update(
+            {
+                f"trajweave/{self._metric_namespace()}/{key}": value
+                for key, value in self.maporl_buffer_coordinator.metric_fields().items()
+            }
+        )
+        self._multi_actor_step_metrics = metrics
         if not updated_groups:
             raise RuntimeError("TrajWeave multi-actor update did not update any trainable worker group.")
         return batch
+
+    def _async_buffer_enabled(self) -> bool:
+        return bool(OmegaConf.select(self.config, "trajweave.async_buffer.enabled", default=False))
+
+    def _async_buffer_ready_keys(self, batch) -> set[str]:
+        """把完整 tree 先写入各 policy buffer，只返回已达最小 batch 的训练 key。"""
+
+        fields = tq.kv_batch_get(
+            keys=batch.keys,
+            partition_id=batch.partition_id,
+            select_fields=[
+                "worker_group",
+                "tree_id",
+                "raw_score",
+                "rollout_policy_step",
+                "rollout_global_step",
+            ],
+        )
+        rows = _buffer_rows_from_fields(batch.keys, fields, global_step=self.global_steps)
+        trees: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            trees.setdefault(str(row["tree_id"]), []).append(row)
+        for tree_rows in trees.values():
+            self.maporl_buffer_coordinator.add_tree(tree_rows, global_step=self.global_steps)
+
+        ready_keys: set[str] = set()
+        for group_id in self.maporl_buffer_coordinator.ready_groups():
+            for row in self.maporl_buffer_coordinator.pop_batch(group_id):
+                ready_keys.add(str(row["_tq_key"]))
+        return ready_keys
 
     def _save_checkpoint(self):
         from verl.utils.fs import local_mkdir_safe
@@ -380,18 +507,99 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
                 continue
             actor_local_path = os.path.join(local_global_step_folder, "actors", _safe_path_name(group_id))
             wg.save_checkpoint(actor_local_path, None, self.global_steps, max_ckpt_to_keep=max_actor_ckpt_to_keep)
+            with os.scandir(actor_local_path) as entries:
+                model_files = sorted(
+                    entry.path
+                    for entry in entries
+                    if entry.name.startswith("model_world_size_") and entry.name.endswith(".pt")
+                )
+            self.maporl_weight_sync.record_checkpoint(
+                group_id,
+                model_files[0] if model_files else os.path.join(actor_local_path, "model_world_size_unknown.pt"),
+            )
         if self.use_critic:
             critic_local_path = os.path.join(local_global_step_folder, str(Role.Critic))
             self.critic_wg.save_checkpoint(critic_local_path, None, self.global_steps)
         torch.save(self.train_dataloader.state_dict(), os.path.join(local_global_step_folder, "data.pt"))
+        self._write_weight_sync_manifest()
         with open(os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt"), "w") as f:
             f.write(str(self.global_steps))
 
+    def _write_weight_sync_manifest(self) -> None:
+        local_global_step_folder = os.path.join(
+            self.config.trainer.default_local_dir, f"global_step_{self.global_steps}"
+        )
+        if not os.path.isdir(local_global_step_folder):
+            return
+        payload = self.maporl_weight_sync.as_dict()
+        buffer_coordinator = getattr(self, "maporl_buffer_coordinator", None)
+        if buffer_coordinator is not None:
+            payload["policy_buffers"] = buffer_coordinator.snapshot()
+        manifest_path = os.path.join(local_global_step_folder, "multi_actor_weight_sync.json")
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+
     def _load_checkpoint(self):
         self.global_steps = 0
-        if self.config.trainer.resume_mode == "disable":
+        resume_mode = str(self.config.trainer.resume_mode)
+        if resume_mode == "disable":
             return
-        raise ValueError("TrajWeave multi-actor checkpoint resume is not enabled yet; use trainer.resume_mode=disable.")
+        if resume_mode == "auto":
+            checkpoint_root = str(self.config.trainer.default_local_dir)
+            if not os.path.isabs(checkpoint_root):
+                checkpoint_root = os.path.join(os.getcwd(), checkpoint_root)
+            global_step_folder = find_latest_ckpt_path(checkpoint_root)
+            if global_step_folder is None:
+                logger.info("No multi-actor checkpoint found; training from scratch")
+                return
+        elif resume_mode == "resume_path":
+            global_step_folder = str(self.config.trainer.resume_from_path)
+            if "global_step_" not in global_step_folder:
+                raise ValueError("Multi-actor resume_path must specify a global_step_* directory.")
+            if not os.path.isabs(global_step_folder):
+                global_step_folder = os.path.join(os.getcwd(), global_step_folder)
+        else:
+            raise ValueError(f"Unknown multi-actor resume mode: {resume_mode!r}")
+
+        self.global_steps = int(global_step_folder.rsplit("global_step_", 1)[-1])
+        logger.info("Resuming multi-actor training from %s at step %s", global_step_folder, self.global_steps)
+        del_after_load = bool(getattr(self.config.trainer, "del_local_ckpt_after_load", False))
+        trainable_group_ids = getattr(self, "multi_actor_trainable_group_ids", None)
+        if trainable_group_ids is None:
+            trainable_group_ids = self.maporl_trainable_group_ids
+        for group_id, wg in self.actor_rollout_wgs.items():
+            if group_id not in trainable_group_ids:
+                continue
+            actor_path = os.path.join(global_step_folder, "actors", _safe_path_name(group_id))
+            if not os.path.isdir(actor_path):
+                raise FileNotFoundError(f"Missing checkpoint for multi-actor group {group_id!r}: {actor_path}")
+            wg.load_checkpoint(local_path=actor_path, del_local_after_load=del_after_load)
+            self.maporl_weight_sync.record_actor_update(group_id, self.global_steps)
+            model_files = sorted(
+                os.path.join(actor_path, name)
+                for name in os.listdir(actor_path)
+                if name.startswith("model_world_size_") and name.endswith(".pt")
+            )
+            if model_files:
+                self.maporl_weight_sync.record_checkpoint(group_id, model_files[0])
+
+        manifest_path = os.path.join(global_step_folder, "multi_actor_weight_sync.json")
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                buffer_snapshot = manifest.get("policy_buffers")
+                if isinstance(buffer_snapshot, dict) and hasattr(self, "maporl_buffer_coordinator"):
+                    self.maporl_buffer_coordinator.restore_snapshot(buffer_snapshot)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Could not restore policy buffer metadata from %s: %s", manifest_path, exc)
+
+        dataloader_path = os.path.join(global_step_folder, "data.pt")
+        if os.path.exists(dataloader_path):
+            self.train_dataloader.load_state_dict(torch.load(dataloader_path, weights_only=False))
+        else:
+            logger.warning("No multi-actor dataloader state found at %s", dataloader_path)
 
     def _route_batch(self, batch):
         routed = split_tq_batch_by_field(batch, field="worker_group")
@@ -429,11 +637,112 @@ class TrajWeaveMultiActorSyncTrainer(PPOTrainerSync):
         return _safe_metric_name(recipe.split("_", 1)[0])
 
     def on_init_end(self):
-        self.checkpoint_manager.update_weights(self.global_steps)
+        if self.maporl_weight_transport is None:
+            self.checkpoint_manager.update_weights(self.global_steps)
+            for group_id in self.multi_actor_trainable_group_ids:
+                version = self.maporl_weight_sync.record_actor_update(group_id, self.global_steps)
+                self.maporl_weight_sync.mark_rollout_sync(group_id, version.global_step)
+                self.maporl_buffer_coordinator.update_actor_step(group_id, self.global_steps)
+                self.maporl_buffer_coordinator.mark_rollout_sync(group_id, self.global_steps)
+        else:
+            self._sync_initial_multi_actor_weights()
 
     def on_step_end(self):
         with marked_timer("update_weights", self.timing_raw, color="red"):
-            sync_hf_local_rollout_weights(self)
+            runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
+            if runtime.agent_loop_backend == "hf_local_tq":
+                sync_hf_local_rollout_weights(self)
+                self._mark_all_rollouts_synchronized()
+            else:
+                self._sync_multi_actor_weights()
+        self._refresh_weight_sync_metrics()
+
+    def on_sample_end(self):
+        if self.maporl_checkpoint_managers:
+            for manager in self.maporl_checkpoint_managers.values():
+                manager.sleep_replicas()
+        else:
+            self.checkpoint_manager.sleep_replicas()
+
+    def get_llm_client(self):
+        if hasattr(self.llm_server_manager, "get_client"):
+            return self.llm_server_manager.get_client()
+        return self.llm_server_manager
+
+    def _sync_multi_actor_weights(self) -> None:
+        if self.maporl_weight_transport is None:
+            self.checkpoint_manager.update_weights(self.global_steps)
+            TrajWeaveMultiActorSyncTrainer._mark_all_rollouts_synchronized(self)
+            self._write_weight_sync_manifest()
+            return
+        results = self.maporl_weight_sync.sync_pending(self.maporl_weight_transport)
+        buffer_coordinator = getattr(self, "maporl_buffer_coordinator", None)
+        for result in results:
+            if result.acknowledged and buffer_coordinator is not None:
+                buffer_coordinator.mark_rollout_sync(result.group_id, result.global_step)
+        failed = [result for result in results if not result.acknowledged]
+        if failed:
+            raise RuntimeError(
+                "Multi-actor rollout weight sync was not acknowledged: "
+                f"{[(item.group_id, item.error) for item in failed]}."
+            )
+        self._write_weight_sync_manifest()
+        logger.info(
+            "Multi-actor vLLM weight sync step=%s results=%s",
+            self.global_steps,
+            [(result.group_id, result.acknowledged) for result in results],
+        )
+
+    def _sync_initial_multi_actor_weights(self) -> None:
+        group_ids = getattr(self, "multi_actor_trainable_group_ids", None)
+        if group_ids is None:
+            group_ids = tuple(self.maporl_worker_group_specs)
+        for group_id in group_ids:
+            version = self.maporl_weight_sync.record_actor_update(group_id, self.global_steps)
+            acknowledged = bool(self.maporl_weight_transport.load_policy(version))
+            if not acknowledged:
+                raise RuntimeError(f"Initial vLLM weight sync was not acknowledged for policy group {group_id!r}.")
+            self.maporl_weight_sync.mark_rollout_sync(group_id, version.global_step)
+            buffer_coordinator = getattr(self, "maporl_buffer_coordinator", None)
+            if buffer_coordinator is not None:
+                buffer_coordinator.update_actor_step(group_id, version.global_step)
+                buffer_coordinator.mark_rollout_sync(group_id, version.global_step)
+        self._write_weight_sync_manifest()
+
+    def _mark_all_rollouts_synchronized(self) -> None:
+        weight_sync = getattr(self, "maporl_weight_sync", None)
+        versions = weight_sync.as_dict().get("versions", {}) if weight_sync is not None else {}
+        group_ids = getattr(self, "multi_actor_trainable_group_ids", None)
+        if group_ids is None:
+            group_ids = getattr(self, "maporl_trainable_group_ids", tuple(self.maporl_buffer_coordinator.states))
+        for group_id in group_ids:
+            version = versions.get(group_id)
+            step = (
+                int(version["global_step"])
+                if version is not None
+                else int(self.maporl_buffer_coordinator.states[group_id].actor_step)
+            )
+            if weight_sync is not None:
+                weight_sync.mark_rollout_sync(group_id, step)
+            state = self.maporl_buffer_coordinator.states[group_id]
+            if step > state.actor_step:
+                self.maporl_buffer_coordinator.update_actor_step(group_id, step)
+            self.maporl_buffer_coordinator.mark_rollout_sync(group_id, step)
+
+    def _refresh_weight_sync_metrics(self) -> None:
+        metrics = getattr(self, "_multi_actor_step_metrics", None)
+        if metrics is None:
+            metrics = getattr(self, "_maporl_step_metrics", None)
+        if metrics is None:
+            return
+        metrics.update(self.maporl_weight_sync.metric_fields())
+        metric_namespace = self._metric_namespace() if hasattr(self, "_metric_namespace") else "maporl"
+        metrics.update(
+            {
+                f"trajweave/{metric_namespace}/{key}": value
+                for key, value in self.maporl_buffer_coordinator.metric_fields().items()
+            }
+        )
 
 
 def _worker_groups_from_config(config: Any) -> list[WorkerGroupConfig]:
@@ -465,6 +774,7 @@ def _worker_groups_from_config(config: Any) -> list[WorkerGroupConfig]:
 def _actor_rollout_ref_config_for_group(config: Any, group: WorkerGroupConfig) -> Any:
     actor_config = OmegaConf.create(OmegaConf.to_container(config.actor_rollout_ref, resolve=True))
     with open_dict(actor_config):
+        actor_config.rollout.name_suffix = _safe_path_name(group.group_id)
         if group.model_path:
             actor_config.model.path = group.model_path
         if group.tokenizer_path:
@@ -496,3 +806,63 @@ def _positive_gpu_count(value: Any, *, group_id: str) -> int:
     if gpus <= 0:
         raise ValueError(f"Worker group {group_id!r} gpus must be a positive integer.")
     return gpus
+
+
+def _buffer_rows_from_fields(keys: list[str], fields: Any, *, global_step: int) -> list[dict[str, Any]]:
+    """将 TransferQueue 元数据归一化为异步 policy buffer 记录。"""
+
+    count = len(keys)
+
+    def values(name: str, default: Any) -> list[Any]:
+        raw = fields.get(name, default) if hasattr(fields, "get") else default
+        raw = to_python(raw)
+        if isinstance(raw, str | bytes) or not isinstance(raw, list | tuple):
+            return [raw] * count
+        if len(raw) != count:
+            raise ValueError(f"TransferQueue field {name!r} has {len(raw)} values for {count} keys")
+        return list(raw)
+
+    groups = values("worker_group", "")
+    trees = values("tree_id", None)
+    scores = values("raw_score", 0.0)
+    policy_steps = values("rollout_policy_step", global_step)
+    global_steps = values("rollout_global_step", global_step)
+    rows = []
+    for index, key in enumerate(keys):
+        tree_id = trees[index] if trees[index] is not None else key
+        rows.append(
+            {
+                "_tq_key": key,
+                "policy_group": str(groups[index]),
+                "tree_id": str(tree_id),
+                "raw_score": float(scores[index]),
+                "rollout_policy_step": int(policy_steps[index]),
+                "rollout_global_step": int(global_steps[index]),
+            }
+        )
+    return rows
+
+
+def _multi_actor_vllm_enabled(config: Any) -> bool:
+    return bool(OmegaConf.select(config, "trajweave.multi_actor.vllm.enabled", default=False))
+
+
+def _multi_actor_worker_role(config: Any) -> Role:
+    return Role.ActorRollout if _multi_actor_vllm_enabled(config) else Role.Actor
+
+
+def _resolve_async(value: Any) -> Any:
+    if not inspect.isawaitable(value):
+        return value
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(value)
+    raise RuntimeError("vLLM endpoint initialization returned an awaitable inside a running event loop.")
+
+
+def _namespace_rollout_replica_class(manager: Any, group_id: str) -> None:
+    manager.rollout_replica_class = partial(
+        manager.rollout_replica_class,
+        name_suffix=_safe_path_name(group_id),
+    )
