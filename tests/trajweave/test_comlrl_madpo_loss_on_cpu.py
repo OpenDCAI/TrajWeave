@@ -157,7 +157,8 @@ def test_non_finite_other_agent_delta_fails_fast_in_production_microbatch():
 
 
 @pytest.mark.parametrize('flat_response', [False, True])
-def test_verl_madpo_callback_preserves_pair_gradients_across_output_layouts(flat_response):
+@pytest.mark.parametrize('non_tensor_metadata', [False, True])
+def test_verl_madpo_callback_preserves_pair_gradients_across_output_layouts(flat_response, non_tensor_metadata):
     from tensordict import TensorDict
     from verl.utils import tensordict_utils as tu
 
@@ -173,6 +174,14 @@ def test_verl_madpo_callback_preserves_pair_gradients_across_output_layouts(flat
         'madpo_other_agent_delta': torch.zeros(2),
         'preference_loss_mask': torch.ones(2),
     }, batch_size=[2])
+    if non_tensor_metadata:
+        from tensordict.utils import LinkedList
+
+        for key in ('madpo_pair_index', 'madpo_preference_side',
+                    'madpo_other_agent_delta', 'preference_loss_mask'):
+            values = data.pop(key).tolist()
+            tu.assign_non_tensor_stack(data, key, values)
+            assert isinstance(data[key], LinkedList)
     tu.assign_non_tensor(data, madpo_global_pair_count=1, dp_size=1)
     values = torch.tensor([-.2, -.3, -.5], requires_grad=True)
     if flat_response:

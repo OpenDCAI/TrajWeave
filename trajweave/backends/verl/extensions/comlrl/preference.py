@@ -394,13 +394,20 @@ def madpo_actor_loss(config: Any, model_output: Mapping[str, Any], data: Any, dp
         raise ValueError("MADPO loss requires madpo_global_pair_count from the trainer batch contract")
     dp_size = tu.get_non_tensor_data(data, "dp_size", 1)
     beta = _config_value(config, "madpo_beta", _config_value(config, "beta", 0.1))
+    # TQ 的逐行标量经 TensorDict 取出后可能是 LinkedList，先还原为损失需要的张量。
+    def scalar_rows(key: str) -> torch.Tensor:
+        value = selected[key]
+        if isinstance(value, torch.Tensor):
+            return value
+        return torch.as_tensor(to_python(value), device=log_probs.device)
+
     loss, pair_count = madpo_microbatch_loss(
         log_probs,
         selected["response_mask"],
-        selected["madpo_pair_index"],
-        selected["madpo_preference_side"],
-        selected["madpo_other_agent_delta"],
-        selected["preference_loss_mask"],
+        scalar_rows("madpo_pair_index"),
+        scalar_rows("madpo_preference_side"),
+        scalar_rows("madpo_other_agent_delta"),
+        scalar_rows("preference_loss_mask"),
         beta=float(beta),
         global_pair_count=int(global_pair_count),
         dp_size=int(dp_size),
