@@ -164,6 +164,10 @@ class GiGPOCreditAssigner:
                     response_logprobs=turn.action_logprobs,
                     reward=float(trajectory.global_reward or 0.0),
                     advantage=advantage,
+                    completion_id=turn.completion_id,
+                    tree_node_id=turn.tree_node_id,
+                    joint_action_ids=turn.joint_action_ids,
+                    joint_transition_ids=turn.joint_transition_ids,
                     metadata=metadata,
                 )
             )

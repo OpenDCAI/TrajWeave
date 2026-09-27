@@ -14,6 +14,7 @@
 
 import random
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -360,6 +361,60 @@ def test_kl_penalty_straight_through_value_matches_base(name, base):
     plus_value = kl_penalty(logprob, ref_logprob, name)
     base_value = kl_penalty(logprob, ref_logprob, base)
     assert torch.allclose(plus_value, base_value)
+
+
+class _PolicyLossConfig(SimpleNamespace):
+    def get(self, name, default=None):
+        return getattr(self, name, default)
+
+
+def _policy_loss_config():
+    return _PolicyLossConfig(
+        clip_ratio=0.2,
+        clip_ratio_low=0.2,
+        clip_ratio_high=0.2,
+        clip_ratio_c=3.0,
+        global_batch_info={},
+    )
+
+
+def test_vanilla_no_dual_clip_matches_standard_ppo_for_negative_advantage():
+    old_log_prob = torch.zeros(1, 1)
+    log_prob = torch.log(torch.tensor([[10.0]], requires_grad=True))
+    advantages = -torch.ones(1, 1)
+    response_mask = torch.ones(1, 1)
+
+    dual_loss, _ = verl.trainer.ppo.core_algos.compute_policy_loss_vanilla(
+        old_log_prob, log_prob, advantages, response_mask, config=_policy_loss_config()
+    )
+    standard_loss, metrics = verl.trainer.ppo.core_algos.compute_policy_loss_vanilla_no_dual_clip(
+        old_log_prob, log_prob, advantages, response_mask, config=_policy_loss_config()
+    )
+
+    assert dual_loss.item() == pytest.approx(3.0)
+    assert standard_loss.item() == pytest.approx(10.0)
+    assert metrics["actor/pg_clipfrac_lower"] == 0.0
+
+
+def test_vanilla_no_dual_clip_has_finite_nonzero_gradient():
+    old_log_prob = torch.zeros(2, 2)
+    log_prob = torch.tensor([[-0.2, -0.4], [-0.3, -0.1]], requires_grad=True)
+    advantages = torch.tensor([[1.0, -0.5], [-1.0, 0.75]])
+    response_mask = torch.ones_like(advantages)
+
+    loss, _ = verl.trainer.ppo.core_algos.get_policy_loss_fn("vanilla_no_dual_clip")(
+        old_log_prob,
+        log_prob,
+        advantages,
+        response_mask,
+        config=_policy_loss_config(),
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert log_prob.grad is not None
+    assert torch.isfinite(log_prob.grad).all()
+    assert torch.any(log_prob.grad != 0)
 
 
 def test_kl_penalty_k3_plus_uses_k2_gradient():

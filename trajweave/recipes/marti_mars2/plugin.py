@@ -97,7 +97,7 @@ class MARTIMARS2RecipePlugin:
             tracker=context.tracker,
             mode=context.mode,
         )
-        if context.config.get("acceptance", {}).get("enabled", False):
+        if context.mode == "verl_train" and context.config.get("acceptance", {}).get("enabled", False):
             acceptance = audit_fidelity_training_run(
                 context.run_dir,
                 metric_summary=context.tracker.metric_aggregator.summarize(),

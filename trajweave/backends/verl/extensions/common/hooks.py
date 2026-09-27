@@ -26,9 +26,11 @@ class PPOExtensionHooks:
     def tq_select_fields(
         self,
         stage: str,
-        default_fields: tuple[str, ...],
+        default_fields: tuple[str, ...] | None = None,
         config: Any = None,
     ) -> tuple[str, ...]:
+        if default_fields is None:
+            return _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
         return default_fields
 
     def prepare_dataproto(self, data: Any, *, stage: str, config: Any = None) -> Any:
@@ -126,6 +128,7 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         epsilon: float = 1e-6,
         norm_adv_by_std_in_grpo: bool = True,
         group_by_agent_id: bool = False,
+        pettingllms_singleton_semantics: bool = False,
     ) -> tuple[Any, Any]:
         import numpy as np
         import torch
@@ -139,11 +142,13 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
 
         with torch.no_grad():
             batch_size = scores.shape[0]
+            active = response_mask.bool().any(dim=-1)
             if traj_index is None:
                 traj_index = np.array([str(i) for i in range(batch_size)], dtype=object)
 
             for row in range(batch_size):
-                traj_accumulator[(index[row], traj_index[row])].append(scores[row])
+                if active[row]:
+                    traj_accumulator[(index[row], traj_index[row])].append(scores[row])
 
             for key, reward_list in traj_accumulator.items():
                 group_id, traj_id = key
@@ -156,12 +161,18 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
 
             if not group_by_agent_id:
                 for row in range(batch_size):
-                    scores[row] = traj2avg[(index[row], traj_index[row])]
+                    if active[row]:
+                        scores[row] = traj2avg[(index[row], traj_index[row])]
 
+            max_group_size = max((len(group_scores) for group_scores in id2score.values()), default=0)
             for group_id, group_scores in id2score.items():
                 if len(group_scores) == 1:
-                    id2mean[group_id] = scores.new_tensor(0.0)
-                    id2std[group_id] = scores.new_tensor(1.0)
+                    if pettingllms_singleton_semantics and max_group_size > 1:
+                        id2mean[group_id] = group_scores[0]
+                        id2std[group_id] = scores.new_tensor(0.0)
+                    else:
+                        id2mean[group_id] = scores.new_tensor(0.0)
+                        id2std[group_id] = scores.new_tensor(1.0)
                 elif len(group_scores) > 1:
                     scores_tensor = torch.stack(group_scores)
                     id2mean[group_id] = torch.mean(scores_tensor)
@@ -170,6 +181,9 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
                     raise ValueError(f"no score in prompt index: {group_id}")
 
             for row in range(batch_size):
+                if not active[row]:
+                    scores[row] = 0.0
+                    continue
                 if norm_adv_by_std_in_grpo:
                     scores[row] = (scores[row] - id2mean[index[row]]) / (id2std[index[row]] + epsilon)
                 else:
@@ -224,6 +238,94 @@ class AgentWiseGRPOHooks(PPOExtensionHooks):
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
         return data
+
+
+@dataclass(frozen=True)
+class ATGRPOHooks(AgentWiseGRPOHooks):
+    """Agent- and Turn-wise GRPO (AT-GRPO) advantage grouping.
+
+    Extends :class:`AgentWiseGRPOHooks` by adding the turn dimension to the
+    advantage grouping key, so trajectories are normalized within
+    ``(rollout_group, turn_id, agent_id)`` buckets instead of only
+    ``(rollout_group, agent_id)``. This mirrors PettingLLMs' AT-GRPO, which
+    computes baselines jointly across the agent-role and turn dimensions.
+    """
+
+    name: str = "atgrpo_agent_turn_wise_grpo"
+
+    def batch_schema_fields(self, stage: str, config: Any = None) -> tuple[str, ...]:
+        if stage != "advantage":
+            return ()
+        return (
+            "agent_id",
+            "traj_uid",
+            "turn_id",
+            "root_id",
+            "node_id",
+            "parent_node_id",
+            "observation_group_id",
+        )
+
+    def tq_select_fields(
+        self,
+        stage: str,
+        default_fields: tuple[str, ...] | None = None,
+        config: Any = None,
+    ) -> tuple[str, ...]:
+        if default_fields is None:
+            default_fields = _DEFAULT_ADVANTAGE_TQ_FIELDS if stage == "advantage" else ()
+        fields = list(super().tq_select_fields(stage, default_fields=default_fields, config=config))
+        if stage == "advantage":
+            fields.extend(self.batch_schema_fields(stage, config=config))
+        return tuple(dict.fromkeys(fields))
+
+    def compute_grpo_outcome_advantage(
+        self,
+        *,
+        token_level_rewards: Any,
+        response_mask: Any,
+        index: Any,
+        traj_index: Any | None = None,
+        epsilon: float = 1e-6,
+        norm_adv_by_std_in_grpo: bool = True,
+        group_by_agent_id: bool = False,
+    ) -> tuple[Any, Any]:
+        return super().compute_grpo_outcome_advantage(
+            token_level_rewards=token_level_rewards,
+            response_mask=response_mask,
+            index=index,
+            traj_index=traj_index,
+            epsilon=epsilon,
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            group_by_agent_id=group_by_agent_id,
+            pettingllms_singleton_semantics=True,
+        )
+
+    def build_advantage_groups(self, data: Any) -> Any:
+        import numpy as np
+
+        observation_groups = data.non_tensor_batch.get("observation_group_id")
+        if observation_groups is not None:
+            empty_rows = [row for row, value in enumerate(observation_groups) if not str(value)]
+            if empty_rows:
+                raise KeyError(f"AT-GRPO tree rows require observation_group_id; missing rows: {empty_rows}.")
+            return np.array([str(value) for value in observation_groups], dtype=object)
+
+        missing = [field for field in ("agent_id", "turn_id") if field not in data.non_tensor_batch]
+        if missing:
+            raise KeyError(f"AT-GRPO requires non_tensor_batch fields: {missing}.")
+        return np.array(
+            [
+                f"legacy:{uid}_{turn_id}_{agent_id}"
+                for uid, turn_id, agent_id in zip(
+                    data.non_tensor_batch["uid"],
+                    data.non_tensor_batch["turn_id"],
+                    data.non_tensor_batch["agent_id"],
+                    strict=True,
+                )
+            ],
+            dtype=object,
+        )
 
 
 @dataclass(frozen=True)
@@ -651,6 +753,32 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
     recipe = _config_get(trajweave, "recipe", None)
     extensions = _config_get(trajweave, "verl_extensions", None)
     extension_names = _normalize_extensions(extensions)
+    if credit_allocator == "marft_ctde" or recipe == "marft_math_workflow" or "trajweave_marft_ctde" in extension_names:
+        from trajweave.backends.verl.extensions.marft import MARFTPPOHooks
+
+        return MARFTPPOHooks()
+    if (
+        credit_allocator == "c3_contextual_counterfactual"
+        or recipe == "c3_reasoner_actor_math"
+        or "trajweave_c3_contextual_counterfactual" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.c3 import C3ContextualCounterfactualHooks
+
+        return C3ContextualCounterfactualHooks()
+    if (
+        credit_allocator
+        in {
+            "comlrl_reinforce",
+            "comlrl_magrpo",
+            "comlrl_mareinforce",
+            "comlrl_maremax",
+            "comlrl_marloo",
+        }
+        or "trajweave_comlrl_reinforce" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.comlrl import CoMLRLReinforceHooks
+
+        return CoMLRLReinforceHooks()
     if (
         credit_allocator == "comas_interaction_reward"
         or recipe == "comas_peer_review_math"
@@ -659,6 +787,30 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
         from trajweave.backends.verl.extensions.comas import CoMASInteractionREINFORCEHooks
 
         return CoMASInteractionREINFORCEHooks()
+    if (
+        credit_allocator == "marshal_turn_level_reinforce"
+        or recipe == "marshal_tictactoe_selfplay"
+        or "trajweave_marshal_turn_advantage" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.marshal import MARSHALHooks
+
+        return MARSHALHooks()
+    if (
+        credit_allocator == "wideseek_r1_multi_agent_grpo"
+        or recipe == "wideseek_r1_broad_search"
+        or "trajweave_wideseek_r1_grpo" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.wideseek_r1 import WideSeekR1GRPOHooks
+
+        return WideSeekR1GRPOHooks()
+    if (
+        credit_allocator == "matpo_parent_broadcast_grpo"
+        or recipe == "matpo_browse"
+        or "trajweave_matpo_parent_broadcast" in extension_names
+    ):
+        from trajweave.backends.verl.extensions.matpo import MATPOParentBroadcastHooks
+
+        return MATPOParentBroadcastHooks()
     if (
         credit_allocator == "gigpo_hierarchical_grpo"
         or recipe == "gigpo_solver_verifier_math"
@@ -693,6 +845,12 @@ def extension_hooks_for_config(config: Any) -> PPOExtensionHooks:
         or "trajweave_maporl_full_ppo" in extension_names
     ):
         return MAPoRLFullPPOHooks()
+    if (
+        credit_allocator == "atgrpo_agent_turn_wise_grpo"
+        or recipe == "atgrpo_solver_verifier_math"
+        or "trajweave_atgrpo_agent_turn_wise_grpo" in extension_names
+    ):
+        return ATGRPOHooks()
     if (
         credit_allocator in {"drmas_agent_wise_grpo", "maporl_score_bonus"}
         or recipe in {"doctor_mas_math", "doctor_mas_search", "maporl_debate_math"}

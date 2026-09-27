@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from trajweave.pipeline.config import hydra_path
+
 from trajweave.backends.verl.runtime_config import normalize_hf_local_dtype
 from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
 
@@ -136,7 +138,7 @@ def build_maporl_launch_overrides(
         f"+agent.orchestra.maporl.rule_discount={rule_discount}",
         f"+agent.orchestra.maporl.alpha={_hydra_float_list(alpha)}",
         "+trajweave.recipe=maporl_debate_math",
-        f"+trajweave.config={source_config}",
+        f"+trajweave.config={hydra_path(source_config)}",
         "+trajweave.coordination_protocol=debate_consensus",
         "+trajweave.trajectory_schema=multi_agent_turn_v1",
         "+trajweave.credit_allocator=maporl_ppo_score_rule",

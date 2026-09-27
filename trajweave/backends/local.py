@@ -23,9 +23,9 @@ def _parse_arithmetic(text: str) -> int | None:
 
 
 def extract_final_int(text: str) -> int | None:
-    match = _FINAL_RE.search(text)
-    if match:
-        return int(match.group(1))
+    matches = tuple(_FINAL_RE.finditer(text))
+    if matches:
+        return int(matches[-1].group(1))
     numbers = re.findall(r"-?\d+", text)
     return int(numbers[-1]) if numbers else None
 
@@ -47,6 +47,11 @@ class RuleBasedMathPolicyBackend:
                 text = "APPROVED: the solver final answer is correct."
             else:
                 text = "REVISE: the solver final answer is not verified."
+        elif request.agent.role.lower() == "reasoner":
+            text = "Plan: identify the arithmetic operation, compute it, and report the result."
+        elif request.agent.role.lower() == "actor":
+            answer = _parse_arithmetic(request.observation)
+            text = f"Final answer: {answer if answer is not None else 0}"
         else:
             text = "PASS"
         token_ids = self.tokenizer.encode(text)

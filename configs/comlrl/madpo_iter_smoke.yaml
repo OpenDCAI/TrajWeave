@@ -1,0 +1,18 @@
+recipe: comlrl.madpo_iter
+mode: smoke
+
+comlrl:
+  algorithm: madpo_iter
+  agent_ids: [agent_0, agent_1]
+  model_ids: [policy_0, policy_1]
+  joint_mode: aligned
+  max_turns: 1
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: comlrl-madpo-iter-smoke
+  tags: [comlrl, madpo, iterative, smoke]
+
+logging:
+  level: INFO
+  console: true

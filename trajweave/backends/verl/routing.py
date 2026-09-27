@@ -78,6 +78,10 @@ def safe_actor_role_key(group_id: str) -> str:
     return f"trajweave_actor_{key or 'group'}"
 
 
+def safe_critic_role_key(group_id: str) -> str:
+    return safe_actor_role_key(group_id).replace("trajweave_actor_", "trajweave_critic_", 1)
+
+
 def safe_worker_role_key(group_id: str) -> str:
     """MAPoRL 旧测试和外部调用的兼容别名。"""
 

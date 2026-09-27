@@ -386,3 +386,41 @@ def test_tree_credit_keeps_frozen_ancestors_in_path_context():
     assert len(samples) == 1
     assert samples[0].agent_name == "generator"
     assert samples[0].reward == pytest.approx(0.0)
+
+
+def test_prime_partial_credit_keeps_call_based_function_name(monkeypatch):
+    import sys
+    import types
+    from trajweave.verifiers.code import _score_prime_call_cases
+
+    calls = []
+
+    def check(cases, code, **kwargs):
+        assert cases['fn_name'] == 'identity'
+        calls.append(cases)
+        return [raw == expected for raw, expected in zip(cases['inputs'], cases['outputs'])], []
+
+    monkeypatch.setitem(sys.modules, 'verl.utils.reward_score.prime_code.utils',
+                        types.SimpleNamespace(check_correctness=check))
+    cases = {'fn_name': 'identity', 'inputs': ['1', '2'], 'outputs': ['1', '3']}
+    score, _ = _score_prime_call_cases('def identity(x): return x', cases, 5)
+    assert score == pytest.approx(0.5)
+    assert len(calls) == 3
+    assert cases['inputs'] == ['1', '2']
+
+
+def test_prime_failure_after_tenth_case_is_not_terminal_success(monkeypatch):
+    import sys
+    import types
+    from trajweave.verifiers.code import _score_prime_call_cases
+
+    def check(cases, code, **kwargs):
+        return [raw == expected for raw, expected in zip(cases['inputs'], cases['outputs'])], []
+
+    monkeypatch.setitem(sys.modules, 'verl.utils.reward_score.prime_code.utils',
+                        types.SimpleNamespace(check_correctness=check))
+    inputs = [str(i) for i in range(11)]
+    cases = {'fn_name': 'identity', 'inputs': inputs, 'outputs': inputs[:10] + ['-1']}
+    score, _ = _score_prime_call_cases('def identity(x): return x', cases, 5)
+    assert score == pytest.approx(10 / 11)
+    assert score < 1.0

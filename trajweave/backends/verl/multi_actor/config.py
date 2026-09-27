@@ -3,7 +3,179 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from trajweave.backends.verl.multi_actor.critic_config import (
+    normalize_critic_route_specs,
+    resolve_actor_critic_settings,
+)
 from trajweave.backends.verl.tokenizer_compat import assert_compatible_tokenizers
+
+
+def validate_trajweave_config(config: Any, *, use_reference_policy: bool, use_critic: bool) -> None:
+    """按每个模型实际占用的 GPU 数验证批量大小，避免把独立角色误当成数据并行。"""
+    from copy import deepcopy
+
+    from omegaconf import OmegaConf
+    from verl.utils.config import omega_conf_to_dataclass, validate_config
+
+    if not OmegaConf.select(config, "trajweave.multi_actor.enabled", default=False):
+        validate_config(config, use_reference_policy, use_critic)
+        return
+    raw_groups = OmegaConf.to_container(config.agent.worker_groups, resolve=True)
+    groups = ([{"id": key, **value} for key, value in raw_groups.items()]
+              if isinstance(raw_groups, Mapping) else raw_groups)
+    trainable = [group for group in groups if group.get("trainable", True)]
+    if not trainable:
+        raise ValueError("Multi-actor training requires at least one trainable worker group.")
+    for group in trainable:
+        _validate_gpu_count(group.get("gpus", 1), family="multi-actor", group_id=group["id"])
+        actor_config = deepcopy(config)
+        actor_config.trainer.nnodes = 1
+        actor_config.trainer.n_gpus_per_node = int(group.get("gpus", 1))
+        validate_config(actor_config, use_reference_policy, use_critic=False)
+    if use_critic:
+        settings = resolve_actor_critic_settings(config)
+        if settings is None:
+            critic_gpu_counts = [config.trainer.nnodes * config.trainer.n_gpus_per_node]
+        else:
+            routes = normalize_critic_route_specs(
+                settings.get("critic_routes", settings.get("critic_groups", settings.get("critics"))),
+                trainable_actor_groups=[group["id"] for group in trainable],
+                topology=settings.get("topology"), critic_type=settings.get("critic_type"),
+                max_length=int(settings.get("max_length", 2048)),
+            )
+            critic_gpu_counts = [route.gpus for route in routes]
+        for n_gpus in critic_gpu_counts:
+            omega_conf_to_dataclass(config.critic).validate(n_gpus, config.data.train_batch_size)
+
+
+def reconcile_multi_actor_global_assets(config: Any) -> dict[str, str] | None:
+    """Align VERL's singleton actor config with the primary trainable worker group."""
+
+    from omegaconf import DictConfig, OmegaConf, open_dict
+
+    if isinstance(config, DictConfig):
+        enabled = bool(OmegaConf.select(config, "trajweave.multi_actor.enabled", default=False))
+        raw_groups = OmegaConf.select(config, "agent.worker_groups", default=[])
+        raw_groups = OmegaConf.to_container(raw_groups, resolve=True) if OmegaConf.is_config(raw_groups) else raw_groups
+    elif isinstance(config, dict):
+        trajweave = config.get("trajweave", {}) or {}
+        multi_actor = trajweave.get("multi_actor", {}) if isinstance(trajweave, Mapping) else {}
+        enabled = bool(multi_actor.get("enabled", False)) if isinstance(multi_actor, Mapping) else False
+        agent = config.get("agent", {}) or {}
+        raw_groups = agent.get("worker_groups", []) if isinstance(agent, Mapping) else []
+    else:
+        raise TypeError(f"multi-actor global asset reconciliation requires DictConfig or dict, got {type(config)!r}.")
+
+    if not enabled:
+        return None
+    if isinstance(raw_groups, Mapping):
+        groups = [{"id": str(group_id), **dict(group or {})} for group_id, group in raw_groups.items()]
+    elif isinstance(raw_groups, Sequence) and not isinstance(raw_groups, str | bytes):
+        groups = [dict(group) for group in raw_groups]
+    else:
+        raise ValueError("agent.worker_groups must be a list or mapping for multi-actor training.")
+    primary = next((group for group in groups if bool(group.get("trainable", True))), None)
+    if primary is None:
+        raise ValueError("Multi-actor training requires a trainable primary worker group.")
+    model_path = str(primary.get("model_path") or "").strip()
+    tokenizer_path = str(primary.get("tokenizer_path") or "").strip()
+    if not model_path or not tokenizer_path:
+        raise ValueError("Primary multi-actor worker group requires model_path and tokenizer_path.")
+    assets = {
+        "worker_group": str(primary.get("id") or ""),
+        "model_path": model_path,
+        "tokenizer_path": tokenizer_path,
+    }
+    trainable_group_ids = [
+        str(group.get("id") or "")
+        for group in groups
+        if bool(group.get("trainable", True)) and str(group.get("id") or "")
+    ]
+    if isinstance(config, DictConfig):
+        with open_dict(config):
+            OmegaConf.update(config, "actor_rollout_ref.model.path", model_path, merge=False, force_add=True)
+            OmegaConf.update(
+                config,
+                "actor_rollout_ref.model.tokenizer_path",
+                tokenizer_path,
+                merge=False,
+                force_add=True,
+            )
+        _reconcile_multi_actor_global_critic_assets(config, trainable_actor_groups=trainable_group_ids)
+        _disable_unavailable_comlrl_rollout_logprobs(config)
+        return assets
+    actor_model = config.setdefault("actor_rollout_ref", {}).setdefault("model", {})
+    actor_model["path"] = model_path
+    actor_model["tokenizer_path"] = tokenizer_path
+    _reconcile_multi_actor_global_critic_assets(config, trainable_actor_groups=trainable_group_ids)
+    _disable_unavailable_comlrl_rollout_logprobs(config)
+    return assets
+
+
+def _reconcile_multi_actor_global_critic_assets(
+    config: Any,
+    *,
+    trainable_actor_groups: Sequence[str],
+) -> None:
+    """Align VERL's validation-only singleton critic with the first routed critic."""
+
+    from omegaconf import DictConfig, OmegaConf, open_dict
+
+    settings = resolve_actor_critic_settings(config)
+    if settings is None:
+        return
+    routes = normalize_critic_route_specs(
+        settings.get("critic_routes", settings.get("critic_groups", settings.get("critics"))),
+        trainable_actor_groups=trainable_actor_groups,
+        topology=settings.get("topology"),
+        critic_type=settings.get("critic_type"),
+        max_length=int(settings.get("max_length", 2048)),
+    )
+    primary = routes[0]
+    if not primary.model_path or not primary.tokenizer_path:
+        raise ValueError("Primary routed critic requires model_path and tokenizer_path.")
+    if isinstance(config, DictConfig):
+        with open_dict(config):
+            OmegaConf.update(config, "critic.model.path", primary.model_path, merge=False, force_add=True)
+            OmegaConf.update(
+                config,
+                "critic.model.tokenizer_path",
+                primary.tokenizer_path,
+                merge=False,
+                force_add=True,
+            )
+        return
+    critic_model = config.setdefault("critic", {}).setdefault("model", {})
+    critic_model["path"] = primary.model_path
+    critic_model["tokenizer_path"] = primary.tokenizer_path
+
+
+def _disable_unavailable_comlrl_rollout_logprobs(config: Any) -> None:
+    """CoMLRL HF-local outputs do not carry sampling-policy log probabilities."""
+
+    from omegaconf import DictConfig, OmegaConf, open_dict
+
+    if isinstance(config, DictConfig):
+        recipe = OmegaConf.select(config, "trajweave.recipe", default=None)
+        comlrl = OmegaConf.select(config, "trajweave.comlrl", default=None)
+        if recipe != "comlrl_joint_math" and comlrl is None:
+            return
+        with open_dict(config):
+            OmegaConf.update(
+                config,
+                "actor_rollout_ref.rollout.calculate_log_probs",
+                False,
+                merge=False,
+                force_add=True,
+            )
+        return
+    trajweave = config.get("trajweave", {}) or {}
+    if not isinstance(trajweave, Mapping):
+        return
+    if trajweave.get("recipe") != "comlrl_joint_math" and "comlrl" not in trajweave:
+        return
+    rollout = config.setdefault("actor_rollout_ref", {}).setdefault("rollout", {})
+    rollout["calculate_log_probs"] = False
 
 
 def normalize_worker_groups(

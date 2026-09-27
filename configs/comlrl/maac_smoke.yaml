@@ -1,0 +1,21 @@
+recipe: comlrl.maac
+mode: smoke
+
+comlrl:
+  algorithm: maac
+  agent_ids: [agent_0, agent_1]
+  model_ids: [policy_0, policy_1]
+  joint_mode: aligned
+  max_turns: 2
+  actor_critic:
+    topology: centralized
+    critic_type: v
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: comlrl-maac-smoke
+  tags: [comlrl, maac, smoke]
+
+logging:
+  level: INFO
+  console: true

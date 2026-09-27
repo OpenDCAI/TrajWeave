@@ -237,6 +237,10 @@ class MAPoRLPPOScoreRuleCreditAssigner:
                     response_token_ids=turn.action_token_ids,
                     response_logprobs=turn.action_logprobs,
                     reward=credit.reward,
+                    completion_id=turn.completion_id,
+                    tree_node_id=turn.tree_node_id,
+                    joint_action_ids=turn.joint_action_ids,
+                    joint_transition_ids=turn.joint_transition_ids,
                     metadata={
                         **self.metadata_defaults,
                         **turn.metadata,

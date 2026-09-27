@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from trajweave.pipeline.config import hydra_path
+
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
@@ -43,7 +45,7 @@ def build_agentflow_launch_overrides(
         f"+agent.orchestra.agentflow.enabled_tools={_hydra_list(enabled_tools)}",
         f"+agent.orchestra.agentflow.reward_scope={_quote(str(credit_cfg.get('reward_scope', 'final_outcome')))}",
         "+trajweave.recipe=agentflow_planner_tool",
-        f"+trajweave.config={source_config}",
+        f"+trajweave.config={hydra_path(source_config)}",
         "+trajweave.coordination_protocol=planner_executor_tool_verifier",
         "+trajweave.trajectory_schema=multi_agent_turn_v1",
         "+trajweave.credit_allocator=agentflow_planner_only_grpo",

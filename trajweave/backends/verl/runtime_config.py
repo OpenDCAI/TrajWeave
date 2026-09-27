@@ -82,6 +82,13 @@ class TrajWeaveAgentLoopRuntimeConfig:
         return {key: value for key, value in values.items() if value is not None}
 
 
+def validate_agent_loop_backend(recipe: str | None, backend: str) -> None:
+    """保留旧导入路径，实际校验统一交给后端注册表。"""
+    from trajweave.backends.verl.agent_loops.registry import validate_agent_loop_backend as validate
+
+    validate(recipe, backend)
+
+
 def config_get(config: Any, key: str, default: Any = None) -> Any:
     if config is None:
         return default
@@ -123,6 +130,9 @@ def _default_turn_padding_multiple(recipe: str | None) -> int:
         "maporl_debate_math": 2,
         "agentflow_planner_tool": 4,
         "gigpo_solver_verifier_math": 2,
+        "atgrpo_solver_verifier_math": 2,
+        "matpo_browse": 2,
+        "wideseek_r1_broad_search": 4,
     }.get(str(recipe), 1)
 
 

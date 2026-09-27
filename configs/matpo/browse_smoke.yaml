@@ -1,0 +1,12 @@
+recipe: matpo_browse
+mode: smoke
+
+team:
+  max_turns: 3
+
+matpo:
+  accuracy_reward_weight: 0.9
+  tool_format_reward_weight: 0.1
+
+rollout:
+  rollouts_per_task: 2

@@ -132,6 +132,7 @@ ENV/
 logs
 log
 outputs
+reports/
 .history
 *.out
 *.err

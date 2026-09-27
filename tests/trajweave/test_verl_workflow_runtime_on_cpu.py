@@ -10,14 +10,16 @@ from omegaconf import OmegaConf
 
 from trajweave.backends.policy import StableByteTokenizer
 from trajweave.backends.verl.batch_padding import pad_session_batch
+from trajweave.backends.verl.emitters.comlrl import CoMLRLEmitterMixin
+from trajweave.backends.verl.main_ppo import _bind_agent_loop_manager
 from trajweave.backends.verl.schema import flatten_token_ids
 from trajweave.backends.verl.trainers.maporl_multi_actor import _worker_groups_from_config
 from trajweave.backends.verl.weight_sync import sync_hf_local_rollout_weights
 from trajweave.backends.verl.workflow_runtime import build_hf_workflow_outputs
 
 
-class FakeWorkflowWorker:
-    def __init__(self, responses: list[str]):
+class FakeWorkflowWorker(CoMLRLEmitterMixin):
+    def __init__(self, responses: list[str], *, matpo_overrides: dict | None = None):
         self.responses = list(responses)
         self.tokenizer = StableByteTokenizer()
         self.model_config = SimpleNamespace(local_path="/models/default")
@@ -46,7 +48,17 @@ class FakeWorkflowWorker:
                         "task_name": "math",
                         "assignment_seed": 7,
                     },
+                    "matpo": {"max_turns": 3},
                 },
+            }
+        }
+        self.config["agent"]["orchestra"]["matpo"].update(matpo_overrides or {})
+        self.config["trajweave"] = {
+            "comlrl": {
+                "algorithm": "magrpo",
+                "joint_mode": "aligned",
+                "max_turns": 1,
+                "normalize_advantages": False,
             }
         }
 
@@ -141,6 +153,64 @@ def _math_prompt() -> dict:
     }
 
 
+def _search_prompt() -> dict:
+    return {
+        "uid": "browse-1",
+        "raw_prompt": [{"role": "user", "content": "Which city is the capital of France?"}],
+        "reward_model": {"ground_truth": "Paris"},
+        "extra_info": {
+            "search_query": "capital France",
+            "documents": [
+                {"title": "France", "text": "France is a country in Europe. Its capital city is Paris."},
+                {"title": "Germany", "text": "Germany's capital city is Berlin."},
+            ],
+        },
+    }
+
+
+@pytest.mark.parametrize("response,expected", [("Final answer: 2", 1.0), ("Final answer: 0", 0.0)])
+def test_atgrpo_validation_reports_task_reward_and_solver_answer(response, expected):
+    worker = FakeWorkflowWorker([response, "APPROVED"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {
+        "max_turns": 3,
+        "mixed_reward": {"enabled": True, "alpha": 0.3, "verifier_local_reward": 2.0},
+    }
+    outputs = build_hf_workflow_outputs(
+        worker, recipe="atgrpo_solver_verifier_math", prompt=_math_prompt(), session_id=0, validate=True,
+    )
+    final = outputs[-1]
+    assert final.reward_score == expected
+    assert worker.tokenizer.decode(final.response_ids) == response
+    assert final.extra_fields["reward_extra_info"]["task_accuracy"] == expected
+    assert final.extra_fields["reward_extra_info"]["task_reward"] == expected
+    assert final.extra_fields["reward_extra_info"]["training_reward"] != expected
+
+
+@pytest.mark.parametrize("truth,response,success", [
+    ("1/2", "Final answer: 1/2", True),
+    ("1/2", "Final answer: 2", False),
+    ("0.5", "Final answer: 0.5", True),
+    ("0.5", "Final answer: 5", False),
+])
+def test_atgrpo_preserves_fractional_math_ground_truth(truth, response, success):
+    worker = FakeWorkflowWorker([response, "APPROVED"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {"max_turns": 2}
+    prompt = _math_prompt()
+    prompt["reward_model"]["ground_truth"] = truth
+    outputs = build_hf_workflow_outputs(
+        worker, recipe="atgrpo_solver_verifier_math", prompt=prompt, session_id=0,
+    )
+    assert outputs[-1].extra_fields["workflow_success"] is success
+
+
+@pytest.mark.parametrize("value", ["1/2", "0.5", "-2.5", "answer 2"])
+def test_integer_only_workflows_reject_noninteger_labels(value):
+    from trajweave.backends.verl.workflow_runtime import _integer_ground_truth
+
+    with pytest.raises(ValueError, match="integer ground_truth"):
+        _integer_ground_truth(value)
+
+
 def test_flatten_token_ids_accepts_tokenizer_batch_encoding_shape():
     encoded = UserDict({"input_ids": [[1, 2, 3]], "attention_mask": [[1, 1, 1]]})
     assert flatten_token_ids(encoded) == [1, 2, 3]
@@ -190,6 +260,30 @@ def test_dynamic_turn_padding_preserves_real_worker_group_for_multi_actor_routin
     assert [field["agent_id"] for field in fields[2:]] == ["__padding__", "__padding__"]
     assert [field["raw_score"] for field in fields[2:]] == [0.0, 0.0]
     assert keys[2:] == ["real_0_-1", "real_0_-2"]
+
+
+def test_hf_comlrl_joint_math_emits_completion_rows_with_effective_returns():
+    prompt = _math_prompt()
+    prompt["__comlrl_num_candidates__"] = 2
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "Final answer: 2",
+                "Final answer: 3",
+                "Final answer: 2",
+                "Final answer: 4",
+            ]
+        ),
+        recipe="comlrl_joint_math",
+        prompt=prompt,
+        session_id=0,
+    )
+
+    assert len(outputs) == 4
+    assert {output.extra_fields["worker_group"] for output in outputs} == {"group_0", "group_1"}
+    assert all(output.extra_fields["completion_id"] for output in outputs)
+    assert all(output.extra_fields["joint_action_ids"] for output in outputs)
+    assert all(output.reward_score == output.extra_fields["effective_projected_joint_return"] for output in outputs)
 
 
 def test_hf_drmas_reward_comes_from_generated_answer_not_session_parity():
@@ -243,6 +337,173 @@ def test_hf_search_requires_public_documents_and_never_uses_ground_truth_as_evid
             prompt=prompt,
             session_id=0,
         )
+
+
+def test_hf_matpo_emits_parent_child_metadata_for_planner_worker_browse():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL browsing_agent: capital France",
+                "CALL search_and_browse: capital France",
+                "Evidence summary: France capital is Paris. Suggested final answer: Paris",
+                "Final answer: Paris",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "planner",
+        "browsing_agent",
+        "browsing_agent",
+        "planner",
+    ]
+    assert [output.reward_score for output in outputs] == [1.0, 1.0, 1.0, 1.0]
+    delegate, worker_call, worker_summary, final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "capital France"
+    assert delegate["matpo_tool_call_count"] == 1
+    assert delegate["matpo_tool_format_valid"] is True
+    assert worker_call["matpo_turn_role"] == "worker_call"
+    assert worker_call["is_from_subagent_tool"] is True
+    assert worker_call["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["tool_observation"]
+    assert final["matpo_tool_call_count"] == 0
+    assert final["matpo_combined_reward"] == 1.0
+    assert final["matpo_accuracy_reward"] == 1.0
+    assert final["reqs_id"] != delegate["reqs_id"]
+
+
+def test_hf_matpo_supports_multi_round_delegation_within_max_turns():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL browsing_agent: capital France",
+                "CALL search_and_browse: capital France",
+                "Evidence summary: inconclusive",
+                "CALL browsing_agent: capital France Paris",
+                "CALL search_and_browse: capital France Paris",
+                "Evidence summary: France capital is Paris",
+                "Final answer: Paris",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    roles = [output.extra_fields.get("matpo_turn_role") for output in outputs]
+    assert roles == [
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "delegate",
+        "worker_call",
+        "worker_summary",
+        "final",
+    ]
+    reqs_ids = [output.extra_fields["reqs_id"] for output in outputs]
+    assert len(reqs_ids) == len(set(reqs_ids)), f"reqs_id must be unique per output, got {reqs_ids}"
+    assert outputs[1].extra_fields["parent_reqs_id"] == outputs[0].extra_fields["reqs_id"]
+    assert outputs[2].extra_fields["parent_reqs_id"] == outputs[0].extra_fields["reqs_id"]
+    assert outputs[4].extra_fields["parent_reqs_id"] == outputs[3].extra_fields["reqs_id"]
+    assert outputs[5].extra_fields["parent_reqs_id"] == outputs[3].extra_fields["reqs_id"]
+    assert "Evidence summary: inconclusive" in outputs[-1].extra_fields["prompt_text"]
+    assert "France capital is Paris" in outputs[-1].extra_fields["prompt_text"]
+
+
+def test_hf_matpo_worker_follows_planner_delegation_not_dataset_search_query():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL browsing_agent: investigate Germany",
+                "CALL search_and_browse: capital of Germany Berlin",
+                "Evidence summary: Germany capital is Berlin. Suggested final answer: Berlin",
+                "Final answer: Berlin",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    delegate, worker_call, worker_summary, _final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "investigate Germany"
+    assert worker_call["tool_request"] == "capital of Germany Berlin"
+    assert worker_summary["tool_request"] == "capital of Germany Berlin"
+    assert "Berlin" in worker_summary["tool_observation"]
+    assert "Berlin" in worker_summary["prompt_text"]
+
+
+def test_hf_matpo_honors_custom_planner_worker_tool_config():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL researcher: capital France",
+                "CALL web_search: capital France",
+                "Evidence summary: France capital is Paris. Suggested final answer: Paris",
+                "Final answer: Paris",
+            ],
+            matpo_overrides={
+                "planner_agent": "lead",
+                "worker_agent": "researcher",
+                "tool_name": "web_search",
+            },
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == [
+        "lead",
+        "researcher",
+        "researcher",
+        "lead",
+    ]
+    assert all(output.extra_fields["tool_name"] == "web_search" for output in outputs)
+    delegate, worker_call, worker_summary, _final = (output.extra_fields for output in outputs)
+    assert delegate["sub_goal"] == "capital France"
+    assert worker_call["is_from_subagent_tool"] is True
+    assert worker_call["parent_reqs_id"] == delegate["reqs_id"]
+    assert worker_summary["parent_reqs_id"] == delegate["reqs_id"]
+
+
+def test_hf_matpo_invalid_tool_format_gets_zero_format_reward_without_worker_fallback():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["CALL wrong_tool: capital France"]),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 1
+    assert outputs[0].extra_fields["matpo_turn_role"] == "invalid_planner_call"
+    assert outputs[0].extra_fields["matpo_tool_format_valid"] is False
+    assert outputs[0].extra_fields["matpo_combined_reward"] == 0.0
+    assert outputs[0].reward_score == 0.0
+
+
+def test_hf_matpo_valid_format_wrong_answer_retains_only_format_reward():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(
+            [
+                "CALL browsing_agent: capital France",
+                "CALL search_and_browse: capital France",
+                "Evidence summary: France capital is Paris",
+                "Final answer: London",
+            ]
+        ),
+        recipe="matpo_browse",
+        prompt=_search_prompt(),
+        session_id=0,
+    )
+
+    assert [output.reward_score for output in outputs] == [0.1, 0.1, 0.1, 0.1]
+    assert outputs[-1].extra_fields["matpo_accuracy_reward"] == 0.0
+    assert outputs[-1].extra_fields["matpo_combined_reward"] == pytest.approx(0.1)
 
 
 def test_hf_agentflow_projects_only_trainable_planner_and_keeps_frozen_trace():
@@ -320,6 +581,118 @@ def test_hf_gigpo_does_not_let_verifier_approve_a_wrong_math_answer():
     assert outputs[-1].extra_fields["step_reward"] == 1.0
 
 
+def test_hf_atgrpo_emits_turn_wise_metadata_and_plain_global_reward_by_default():
+    outputs = build_hf_workflow_outputs(
+        FakeWorkflowWorker(["Final answer: 2", "APPROVED"]),
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    assert len(outputs) == 2
+    assert [output.extra_fields["trajweave_agent_name"] for output in outputs] == ["solver", "verifier"]
+    # Orchestra's own turn counter, not agent_loop.py's positional index -- see
+    # test_hf_atgrpo_turn_id_survives_a_non_trainable_agent_between_solver_and_verifier
+    # for the case where the two indices would otherwise diverge.
+    assert [output.extra_fields["turn_id"] for output in outputs] == [0, 1]
+    # mixed_reward defaults to disabled -- both agents share the plain global reward.
+    assert [output.reward_score for output in outputs] == [1.0, 1.0]
+
+
+def test_hf_atgrpo_mixed_reward_applies_role_local_signal_to_all_agents():
+    worker = FakeWorkflowWorker(["Final answer: 2", "APPROVED"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {
+        "max_turns": 3,
+        "mixed_reward": {"enabled": True, "alpha": 1.0, "verifier_local_reward": 1.0},
+    }
+
+    outputs = build_hf_workflow_outputs(
+        worker,
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    solver_reward, verifier_reward = (output.reward_score for output in outputs)
+    assert solver_reward == pytest.approx(2.0)
+    assert verifier_reward == pytest.approx(2.0)
+    assert outputs[0].extra_fields["mixed_reward"]["role_local_reward"] == 1.0
+    assert outputs[1].extra_fields["mixed_reward"]["role_local_reward"] == 1.0
+
+
+def test_hf_atgrpo_mixed_reward_penalizes_a_wrong_verifier_judgment():
+    worker = FakeWorkflowWorker(["Final answer: 0", "APPROVED", "Final answer: 2"])
+    worker.config["agent"]["orchestra"]["atgrpo"] = {
+        "max_turns": 3,
+        "mixed_reward": {"enabled": True, "alpha": 1.0, "verifier_local_reward": 1.0},
+    }
+
+    outputs = build_hf_workflow_outputs(
+        worker,
+        recipe="atgrpo_solver_verifier_math",
+        prompt=_math_prompt(),
+        session_id=0,
+    )
+
+    solver_reward = outputs[0].reward_score
+    verifier_reward = outputs[1].reward_score
+    assert solver_reward == 0.0
+    assert verifier_reward == pytest.approx(-1.0)
+    assert outputs[0].extra_fields["mixed_reward"]["role_local_reward"] == 0.0
+    assert outputs[1].extra_fields["mixed_reward"]["role_local_reward"] == -1.0
+
+
+def test_hf_atgrpo_turn_id_survives_a_non_trainable_agent_between_solver_and_verifier():
+    """Regression test for the turn_id misalignment risk: agent_loop.py's default
+    turn_id is the *position* within trainable turns, which would silently diverge
+    from the orchestra's absolute turn_id if a non-trainable agent were ever inserted
+    into the AT-GRPO team. build_hf_workflow_outputs must emit the orchestra's turn_id
+    for this recipe so ATGRPOHooks' (rollout_group, turn_id, agent_id) grouping stays
+    correct regardless of team composition.
+    """
+    from trajweave.backends.verl.workflow_runtime import _trajectory_to_outputs
+    from trajweave.core.specs import AgentSpec, PolicyGroupSpec, TeamSpec
+    from trajweave.core.trajectory import AgentTurn, MultiAgentTrajectory
+
+    team = TeamSpec(
+        name="atgrpo_solver_verifier_math",
+        agents=(
+            AgentSpec(name="solver", role="solver", policy_group="shared", trainable=True),
+            AgentSpec(name="judge", role="judge", policy_group="shared", trainable=False),
+            AgentSpec(name="verifier", role="verifier", policy_group="shared", trainable=True),
+        ),
+        policy_groups=(PolicyGroupSpec(name="shared", backend="local", trainable=True),),
+        orchestra="solver_verifier",
+        reward="math_exact_match",
+        credit="atgrpo_agent_turn_wise_grpo",
+        max_turns=2,
+    )
+    trajectory = MultiAgentTrajectory(episode_id="ep-x", task_id="task", rollout_group="task", team_name=team.name)
+    for turn_id, name in enumerate(["solver", "judge", "verifier"]):
+        trajectory.add_turn(
+            AgentTurn(
+                episode_id="ep-x",
+                task_id="task",
+                turn_id=turn_id,
+                agent_name=name,
+                role=name,
+                policy_group="shared",
+                observation="q",
+                prompt="p",
+                action_text="a",
+                action_token_ids=[1, 2],
+            )
+        )
+    trajectory.global_reward = 1.0
+
+    outputs = _trajectory_to_outputs(FakeWorkflowWorker([]), trajectory=trajectory, team=team)
+
+    # Trainable turns are solver (turn_id=0) and verifier (turn_id=2); the judge turn
+    # (turn_id=1) is skipped, so the position-within-trainable-turns index (0, 1) would
+    # misreport the verifier's turn_id as 1 instead of 2 without the fix.
+    assert [output.extra_fields["turn_id"] for output in outputs] == [0, 2]
+
+
 def test_hf_comas_emits_source_aligned_interaction_rewards_and_worker_routing():
     outputs = build_hf_workflow_outputs(
         FakeWorkflowWorker(
@@ -391,6 +764,22 @@ class FakeAgentLoopManager:
     def reload_local_models(self, model_paths: dict[str, str], *, policy_version: int):
         self.calls.append(("reload", model_paths, policy_version))
         return [{"policy_version": policy_version}]
+
+
+def test_agent_loop_manager_is_bound_before_initial_hf_local_weight_sync(monkeypatch):
+    manager = object()
+    trainer = SimpleNamespace(agent_loop_manager=None)
+    calls = []
+
+    def record_sync(actual_trainer):
+        assert actual_trainer.agent_loop_manager is manager
+        calls.append(actual_trainer)
+
+    monkeypatch.setattr("trajweave.backends.verl.weight_sync.sync_hf_local_rollout_weights", record_sync)
+
+    _bind_agent_loop_manager(trainer, manager)
+
+    assert calls == [trainer]
 
 
 def test_hf_local_weight_sync_exports_and_reloads_current_actor(tmp_path: Path):

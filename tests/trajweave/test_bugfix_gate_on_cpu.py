@@ -370,3 +370,23 @@ def test_r13_rejects_duplicate_worker_group_steps(tmp_path: Path):
 
     assert any("group_a" in failure and "sample steps" in failure for failure in failures)
     assert any("group_a" in failure and "update steps" in failure for failure in failures)
+
+
+def test_hf_role_prompt_honors_chat_template_options():
+    calls = []
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            calls.append((messages, kwargs))
+            return [3, 4]
+
+    class Worker(HFLocalGenerationMixin):
+        pass
+
+    worker = Worker()
+    worker.config = {"data": {"apply_chat_template_kwargs": {"enable_thinking": False}}}
+    worker.rollout_config = SimpleNamespace(prompt_length=16)
+    assert worker._encode_chat_prompt(Tokenizer(), "规划下一步") == [3, 4]
+    assert calls == [([{"role": "user", "content": "规划下一步"}], {
+        "add_generation_prompt": True, "tokenize": True, "enable_thinking": False,
+    })]

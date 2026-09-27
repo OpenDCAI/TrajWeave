@@ -51,6 +51,10 @@ class SolverVerifierOrchestra:
                 )
             )
             final_answer = solver_response.text
+            local_solver_correct = None
+            if environment is not None and hasattr(environment, "evaluate"):
+                _, local_solver_correct = environment.evaluate(task, final_answer)
+                local_solver_correct = bool(local_solver_correct)
             context.append(solver.name, solver_response.text)
             trajectory.add_turn(
                 AgentTurn(
@@ -65,7 +69,8 @@ class SolverVerifierOrchestra:
                     action_text=solver_response.text,
                     action_token_ids=solver_response.token_ids,
                     action_logprobs=solver_response.logprobs,
-                    metadata=solver_response.metadata | {"loop_index": loop_index},
+                    metadata=solver_response.metadata
+                    | {"loop_index": loop_index, "local_solver_correct": local_solver_correct},
                 )
             )
             turn_id += 1
@@ -115,6 +120,7 @@ class SolverVerifierOrchestra:
                         "model_approved": model_approved,
                         "approval_source": approval_source,
                         "loop_index": loop_index,
+                        "local_solver_correct": local_solver_correct,
                     },
                 )
             )

@@ -4,7 +4,7 @@ from pathlib import Path
 def test_readme_registers_marti_recipe_status_and_entrypoints():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert "七条可运行的 MASRL 路径" in readme
+    assert "十五条 MASRL 路径" in readme
     assert "### MARTI-MARS² Code" in readme
     assert "`CodeExecutionEnvironment`" in readme
     assert "`TreeSearchProtocol`" in readme

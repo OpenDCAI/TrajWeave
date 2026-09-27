@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from trajweave.pipeline.config import hydra_path
+
 from trajweave.backends.verl.multi_actor import (
     hydra_string_list,
     hydra_worker_group_list,
@@ -137,7 +139,7 @@ def build_comas_launch_overrides(
         f"+agent.orchestra.comas.task_name={task_name}",
         f"+agent.orchestra.comas.assignment_seed={assignment_seed}",
         "+trajweave.recipe=comas_peer_review_math",
-        f"+trajweave.config={source_config}",
+        f"+trajweave.config={hydra_path(source_config)}",
         "+trajweave.coordination_protocol=comas_peer_review",
         "+trajweave.trajectory_schema=comas_interaction_turn_v1",
         "+trajweave.credit_allocator=comas_interaction_reward",

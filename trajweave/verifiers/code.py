@@ -60,7 +60,12 @@ class CodeVerifierAdapter:
         try:
             from verl.utils.reward_score.prime_code import compute_score
 
-            score, details = compute_score(request.candidate, test_cases, continuous=True)
+            if isinstance(test_cases, str):
+                test_cases = json.loads(test_cases)
+            if isinstance(test_cases, dict) and test_cases.get("fn_name"):
+                score, details = _score_prime_call_cases(request.candidate, test_cases, self.timeout)
+            else:
+                score, details = compute_score(request.candidate, test_cases, continuous=True)
             numeric_score = float(score)
             success = numeric_score >= 1.0
             failure_type = None if success else _failure_type(details)
@@ -249,6 +254,26 @@ class StandardInputCodeVerifierAdapter(CodeVerifierAdapter):
                 "test_details": details,
             },
         )
+
+
+def _score_prime_call_cases(candidate: str, test_cases: dict, timeout: float) -> tuple[float, list]:
+    """逐项判分时保留函数名；上游 continuous 分支会丢失 fn_name，误切到 stdin 模式。"""
+    from verl.utils.reward_score.prime_code.utils import check_correctness
+
+    code = _extract_executable_code(candidate)
+    inputs, outputs = test_cases["inputs"], test_cases["outputs"]
+    if not inputs or len(inputs) != len(outputs):
+        raise ValueError("call-based test cases require equally sized, non-empty inputs and outputs")
+    results, details = check_correctness(test_cases, code, timeout=max(1, int(timeout)), debug=False)
+    if len(results) == len(inputs) and all(item is True for item in results):
+        return 1.0, list(details)
+    passed, all_details = 0, []
+    for raw_input, expected in zip(inputs, outputs):
+        case = {**test_cases, "inputs": [raw_input], "outputs": [expected]}
+        result, detail = check_correctness(case, code, timeout=max(1, int(timeout)), debug=False)
+        passed += int(len(result) == 1 and result[0] is True)
+        all_details.extend(list(detail))
+    return passed / len(inputs), all_details
 
 
 def _normalize_code(value: str) -> str:

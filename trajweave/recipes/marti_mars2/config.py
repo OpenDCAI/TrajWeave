@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from trajweave.pipeline.config import hydra_path
+
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
@@ -104,7 +106,7 @@ def build_marti_mars2_launch_overrides(
         f"+agent.model_ids={_hydra_list(model_ids)}",
         f"+agent.model_sharing={model_sharing}",
         "+trajweave.recipe=marti_mars2_single_mcts",
-        f"+trajweave.config={source_config}",
+        f"+trajweave.config={hydra_path(source_config)}",
         f"+trajweave.coordination_protocol={coordination_protocol}",
         "+trajweave.trajectory_schema=tree_trajectory_v1",
         f"+trajweave.credit_allocator={credit_allocator}",

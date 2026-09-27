@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import re
 from typing import Any
+
+
+def hydra_path(value: str) -> str:
+    """保留普通路径写法，并转义中文、空格及 Hydra 语法字符。"""
+    if re.fullmatch(r"[A-Za-z0-9_./-]+", value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:

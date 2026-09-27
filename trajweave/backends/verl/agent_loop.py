@@ -19,11 +19,19 @@ from trajweave.backends.verl.agent_loops.registry import (
 from trajweave.backends.verl.batch_padding import pad_session_batch
 from trajweave.backends.verl.emitters import (
     AgentFlowEmitterMixin,
+    ATGRPOEmitterMixin,
+    C3EmitterMixin,
     CoMASEmitterMixin,
+    CoMLRLEmitterMixin,
     DrMASEmitterMixin,
     GiGPOEmitterMixin,
     MAPoRLEmitterMixin,
     MARTIMARS2EmitterMixin,
+    MARFTEmitterMixin,
+    MARSHALSelfPlayEmitterMixin,
+    MATPOEmitterMixin,
+    MrlXEmitterMixin,
+    WideSeekR1EmitterMixin,
 )
 from trajweave.backends.verl.emitters.registry import build_recipe_outputs, cleanup_recipe_state
 from trajweave.backends.verl.local_generation import HFLocalGenerationMixin
@@ -47,6 +55,9 @@ from trajweave.backends.verl.schema import (
 )
 from trajweave.backends.verl.schema import (
     padded_rm_scores as _padded_rm_scores,
+)
+from trajweave.backends.verl.schema import (
+    resolve_comlrl_extra_fields as _resolve_comlrl_extra_fields,
 )
 from trajweave.backends.verl.schema import (
     to_python as _to_python,
@@ -148,12 +159,24 @@ class TrajWeaveAgentLoopManager(AgentLoopManagerTQ):
         logger.info("Released local rollout models from %d AgentLoop workers", len(results))
         return results
 
+    def set_comlrl_iterative_context(self, context: dict[str, Any] | None) -> list[dict[str, Any]]:
+        normalized = dict(context or {})
+        return ray.get([worker.set_comlrl_iterative_context.remote(normalized) for worker in self.agent_loop_workers])
+
 
 @ray.remote
 class TrajWeaveSyntheticAgentLoopWorkerTQ(
     AgentFlowEmitterMixin,
+    ATGRPOEmitterMixin,
+    C3EmitterMixin,
     CoMASEmitterMixin,
     MARTIMARS2EmitterMixin,
+    CoMLRLEmitterMixin,
+    MARSHALSelfPlayEmitterMixin,
+    MARFTEmitterMixin,
+    MATPOEmitterMixin,
+    MrlXEmitterMixin,
+    WideSeekR1EmitterMixin,
     MAPoRLEmitterMixin,
     GiGPOEmitterMixin,
     DrMASEmitterMixin,
@@ -175,6 +198,13 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
 
     def release_local_models(self) -> dict[str, Any]:
         return HFLocalGenerationMixin.release_local_models(self)
+
+    def set_comlrl_iterative_context(self, context: dict[str, Any]) -> dict[str, Any]:
+        self._trajweave_comlrl_iterative_context = dict(context)
+        return {
+            "phase": self._trajweave_comlrl_iterative_context.get("phase"),
+            "iteration": self._trajweave_comlrl_iterative_context.get("iteration"),
+        }
 
     async def generate_sequences(self, batch) -> None:
         validate = bool(_to_python(batch["validate"])) if "validate" in batch else False
@@ -210,23 +240,75 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 _to_python(prompt.pop("__rollout_n__", config.n if not trajectory["validate"] else config.val_kwargs.n))
             )
             runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
-            for session_id in range(n):
-                use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
-                outputs = build_recipe_outputs(
-                    self,
-                    recipe=runtime.recipe,
-                    use_hf_local=use_hf_local,
-                    prompt=prompt,
-                    session_id=session_id,
-                    validate=trajectory["validate"],
-                )
-                await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
-                if any(
-                    bool(output.extra_fields.get("verifier_terminal")) or bool(output.extra_fields.get("search_stop"))
-                    for output in outputs
-                ):
-                    break
-            cleanup_recipe_state(self, recipe=runtime.recipe, uid=uid)
+            iterative_context_getter = getattr(self, "_comlrl_iterative_context", None)
+            iterative_context = iterative_context_getter() if callable(iterative_context_getter) else {}
+            if iterative_context.get("phase") == "preference":
+                n = int(iterative_context.get("num_target_candidates", n))
+            use_hf_local = runtime.agent_loop_backend == "hf_local_tq"
+            try:
+                if runtime.recipe == "c3_reasoner_actor_math":
+                    if n != 1:
+                        raise ValueError("C3 uses trajweave.c3.fanout for nested alternatives and requires rollout.n=1.")
+                    outputs = build_recipe_outputs(
+                        self,
+                        recipe=runtime.recipe,
+                        use_hf_local=use_hf_local,
+                        prompt=dict(prompt),
+                        session_id=0,
+                        validate=trajectory["validate"],
+                    )
+                    await self._put_outputs(outputs, validate=trajectory["validate"], session_id=0, **prompt)
+                elif runtime.recipe == "comlrl_joint_math":
+                    tree_prompt = dict(prompt)
+                    tree_prompt["__comlrl_num_candidates__"] = n
+                    self._comlrl_num_candidates(tree_prompt)
+                    self._comlrl_joint_mode()
+                    if use_hf_local:
+                        outputs = self._build_hf_comlrl_joint_math_outputs(
+                            tree_prompt,
+                            session_id=0,
+                            validate=trajectory["validate"],
+                        )
+                    else:
+                        outputs = self._build_comlrl_joint_math_outputs(
+                            tree_prompt,
+                            session_id=0,
+                            validate=trajectory["validate"],
+                        )
+                    await self._put_outputs(outputs, validate=trajectory["validate"], session_id=0, **prompt)
+                elif runtime.recipe == "atgrpo_solver_verifier_math" and not trajectory["validate"]:
+                    tree_prompt = dict(prompt)
+                    tree_prompt["__atgrpo_branch_factor__"] = n
+                    outputs = build_recipe_outputs(
+                        self,
+                        recipe=runtime.recipe,
+                        use_hf_local=use_hf_local,
+                        prompt=tree_prompt,
+                        session_id=0,
+                        validate=False,
+                    )
+                    await self._put_outputs(outputs, validate=False, session_id=0, **prompt)
+                else:
+                    for session_id in range(n):
+                        session_prompt = dict(prompt)
+                        if runtime.recipe == "atgrpo_solver_verifier_math":
+                            session_prompt["__atgrpo_branch_factor__"] = 1
+                        outputs = build_recipe_outputs(
+                            self,
+                            recipe=runtime.recipe,
+                            use_hf_local=use_hf_local,
+                            prompt=session_prompt,
+                            session_id=session_id,
+                            validate=trajectory["validate"],
+                        )
+                        await self._put_outputs(outputs, validate=trajectory["validate"], session_id=session_id, **prompt)
+                        if any(
+                            bool(output.extra_fields.get("verifier_terminal")) or bool(output.extra_fields.get("search_stop"))
+                            for output in outputs
+                        ):
+                            break
+            finally:
+                cleanup_recipe_state(self, recipe=runtime.recipe, uid=uid)
             await tq.async_kv_put(key=uid, partition_id=partition_id, tag={"status": "finished"})
         except Exception as exc:
             logger.exception("TrajWeave synthetic TQ worker failed for uid=%s", uid)
@@ -246,9 +328,11 @@ class TrajWeaveSyntheticAgentLoopWorkerTQ(
                 raise RuntimeError(f"Failed to mark rollout prompt {uid!r} as failure.") from status_exc
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
-        # Keep the established synthetic/HF writer while sharing its
-        # implementation with the native-vLLM worker below.
+        # HF 与原生 vLLM 共用 TQ 序列化和在线轨迹统计。
         await _TrajWeaveVLLMAgentLoopWorkerTQ._put_outputs(self, outputs, validate, **kwargs)
+
+    def _attach_worker_group_stats(self, rows) -> None:
+        _TrajWeaveVLLMAgentLoopWorkerTQ._attach_worker_group_stats(self, rows)
 
     def _write_online_turns(self, runtime, rows) -> None:
         _TrajWeaveVLLMAgentLoopWorkerTQ._write_online_turns(self, runtime, rows)
@@ -414,6 +498,10 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
 
     async def _put_outputs(self, outputs: list[AgentLoopOutput], validate: bool, **kwargs) -> None:
         runtime = TrajWeaveAgentLoopRuntimeConfig.from_verl_config(self.config)
+        if validate:
+            from trajweave.backends.verl.workflow_runtime import finalize_validation_outputs
+
+            outputs = finalize_validation_outputs(self, outputs)
         final_output = outputs[-1]
         if final_output.reward_score is not None:
             for output in outputs[:-1]:
@@ -426,10 +514,13 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
         uid, session_id = str(_to_python(kwargs["uid"])), int(kwargs["session_id"])
         keys, fields, tags = [], [], []
         online_turn_rows: list[dict[str, Any]] = []
+        # HF 使用实际加载的快照版本；同步 vLLM 使用本批次训练步数。
+        local_version = getattr(self, "_local_policy_version", None)
+        policy_version = local_version() if callable(local_version) else int(_to_python(kwargs["global_steps"]))
         for index, output in enumerate(outputs):
-            output.extra_fields.setdefault("min_global_steps", self._local_policy_version())
-            output.extra_fields.setdefault("max_global_steps", self._local_policy_version())
-            output.extra_fields.setdefault("policy_version", self._local_policy_version())
+            output.extra_fields.setdefault("min_global_steps", policy_version)
+            output.extra_fields.setdefault("max_global_steps", policy_version)
+            output.extra_fields.setdefault("policy_version", policy_version)
             prompt_ids = _to_python(output.prompt_ids)
             response_ids = _to_python(output.response_ids)
             response_mask_ids = _to_python(output.response_mask)
@@ -490,10 +581,23 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
             field["worker_group_model_path"] = output.extra_fields.get("worker_group_model_path") or ""
             field["agent_id"] = output.extra_fields.get("agent_id", _canonical_drmas_agent_id(field["agent_name"]))
             field["traj_uid"] = output.extra_fields.get("traj_uid", f"{uid}_{session_id}")
-            field["turn_id"] = index
+            # `index` is the position within the *trainable* turns of this session, which
+            # most recipes intentionally rely on (e.g. GiGPO's step-transition tracking
+            # expects a dense 0..N-1 sequence over its trainable solver turns even though
+            # the verifier is non-trainable). Recipes that need the orchestra's absolute
+            # turn index instead (e.g. AT-GRPO's turn-wise credit grouping, which mixes
+            # trainable and -- in principle -- non-trainable agents) can opt in by setting
+            # `turn_id` in extra_fields; see workflow_runtime.py's `_trajectory_to_outputs`.
+            field["turn_id"] = output.extra_fields.get("turn_id", index)
             for mas_field in MAS_EXTRA_FIELDS:
                 if mas_field in output.extra_fields:
                     field[mas_field] = output.extra_fields[mas_field]
+            field.update(
+                _resolve_comlrl_extra_fields(
+                    output.extra_fields,
+                    row_id=f"{uid}_{session_id}_{index}",
+                )
+            )
             field["session_id"] = session_id
             field["loss_mask"] = field["response_mask"]
             field["input_ids"] = input_ids
@@ -520,7 +624,7 @@ class _TrajWeaveVLLMAgentLoopWorkerTQ(MARTIMARS2EmitterMixin, AgentLoopWorker):
                     "recipe": runtime.recipe,
                     "uid": uid,
                     "session_id": session_id,
-                    "turn_id": index,
+                    "turn_id": _to_python(field["turn_id"]),
                     "validate": validate,
                     "agent_name": _to_python(field["agent_name"]),
                     "role": _to_python(field["role"]),

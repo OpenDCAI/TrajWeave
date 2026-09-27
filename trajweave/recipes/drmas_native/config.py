@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from trajweave.pipeline.config import hydra_path
+
 TRAJWEAVE_AGENT_LOOP_MANAGER_FQN = "trajweave.backends.verl.agent_loop.TrajWeaveAgentLoopManager"
 
 
@@ -105,7 +107,7 @@ def build_drmas_native_launch_overrides(
         f"+agent.model_sharing={model_sharing}",
         f"+agent.orchestra_type={spec.orchestra_type}",
         f"+trajweave.recipe={spec.runtime_recipe}",
-        f"+trajweave.config={source_config}",
+        f"+trajweave.config={hydra_path(source_config)}",
         f"+trajweave.coordination_protocol={spec.coordination_protocol}",
         "+trajweave.trajectory_schema=multi_agent_turn_v1",
         "+trajweave.credit_allocator=drmas_agent_wise_grpo",
