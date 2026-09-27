@@ -12,11 +12,11 @@ marti_mars2:
   model_ids: [policy_a, policy_b]
   worker_groups:
     policy_a:
-      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      model_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+      tokenizer_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
     policy_b:
-      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      model_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+      tokenizer_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
   agent_loop_backend: vllm_marti_tq
   multi_actor_training: true
   multi_actor_vllm:
@@ -53,13 +53,11 @@ verl:
   execute: true
   module: trajweave.backends.verl.main_ppo
   env:
-    CUDA_VISIBLE_DEVICES: "0,1"
     HF_HOME: outputs/marti_mars2_stage1e_vllm_async/hf
     HF_DATASETS_CACHE: outputs/marti_mars2_stage1e_vllm_async/hf/datasets
     TRANSFORMERS_CACHE: outputs/marti_mars2_stage1e_vllm_async/hf/transformers
     XDG_CACHE_HOME: outputs/marti_mars2_stage1e_vllm_async/cache
     TMPDIR: outputs/marti_mars2_stage1e_vllm_async/tmp
-    RAY_TMPDIR: outputs/marti_mars2_stage1e_vllm_async/ray
     NO_PROXY: localhost,127.0.0.1,::1
     TOKENIZERS_PARALLELISM: "false"
     VLLM_USE_V1: "1"
@@ -90,8 +88,8 @@ verl:
     - data.filter_overlong_prompts=false
     - data.truncation=right
     - data.shuffle=false
-    - actor_rollout_ref.model.path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-    - actor_rollout_ref.model.tokenizer_path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    - actor_rollout_ref.model.path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+    - actor_rollout_ref.model.tokenizer_path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
     - +actor_rollout_ref.model.override_config.attn_implementation=eager
     - actor_rollout_ref.model.use_remove_padding=false
     - actor_rollout_ref.model.enable_gradient_checkpointing=false

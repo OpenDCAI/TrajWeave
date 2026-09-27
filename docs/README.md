@@ -1,11 +1,23 @@
-# TrajWeave Docs
+# Documentation
 
-This directory is reserved for TrajWeave-specific architecture and recipe documentation.
+Start with [Getting started](getting-started.md), then choose a case from the [Recipe catalog](recipes.md).
 
-The previous upstream VERL documentation set was removed during repository cleanup. When adding new docs, keep them focused on:
+| Guide                                                                | Purpose                                                    |
+| -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [Architecture](trajweave-mas-layer.md)                               | MAS layers, contracts, and backend integration             |
+| [Validation record](validation.md)                                   | Measured integration results and limitations               |
+| [Contributing](../CONTRIBUTING.md)                                   | Development workflow and regression checks                 |
+| [Security](../SECURITY.md)                                           | Trust boundaries, artifacts, and reporting                 |
+| [Open-source readiness review](development/open-source-readiness.md) | Publication scope, portability fixes, and remaining limits |
 
-- Multi-Agent LLM RL architecture.
-- TrajWeave trajectory schema.
-- reward and credit assignment.
-- VERL backend adapter behavior.
-- runnable TrajWeave recipes.
+## Development archive
+
+These documents preserve engineering history; some are in Chinese. Use the setup and recipe guides above for current entry points.
+
+- [Previous README](development/README-legacy.md)
+- [QF/LZ integration notes](development/pr24-integration.md)
+- [MARTI integration progress](development/marti-mars2-integration-progress.md)
+- [MARTI five-axis mapping](development/marti-mars2-five-axis-mapping.md)
+- [Bug-fix rubric](bugfix-rubric.md)
+
+The retained VERL code has its own upstream history and attribution. TrajWeave's documentation focuses on the MAS layer and its actual integration boundaries.

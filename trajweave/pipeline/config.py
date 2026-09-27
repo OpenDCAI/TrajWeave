@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 
@@ -23,6 +23,23 @@ def load_yaml_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Config must be a YAML mapping: {path}")
     return data
+
+
+def resolve_model_references(value: Any) -> Any:
+    """在角色校验前解析模型环境变量，保留由训练子进程解析的 Hydra overrides。"""
+    if isinstance(value, dict):
+        resolved = {}
+        for key, item in value.items():
+            if key in {"model_path", "tokenizer_path", "reward_model_name"} and isinstance(item, str):
+                if "${oc.env:" in item:
+                    from omegaconf import OmegaConf
+
+                    item = OmegaConf.create({"value": item}).value
+            resolved[key] = resolve_model_references(item)
+        return resolved
+    if isinstance(value, list):
+        return [resolve_model_references(item) for item in value]
+    return value
 
 
 def recipe_name(config: dict[str, Any]) -> str:

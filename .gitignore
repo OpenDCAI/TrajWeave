@@ -94,6 +94,8 @@ celerybeat-schedule
 
 # dotenv
 .env
+.env.*
+!.env.example
 
 # virtualenv
 venv/
@@ -162,3 +164,12 @@ trackio/
 # Node / Remotion assets
 node_modules/
 .remotion-output/
+
+# 本地工作树、数据与实验笔记不属于发布内容。
+.worktree/
+.worktrees/
+.Worktree/
+WORKTREE.md
+.pytest_cache/
+/models/
+/data/

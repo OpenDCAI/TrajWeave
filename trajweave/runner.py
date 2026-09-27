@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from trajweave.pipeline.assets import maybe_prepare_assets
-from trajweave.pipeline.config import load_yaml_config, mode_name, recipe_name
+from trajweave.pipeline.config import load_yaml_config, mode_name, recipe_name, resolve_model_references
 from trajweave.pipeline.context import RunContext
 from trajweave.pipeline.registry import run_recipe
 from trajweave.recipes.registry import resolve_recipe, validate_recipe_mode
@@ -19,6 +19,7 @@ def run_from_config_path(path: str | Path) -> dict[str, Any]:
 
 
 def run_from_config(config: dict[str, Any], config_path: str | None = None) -> dict[str, Any]:
+    config = resolve_model_references(config)
     recipe = recipe_name(config)
     recipe_definition = resolve_recipe(recipe)
     mode = mode_name(config)

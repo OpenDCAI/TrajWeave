@@ -1,0 +1,11 @@
+# H20 最小训练验收使用的关键版本；CUDA wheel 源由安装命令指定。
+torch==2.9.0
+torchvision==0.24.0
+torchaudio==2.9.0
+vllm==0.12.0
+transformers==4.57.1
+ray==2.49.2
+tensordict==0.10.0
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+TransferQueue==0.1.8

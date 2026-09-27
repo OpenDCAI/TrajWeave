@@ -69,11 +69,7 @@ python -m trajweave.cli.run \
 
 最终代码提交 `b0e1566` 的联合 CPU 回归：957 passed、70 warnings，耗时 253.78 秒；`verl`、`trajweave` 编译检查通过。另有 16 项真实 PRIME 子进程测试通过。训练使用两台私有 ARNOLD Worker 的 H20，每项按配置占用 1 至 4 张卡；两步 tiny 验收不涵盖大规模训练、全部超参数组合或断点恢复。
 
-本次 NAS 证据目录：
-
-```text
-/mnt/bn/liuzhou-hl-training/liuzhou/projects/1-github_projs/项目索引与工具/代码审查/TrajWeave/2026-09-27-integration
-```
+本次原始证据保存在维护者的外部存储中，不随 Git 发布。公开的可移植验收说明见 [Validation record](../validation.md)。
 
 - `验收报告.md`：逐配置结果及交付信息。
 - `gpu-smoke/results.json`：实际 run 路径、步数、回合、梯度和 checkpoint。

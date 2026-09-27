@@ -27,7 +27,6 @@ verl:
   stderr_path: outputs/matpo_browse_qwen05b/verl_stderr.log
   module: trajweave.backends.verl.main_ppo
   env:
-    CUDA_VISIBLE_DEVICES: "0"
     HF_HOME: "outputs/.hf_cache"
     HF_DATASETS_CACHE: "outputs/.hf_cache/datasets"
     TRANSFORMERS_CACHE: "outputs/.hf_cache/transformers"

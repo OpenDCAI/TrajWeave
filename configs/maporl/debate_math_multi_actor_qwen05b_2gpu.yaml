@@ -22,13 +22,13 @@ maporl:
   alpha: [0.0, 0.0, 0.0, 0.0]
   worker_groups:
     qwen05b_instruct:
-      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      model_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+      tokenizer_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
       trainable: true
       gpus: 1
     qwen05b_base:
-      model_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B
-      tokenizer_path: /data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+      model_path: ${oc.env:TRAJWEAVE_QWEN05B_BASE_PATH,Qwen/Qwen2.5-0.5B}
+      tokenizer_path: ${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
       trainable: true
       gpus: 1
 
@@ -63,14 +63,12 @@ verl:
   stderr_path: outputs/maporl_debate_math_multi_actor_qwen05b_2gpu/verl_stderr.log
   module: trajweave.backends.verl.main_ppo
   env:
-    CUDA_VISIBLE_DEVICES: "0,1"
     HF_HOME: "outputs/.hf_cache"
     HF_DATASETS_CACHE: "outputs/.hf_cache/datasets"
     TRANSFORMERS_CACHE: "outputs/.hf_cache/transformers"
     NO_PROXY: "localhost,127.0.0.1,::1"
     TOKENIZERS_PARALLELISM: "false"
     RAY_DEDUP_LOGS: "0"
-    RAY_TMPDIR: "/data/workspace/liuzhou/raytw"
     NCCL_P2P_DISABLE: "1"
     NCCL_IB_DISABLE: "1"
   overrides:
@@ -98,8 +96,8 @@ verl:
     - data.filter_overlong_prompts=false
     - data.truncation=right
     - data.shuffle=false
-    - actor_rollout_ref.model.path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-    - actor_rollout_ref.model.tokenizer_path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    - actor_rollout_ref.model.path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+    - actor_rollout_ref.model.tokenizer_path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
     - +actor_rollout_ref.model.override_config.attn_implementation=eager
     - actor_rollout_ref.model.use_remove_padding=false
     - actor_rollout_ref.model.enable_gradient_checkpointing=false
@@ -125,8 +123,8 @@ verl:
     - algorithm.use_kl_in_reward=false
     - critic.enable=true
     - critic.strategy=fsdp
-    - critic.model.path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
-    - critic.model.tokenizer_path=/data/workspace/liuzhou/models/Qwen2.5-0.5B-Instruct
+    - critic.model.path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+    - critic.model.tokenizer_path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
     - +critic.model.override_config.attn_implementation=eager
     - critic.model.use_remove_padding=false
     - critic.model.enable_gradient_checkpointing=false

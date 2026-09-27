@@ -85,6 +85,7 @@ ignore_errors = false
 
 [tool.setuptools]
 include-package-data = true
+license-files = ["LICENSE", "Notice.txt", "licenses/*.txt"]
 
 [tool.setuptools.dynamic]
 version = {file = "verl/version/version"}

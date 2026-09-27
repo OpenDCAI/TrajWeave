@@ -54,6 +54,7 @@ setup(
     packages=find_packages(where="."),
     url="https://github.com/OpenDCAI/TrajWeave",
     license="Apache-2.0",
+    license_files=["LICENSE", "Notice.txt", "licenses/*.txt"],
     author="OpenDCAI",
     description="TrajWeave: a Multi-Agent LLM RL framework built on the VERL training backend",
     install_requires=install_requires,
