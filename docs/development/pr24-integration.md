@@ -54,9 +54,32 @@ python -m trajweave.cli.run \
 - 多 Actor 的启动校验按各角色实际 GPU 数验证；独立 critic 单独校验，避免误把三张独立模型卡当作三卡数据并行。
 - Ray 临时目录使用短哈希，避免算法名和中文输出目录导致 Unix socket 超过 107 字节。
 - PRIME 的函数调用任务逐项判分保留 `fn_name`，避免部分通过时错误切换到 stdin 测试。
+- MADPO 接受 VERL 默认配置中实际关闭的 rollout correction；显式开启时仍拒绝不兼容的组合。
+- MADPO 损失兼容 LZ 已抽取的扁平响应 log-prob，按响应长度还原偏好对并保留梯度；同时将 TQ 传递的链表标量元数据转换为张量。
 
 **验收口径**
 
 需共同检查进程正常退出、实际 optimizer 步数、在线轨迹、有限的损失/梯度和 checkpoint；预期有学习信号的方法还需检查非零梯度及参数变化。多 Actor 路径应确认各组正确分发、更新和同步。规则生成的 tiny 数据仅用于检查训练链路，不能据此推断论文指标、收敛质量或算法优劣。
 
-本次实测状态和证据将在训练完成后补充。
+**2026-09-27 实测结果**
+
+25/25 个配置正常退出，均完成 2 个训练步，生成在线训练/验证回合、指标及 checkpoint。24 个配置有非零梯度；AgentFlow 使用 Qwen3-0.6B 时格式有效，但这批样本奖励全为 1，优势和梯度为零，因此仅确认流程可运行，未确认有效学习。没有放宽格式或奖励判定。
+
+所有保存的 Actor/Critic checkpoint 均抽查第 0、12、23 层 q_proj 或 LoRA_B，数值有限且参数有变化；这不是全量权重数值检查。AgentFlow 的微小参数变化也不能单独视为有效学习。MARLHF 和迭代 MARLHF 另检查了奖励模型参数变化、偏好对和迭代回放，两个迭代偏好工作流均记录为 completed。MARTI 原生 vLLM 的十项严格验收全部通过，包含真实 PRIME 判分、多 Actor 路由/权重同步、有限非零梯度和 rollout correction。
+
+最终代码提交 `b0e1566` 的联合 CPU 回归：957 passed、70 warnings，耗时 253.78 秒；`verl`、`trajweave` 编译检查通过。另有 16 项真实 PRIME 子进程测试通过。训练使用两台私有 ARNOLD Worker 的 H20，每项按配置占用 1 至 4 张卡；两步 tiny 验收不涵盖大规模训练、全部超参数组合或断点恢复。
+
+本次 NAS 证据目录：
+
+```text
+/mnt/bn/liuzhou-hl-training/liuzhou/projects/1-github_projs/项目索引与工具/代码审查/TrajWeave/2026-09-27-integration
+```
+
+- `验收报告.md`：逐配置结果及交付信息。
+- `gpu-smoke/results.json`：实际 run 路径、步数、回合、梯度和 checkpoint。
+- `gpu-smoke/final-acceptance.json`：25 项最终产物核对，24 项非零梯度。
+- `gpu-smoke/checkpoint-audit.json`、`reward-model-audit.json`：策略、critic 和奖励模型参数抽查。
+- `cpu-final-b0e1566/pytest-qf-isolated.xml`：最终联合回归。
+- `lz-dev-smoke/suite.json`：从 LZ 工作树生成的可运行配置、GPU 需求和完整命令。
+
+先前失败尝试的 run 目录仍保留，最新通过记录由 `results.json` 指向；不要把一次失败日志或早期零奖励记录当作最终状态。

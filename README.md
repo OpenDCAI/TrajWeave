@@ -8,6 +8,8 @@ TrajWeave 是一个基于 VERL 的多智能体大模型强化学习框架。这�
 
 这份 README 面向贡献者。后续如果要新增论文、环境、编排协议、credit 规则、VERL bridge 或实验入口，先从这里开始。
 
+QF/LZ 整合的最小训练配置生成方法、实际验收结果和限制见 [整合与训练指南](docs/development/pr24-integration.md)。
+
 ## 1. 当前状态
 
 TrajWeave 现在接入了十五条 MASRL 路径（部分论文方向含多个任务或算法变体）：
@@ -17,20 +19,20 @@ TrajWeave 现在接入了十五条 MASRL 路径（部分论文方向含多个任
 | DrMAS Math            | solver -> verifier loop                       | smoke、tiny、Qwen2.5-0.5B 双卡真实 GRPO 训练已验证                  |
 | DrMAS Search          | verifier -> searcher -> evidence -> answer    | smoke、Qwen2.5-0.5B 双卡真实 GRPO 训练和 evidence 回写已验证        |
 | MAPoRL Debate Math    | multiple agents debate until consensus        | 两个独立 0.5B Actor Worker Group、shared critic、双卡 PPO 已验证    |
-| AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | Qwen2.5-0.5B 双卡真实 Flow-GRPO 已验证，只更新 Planner              |
+| AgentFlow PlannerTool | planner -> executor -> tool -> verifier       | 只更新 Planner；本次 0.6B 两步流程完成，但同组奖励相同、梯度为零，尚未确认有效学习 |
 | GiGPO SolverVerifier  | solver -> frozen verifier -> retry or stop    | episode + step 两级优势、0.5B 双卡真实训练和权重回流已验证          |
 | AT-GRPO SolverVerifier | selected-spine solver/verifier tree | sibling 分组、训练/验证拓扑、标准 clipped-PPO 和 tiny Trainer 2-step 已验证；随机 HF tiny 仍可能出现组内零方差 |
 | CoMAS PeerReview Math | all agents -> solver/evaluator/scorer         | 交互奖励、双独立 Actor Worker Group、0.5B 双卡 REINFORCE/PPO 已验证 |
 | MARTI-MARS² Code      | multi-agent MCTS tree search and refinement  | tree-group credit、code verifier和native vLLM 多 Actor 同步训练已接入 |
 | MATPO Browse          | planner -> worker tool -> summary -> planner final | 0.9/0.1 combined reward、parent-broadcast、batch-size-2 tiny Trainer 和历史 Qwen 8-step 已验证 |
-| MrlX / M-GRPO Research | on-policy Main Explorer -> off-policy Sub Adapter -> research tool | 双独立策略、角色级 GRPO、Adapter 一步滞后 replay 已完成 CPU/TransferQueue 验证；真实双卡训练待验收 |
+| MrlX / M-GRPO Research | on-policy Main Explorer -> off-policy Sub Adapter -> research tool | 0.5B 双卡两步训练完成；Explorer、延迟 Adapter、退出时 replay 更新均有非零梯度 |
 | WideSeek-R1 Broad Search | lead -> parallel isolated subagents -> search/access -> synthesis | 共享策略、trajectory advantage broadcast、agent/token 双层重加权和 Qwen2.5-0.5B 单卡真实训练已验证 |
 | MARSHAL Strategic Self-Play | player 0 <-> player 1 alternating game turns | 共享 LoRA 策略、玩家子轨迹、turn-level REINFORCE、agent-specific normalization 和 Qwen2.5-0.5B 单卡训练已验证 |
-| CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | MAGRPO family、separate-critic IAC/MAAC、MADPO、MARLHF 与 iterative 路径已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
-| MARFT Cooperative Math | planner -> solver/verifier static DAG | shared history、三种 credit、共享/角色 LoRA 和共享/独立 critic 已接入；CPU/bridge 门禁已覆盖，真实训练待验收 |
-| C3 ReasonerActor Math | frozen-context Reasoner -> Actor nested prefix tree | Rule-B sibling LOO/full-mean credit、reward/value variants、centralized prefix-Q critic 已接入；CPU/TransferQueue 门禁已覆盖，真实多 GPU 训练待验收 |
+| CoMLRL Joint Collaboration | decentralized actors -> aligned/cross joint-action tree | 十个算法配置均完成 0.5B 两步训练并有非零梯度；包含独立 critic、奖励模型训练及两种迭代偏好流程 |
+| MARFT Cooperative Math | planner -> solver/verifier static DAG | 0.5B 两步 Actor/critic 训练完成，LoRA 参数变化已检查；其他 credit/策略组合需另行验证 |
+| C3 ReasonerActor Math | frozen-context Reasoner -> Actor nested prefix tree | 0.5B 三卡两步训练完成，Reasoner、Actor、prefix-Q critic 均有非零梯度和参数变化 |
 
-当前成熟度是“已有路径的框架级真实训练闭环已经跑通”，不是 paper-scale benchmark reproduction。这里的“跑通”至少要求：真实模型生成、reward/credit 生效、Actor 产生有效梯度、更新后的权重进入下一轮 rollout，并且日志、trajectory、metrics 和 checkpoint 都能审计。MrlX、CoMLRL、MARFT 和 C3 当前只声明 CPU 算法/bridge 集成完成，不把 command plan 或历史 dry-run 当成真实训练证据。
+当前成熟度是最小训练链路验证，尚未复现 paper-scale benchmark。验收检查真实模型生成、reward/credit、Actor 更新、权重同步，以及可审计的日志、trajectory、metrics 和 checkpoint；有效学习还需非零梯度。各项结果和 AgentFlow 的零梯度限制见整合与训练指南，配置解析和历史 dry-run 不作为真实训练证据。
 
 验证证据必须分级记录：CPU smoke 覆盖确定性 RolloutEngine/credit；CPU bridge 覆盖 DataProto、hook、fake workflow 和进程内真实 TransferQueue；真实 VERL 训练要求 `main_ppo`、模型 rollout、Actor 更新与运行产物。当前 MATPO/AT-GRPO 均有 2-step tiny Trainer 记录：synthetic 路径产生有限非零梯度；随机初始化 HF tiny 可因格式失败或 sibling 同质化出现零优势，因此不能替代真实 Qwen 稳定性基准。
 
