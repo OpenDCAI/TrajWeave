@@ -1,0 +1,16 @@
+recipe: mrlx.mgrpo_research_qa
+mode: smoke
+
+mrlx:
+  explorer_agent: main_explorer
+  adapter_agent: sub_adapter
+  explorer_model_id: explorer_policy
+  adapter_model_id: adapter_policy
+  tool_name: search_and_browse
+  research_rounds: 1
+  adapter_delay_steps: 1
+  explorer_format_bonus: 0.1
+  adapter_format_bonus: 0.1
+
+rollout:
+  rollouts_per_task: 2

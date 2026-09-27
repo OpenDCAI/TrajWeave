@@ -1,0 +1,39 @@
+recipe: marft.cooperative_math
+mode: smoke
+
+marft:
+  graph_type: sequential
+  role_names: [planner, solver]
+  role_configs:
+    planner:
+      system_prompt: >
+        You are a math problem planner. Break the problem into clear numbered
+        steps. Do not solve it; provide only the plan.
+    solver:
+      system_prompt: >
+        You are a math solver. Follow the shared plan, solve the problem step
+        by step, and finish with 'Final answer: <number>'.
+  transition_messages:
+    - null
+    - Follow the planner's proposed steps and produce the final answer.
+  credit_strategy: equal
+  credit_discount: 1.0
+  return_gamma: 1.0
+  shared_policy: true
+  use_multi_lora: true
+  shared_lora: true
+  independent_critic: null
+  kl_coef: 0.1
+  kl_penalty: low_var_kl
+
+backend:
+  type: rule
+  device: cpu
+
+rollout:
+  rollouts_per_task: 1
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: marft-deepscaler-2agent-smoke
+  tags: [marft, math, smoke]

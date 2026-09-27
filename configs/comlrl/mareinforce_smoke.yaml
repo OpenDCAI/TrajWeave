@@ -1,0 +1,18 @@
+recipe: comlrl.mareinforce
+mode: smoke
+
+comlrl:
+  algorithm: mareinforce
+  agent_ids: [agent_0, agent_1]
+  model_ids: [policy_0, policy_1]
+  joint_mode: aligned
+  max_turns: 2
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: comlrl-mareinforce-smoke
+  tags: [comlrl, mareinforce, smoke]
+
+logging:
+  level: INFO
+  console: true

@@ -1,0 +1,31 @@
+recipe: doctor_mas_math
+mode: verl_plan
+
+backend:
+  type: rule
+  device: cpu
+
+team:
+  max_turns: 2
+
+rollout:
+  rollouts_per_task: 2
+
+export:
+  dataproto_path: outputs/doctor_mas_verl_export/math_samples.pt
+  required: false
+
+verl:
+  enabled: true
+  execute: false
+  command_file: outputs/doctor_mas_verl_export/run_verl_ppo.sh
+  python: python3
+  module: verl.trainer.main_ppo
+  overrides:
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=doctor_mas_math
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=1
+    - algorithm.adv_estimator=grpo
+    - ++algorithm.group_by_agent_id=true
+    - trainer.logger=[console]

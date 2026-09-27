@@ -1,0 +1,26 @@
+recipe: doctor_mas_math
+mode: train_tiny
+
+backend:
+  type: tiny-torch
+  device: cpu
+
+team:
+  max_turns: 2
+
+rollout:
+  rollouts_per_task: 4
+
+training:
+  steps: 20
+  batch_tasks: 8
+  eval_interval: 5
+  lr: 0.03
+  entropy_coef: 0.02
+  seed: 7
+  task_mode: fixed
+  num_solver_candidates: 3
+  train_verifier: false
+
+output:
+  dir: outputs/doctor_mas_tiny_train_from_yaml

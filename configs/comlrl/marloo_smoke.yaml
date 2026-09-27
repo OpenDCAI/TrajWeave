@@ -1,0 +1,18 @@
+recipe: comlrl.marloo
+mode: smoke
+
+comlrl:
+  algorithm: marloo
+  agent_ids: [agent_0, agent_1]
+  model_ids: [policy_0, policy_1]
+  joint_mode: aligned
+  max_turns: 2
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: comlrl-marloo-smoke
+  tags: [comlrl, marloo, smoke]
+
+logging:
+  level: INFO
+  console: true

@@ -1,0 +1,130 @@
+recipe: marft.cooperative_math
+mode: verl_train
+
+marft:
+  graph_type: sequential
+  role_names: [planner, solver]
+  role_configs:
+    planner:
+      system_prompt: >
+        You are a math problem planner. Break the problem into clear numbered
+        steps. Do not solve it; provide only the plan.
+    solver:
+      system_prompt: >
+        You are a math solver. Follow the shared plan, solve the problem step
+        by step, and finish with 'Final answer: <number>'.
+  transition_messages:
+    - null
+    - Follow the planner's proposed steps and produce the final answer.
+  credit_strategy: equal
+  credit_discount: 1.0
+  return_gamma: 1.0
+  shared_policy: true
+  use_multi_lora: true
+  shared_lora: true
+  lora_rank: 8
+  lora_alpha: 16
+  lora_target_modules: all-linear
+  independent_critic: null
+  kl_coef: 0.1
+  kl_penalty: low_var_kl
+  ref_log_prob_micro_batch_size_per_gpu: 1
+  agent_loop_backend: hf_local_tq
+  hf_local_dtype: fp32
+  worker_groups:
+    shared:
+      model_path: outputs/marft_deepscaler_2agent_tiny_assets/model
+      tokenizer_path: outputs/marft_deepscaler_2agent_tiny_assets/model
+      trainable: true
+      gpus: 1
+
+prepare:
+  tiny_verl_assets:
+    enabled: true
+    output_dir: outputs/marft_deepscaler_2agent_tiny_assets
+    task_family: math
+    train_size: 2
+    val_size: 2
+    overwrite: true
+
+verl:
+  enabled: true
+  execute: true
+  command_file: outputs/marft_deepscaler_2agent_tiny/run_verl_ppo.sh
+  stdout_path: outputs/marft_deepscaler_2agent_tiny/verl_stdout.log
+  stderr_path: outputs/marft_deepscaler_2agent_tiny/verl_stderr.log
+  module: trajweave.backends.verl.main_ppo
+  env:
+    HF_HOME: outputs/.hf_cache
+    HF_DATASETS_CACHE: outputs/.hf_cache/datasets
+    TRANSFORMERS_CACHE: outputs/.hf_cache/transformers
+    NO_PROXY: localhost,127.0.0.1,::1
+    TOKENIZERS_PARALLELISM: "false"
+    RAY_DEDUP_LOGS: "0"
+  overrides:
+    - trainer.use_v1=true
+    - trainer.v1.trainer_mode=sync
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=marft_deepscaler_2agent_tiny
+    - trainer.nnodes=1
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=2
+    - trainer.total_training_steps=2
+    - trainer.save_freq=1
+    - trainer.test_freq=-1
+    - trainer.val_before_train=false
+    - trainer.logger=[console]
+    - trainer.resume_mode=disable
+    - trainer.default_local_dir=outputs/marft_deepscaler_2agent_tiny/checkpoints
+    - data.train_files=outputs/marft_deepscaler_2agent_tiny_assets/train.jsonl
+    - data.val_files=outputs/marft_deepscaler_2agent_tiny_assets/val.jsonl
+    - data.train_batch_size=2
+    - data.val_batch_size=2
+    - data.max_prompt_length=64
+    - data.max_response_length=24
+    - data.dataloader_num_workers=0
+    - data.filter_overlong_prompts=false
+    - data.truncation=right
+    - data.shuffle=false
+    - actor_rollout_ref.model.path=outputs/marft_deepscaler_2agent_tiny_assets/model
+    - actor_rollout_ref.model.tokenizer_path=outputs/marft_deepscaler_2agent_tiny_assets/model
+    - +actor_rollout_ref.model.override_config.attn_implementation=eager
+    - actor_rollout_ref.model.use_remove_padding=false
+    - actor_rollout_ref.model.enable_gradient_checkpointing=false
+    - actor_rollout_ref.rollout.name=hf
+    - actor_rollout_ref.rollout.n=1
+    - actor_rollout_ref.rollout.val_kwargs.n=1
+    - actor_rollout_ref.rollout.prompt_length=64
+    - actor_rollout_ref.rollout.response_length=24
+    - actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    - actor_rollout_ref.rollout.calculate_log_probs=false
+    - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=128
+    - actor_rollout_ref.rollout.agent.num_workers=1
+    - actor_rollout_ref.actor.ppo_mini_batch_size=2
+    - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.actor.ppo_max_token_len_per_gpu=128
+    - actor_rollout_ref.actor.use_torch_compile=false
+    - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
+    - +actor_rollout_ref.actor.fsdp_config.mixed_precision={param_dtype:fp32,reduce_dtype:fp32,buffer_dtype:fp32}
+    - actor_rollout_ref.actor.optim.lr=1e-5
+    - critic.enable=true
+    - critic.strategy=fsdp
+    - critic.model.path=outputs/marft_deepscaler_2agent_tiny_assets/model
+    - critic.model.tokenizer_path=outputs/marft_deepscaler_2agent_tiny_assets/model
+    - +critic.model.override_config.attn_implementation=eager
+    - critic.model.use_remove_padding=false
+    - critic.model.enable_gradient_checkpointing=false
+    - critic.ppo_mini_batch_size=2
+    - critic.ppo_micro_batch_size_per_gpu=1
+    - critic.ppo_max_token_len_per_gpu=128
+    - critic.forward_max_token_len_per_gpu=128
+    - critic.optim.lr=1e-5
+    - reward.num_workers=1
+    - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
+    - ray_kwargs.ray_init.num_cpus=8
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: marft-deepscaler-2agent-verl-tiny
+  tags: [marft, math, verl, tiny]

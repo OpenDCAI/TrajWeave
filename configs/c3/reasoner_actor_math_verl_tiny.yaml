@@ -1,0 +1,76 @@
+recipe: c3.reasoner_actor_math
+mode: verl_plan
+
+c3:
+  fanout: [2, 2]
+  role_order: [reasoner, actor]
+  credit_variant: value_assisted
+  baseline_mode: loo
+  value_assisted_alpha: 1.0
+  normalize_advantages: true
+  agent_loop_backend: hf_local_tq
+  hf_local_model_cache_size: 2
+  agent_ids: [reasoner, actor]
+  model_ids: [reasoner, actor]
+  worker_groups:
+    reasoner:
+      model_path: /path/to/reasoner_actor_model
+      tokenizer_path: /path/to/tokenizer
+      trainable: true
+      gpus: 1
+    actor:
+      model_path: /path/to/reasoner_actor_model
+      tokenizer_path: /path/to/tokenizer
+      trainable: true
+      gpus: 1
+  critic:
+    critic_group: c3-q-critic
+    model_path: /path/to/q_critic
+    tokenizer_path: /path/to/tokenizer
+    gpus: 1
+    max_length: 2048
+    learning_rate: 5.0e-6
+    value_loss_coef: 1.0
+
+verl:
+  enabled: true
+  execute: false
+  overrides:
+    - trainer.use_v1=true
+    - transfer_queue.enable=true
+    - data.train_files=/path/to/train.parquet
+    - data.val_files=/path/to/val.parquet
+    - data.train_batch_size=3
+    - data.val_batch_size=2
+    - data.max_prompt_length=256
+    - data.max_response_length=128
+    - data.dataloader_num_workers=0
+    - +actor_rollout_ref.model.override_config.attn_implementation=eager
+    - actor_rollout_ref.model.use_remove_padding=false
+    - actor_rollout_ref.model.enable_gradient_checkpointing=false
+    - actor_rollout_ref.actor.ppo_mini_batch_size=2
+    - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.actor.use_torch_compile=false
+    - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
+    - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.rollout.name=hf
+    - actor_rollout_ref.rollout.n=1
+    - actor_rollout_ref.rollout.val_kwargs.n=1
+    - actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    - actor_rollout_ref.rollout.calculate_log_probs=false
+    - actor_rollout_ref.rollout.agent.num_workers=1
+    - +critic.model.override_config.attn_implementation=eager
+    - critic.model.use_remove_padding=false
+    - critic.model.enable_gradient_checkpointing=false
+    - critic.ppo_micro_batch_size_per_gpu=1
+    - algorithm.use_kl_in_reward=false
+    - reward.num_workers=1
+    - trainer.total_epochs=1
+    - trainer.total_training_steps=1
+    - trainer.logger=[console]
+    - trainer.nnodes=1
+    - trainer.n_gpus_per_node=3
+
+prepare:
+  tiny_verl_assets:
+    enabled: false

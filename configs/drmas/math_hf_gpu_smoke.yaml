@@ -1,0 +1,17 @@
+recipe: doctor_mas_math
+mode: smoke
+
+backend:
+  type: hf-transformers
+  model_path: __tiny_random_gpt2__
+  device: cuda:0
+  max_new_tokens: 24
+  generation_config:
+    do_sample: false
+    pad_token_id: 0
+
+team:
+  max_turns: 1
+
+rollout:
+  rollouts_per_task: 1

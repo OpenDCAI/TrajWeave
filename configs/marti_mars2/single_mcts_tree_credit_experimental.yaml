@@ -1,0 +1,18 @@
+recipe: marti_mars2.single_mcts.smoke
+mode: smoke
+
+marti_mars2:
+  max_num_nodes: 3
+  agent_ids: ["generator"]
+  model_ids: ["shared"]
+  enable_vllm_is_correction: false
+
+credit:
+  mode: experimental
+  type: marti_mars2_tree_path_grpo
+  parent_sibling_gamma: 0.3
+  sibling_mix: 0.5
+  path_discount: 0.3
+
+rollout:
+  rollouts_per_task: 1

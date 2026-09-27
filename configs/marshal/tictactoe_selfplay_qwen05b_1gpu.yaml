@@ -1,0 +1,100 @@
+recipe: marshal.tictactoe_selfplay
+mode: verl_train
+
+marshal:
+  agent_loop_backend: hf_local_tq
+  game: tictactoe
+  player_ids: [player_0, player_1]
+  shared_model_id: shared_policy
+  max_actions: 9
+  format_reward: 0.05
+  allow_bare_actions: true
+  gamma: 1.0
+  reward_normalization: mean
+  advantage_normalization: mean
+  whiten_rewards: true
+  whiten_advantages: true
+  kl_loss_coef: 0.2
+  lora_rank: 8
+  lora_alpha: 16
+  lora_target_modules: all-linear
+  ref_log_prob_micro_batch_size_per_gpu: 1
+
+prepare:
+  verl_dataset:
+    enabled: true
+    output_dir: outputs/marshal_tictactoe_qwen05b_dataset
+    task_family: strategic_game
+    recipe_name: marshal_tictactoe_selfplay
+    train_size: 4
+    val_size: 2
+    overwrite: true
+
+verl:
+  enabled: true
+  execute: true
+  command_file: outputs/marshal_tictactoe_qwen05b/run_verl_ppo.sh
+  stdout_path: outputs/marshal_tictactoe_qwen05b/verl_stdout.log
+  stderr_path: outputs/marshal_tictactoe_qwen05b/verl_stderr.log
+  module: trajweave.backends.verl.main_ppo
+  env:
+    HF_HOME: outputs/.hf_cache
+    HF_DATASETS_CACHE: outputs/.hf_cache/datasets
+    TRANSFORMERS_CACHE: outputs/.hf_cache/transformers
+    NO_PROXY: localhost,127.0.0.1,::1
+    TOKENIZERS_PARALLELISM: "false"
+    RAY_DEDUP_LOGS: "0"
+  overrides:
+    - trainer.use_v1=true
+    - trainer.v1.trainer_mode=sync
+    - trainer.project_name=trajweave
+    - trainer.experiment_name=marshal_tictactoe_qwen05b
+    - trainer.nnodes=1
+    - trainer.n_gpus_per_node=1
+    - trainer.total_epochs=1
+    - trainer.total_training_steps=2
+    - trainer.save_freq=-1
+    - trainer.test_freq=-1
+    - trainer.val_before_train=false
+    - trainer.logger=[console]
+    - trainer.resume_mode=disable
+    - trainer.default_local_dir=outputs/marshal_tictactoe_qwen05b/checkpoints
+    - data.train_files=outputs/marshal_tictactoe_qwen05b_dataset/train.jsonl
+    - data.val_files=outputs/marshal_tictactoe_qwen05b_dataset/val.jsonl
+    - data.train_batch_size=2
+    - data.val_batch_size=2
+    - data.max_prompt_length=512
+    - data.max_response_length=64
+    - data.dataloader_num_workers=0
+    - data.filter_overlong_prompts=false
+    - data.truncation=right
+    - data.shuffle=false
+    - actor_rollout_ref.model.path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+    - actor_rollout_ref.model.tokenizer_path=${oc.env:TRAJWEAVE_QWEN05B_INSTRUCT_PATH,Qwen/Qwen2.5-0.5B-Instruct}
+    - +actor_rollout_ref.model.override_config.attn_implementation=eager
+    - actor_rollout_ref.model.use_remove_padding=false
+    - actor_rollout_ref.model.enable_gradient_checkpointing=false
+    - actor_rollout_ref.rollout.name=hf
+    - actor_rollout_ref.rollout.n=2
+    - actor_rollout_ref.rollout.val_kwargs.n=2
+    - actor_rollout_ref.rollout.prompt_length=512
+    - actor_rollout_ref.rollout.response_length=64
+    - actor_rollout_ref.rollout.tensor_model_parallel_size=1
+    - actor_rollout_ref.rollout.calculate_log_probs=false
+    - actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=576
+    - actor_rollout_ref.rollout.agent.num_workers=1
+    - actor_rollout_ref.actor.ppo_mini_batch_size=2
+    - actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
+    - actor_rollout_ref.actor.ppo_max_token_len_per_gpu=576
+    - actor_rollout_ref.actor.use_torch_compile=false
+    - actor_rollout_ref.actor.fsdp_config.use_torch_compile=false
+    - actor_rollout_ref.actor.optim.lr=1e-5
+    - reward.num_workers=1
+    - transfer_queue.backend.SimpleStorage.num_data_storage_units=2
+    - ray_kwargs.ray_init.num_cpus=8
+
+run:
+  root_dir: outputs/trajweave/runs
+  name: marshal-tictactoe-qwen05b-1gpu
+  tags: [marshal, self-play, tictactoe, qwen05b, verl]

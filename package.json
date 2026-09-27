@@ -1,0 +1,20 @@
+{
+  "name": "trajweave-assets",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render:mas-gifs": "node scripts/render-mas-gifs.mjs"
+  },
+  "devDependencies": {
+    "@remotion/cli": "4.0.479",
+    "@types/node": "24.10.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "gifski": "1.7.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.479",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,21 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.12.2"
+    hooks:
+      - id: ruff
+        args: ["--fix", "--show-fixes", "--output-format=full"]
+        exclude: ^.*\.(ipynb)$
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: repo-hygiene
+        name: Check public repository hygiene
+        entry: python3 scripts/check_repo_hygiene.py
+        language: system
+        pass_filenames: false
+      - id: compile-verl
+        name: Compile retained VERL backend
+        entry: python3 -m compileall -q verl
+        language: system
+        pass_filenames: false

@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+
+from trajweave.backends.verl.schema import COMLRL_EXTRA_FIELDS, resolve_comlrl_extra_fields
+from trajweave.core.trajectory import TrainingSample
+from verl.protocol import DataProto
+
+DRMAS_AGENT_IDS = {
+    "solver": "Solver Agent",
+    "verifier": "Verifier Agent",
+    "searcher": "Search Agent",
+    "search": "Search Agent",
+    "answer": "Answer Agent",
+    "planner": "Planner Agent",
+    "browsing_agent": "Browsing Agent",
+}
+
+
+def _pad(sequences: list[list[int]], pad_value: int = 0) -> torch.Tensor:
+    width = max(len(item) for item in sequences) if sequences else 1
+    tensor = torch.full((len(sequences), width), pad_value, dtype=torch.long)
+    for row, sequence in enumerate(sequences):
+        values = torch.tensor(sequence, dtype=torch.long)
+        tensor[row, : len(sequence)] = values
+    return tensor
+
+
+def _object_array(values: list[object]) -> np.ndarray:
+    array = np.empty(len(values), dtype=object)
+    array[:] = values
+    return array
+
+
+@dataclass
+class VerlDataProtoAdapter:
+    pad_token_id: int = 0
+
+    def build(self, samples: list[TrainingSample]) -> DataProto:
+        if not samples:
+            raise ValueError("Cannot build DataProto from empty samples.")
+        prompt_ids = [[ord(ch) % 255 + 1 for ch in sample.prompt] or [1] for sample in samples]
+        response_ids = [
+            sample.response_token_ids or [ord(ch) % 255 + 1 for ch in sample.response] or [1] for sample in samples
+        ]
+        prompts = _pad(prompt_ids, self.pad_token_id)
+        responses = _pad(response_ids, self.pad_token_id)
+        input_ids = torch.cat([prompts, responses], dim=1)
+        attention_mask = torch.cat(
+            [(prompts != self.pad_token_id).long(), (responses != self.pad_token_id).long()], dim=1
+        )
+        position_ids = torch.arange(input_ids.shape[1], dtype=torch.long).unsqueeze(0).repeat(input_ids.shape[0], 1)
+        response_mask = (responses != self.pad_token_id).long()
+        token_level_rewards = torch.zeros_like(responses, dtype=torch.float32)
+        advantages = torch.zeros_like(responses, dtype=torch.float32)
+
+        for row, sample in enumerate(samples):
+            valid = int(response_mask[row].sum().item())
+            last = max(valid - 1, 0)
+            token_level_rewards[row, last] = float(sample.reward)
+            if sample.advantage is not None:
+                advantages[row, :valid] = float(sample.advantage)
+
+        non_tensors = {
+            "uid": np.array([sample.rollout_group for sample in samples], dtype=object),
+            "traj_uid": np.array([sample.episode_id for sample in samples], dtype=object),
+            "sample_id": np.array([sample.sample_id for sample in samples], dtype=object),
+            "task_id": np.array([sample.task_id for sample in samples], dtype=object),
+            "agent_name": np.array([sample.agent_name for sample in samples], dtype=object),
+            "agent_id": np.array(
+                [DRMAS_AGENT_IDS.get(sample.agent_name, sample.agent_name) for sample in samples],
+                dtype=object,
+            ),
+            "role": np.array([sample.role for sample in samples], dtype=object),
+            "policy_group": np.array([sample.policy_group for sample in samples], dtype=object),
+            "turn_id": np.array([sample.turn_id for sample in samples], dtype=object),
+            "reqs_id": np.array([sample.metadata.get("reqs_id", sample.sample_id) for sample in samples], dtype=object),
+            "parent_reqs_id": np.array([sample.metadata.get("parent_reqs_id", "") for sample in samples], dtype=object),
+            "agent_type": np.array(
+                [sample.metadata.get("agent_type", sample.agent_name) for sample in samples], dtype=object
+            ),
+            "role_id": np.array([sample.metadata.get("role_id", sample.role) for sample in samples], dtype=object),
+            "shared_model_id": np.array(
+                [sample.metadata.get("shared_model_id", sample.policy_group) for sample in samples], dtype=object
+            ),
+        }
+        if any(
+            sample.completion_id
+            or sample.tree_node_id
+            or sample.joint_action_ids
+            or sample.joint_transition_ids
+            or any(field in sample.metadata for field in COMLRL_EXTRA_FIELDS)
+            for sample in samples
+        ):
+            comlrl_rows = []
+            for sample in samples:
+                fields = dict(sample.metadata)
+                fields.update(
+                    {
+                        "completion_id": sample.completion_id,
+                        "tree_node_id": sample.tree_node_id,
+                        "joint_action_ids": sample.joint_action_ids,
+                        "joint_transition_ids": sample.joint_transition_ids,
+                    }
+                )
+                comlrl_rows.append(resolve_comlrl_extra_fields(fields, row_id=sample.sample_id))
+            non_tensors.update(
+                {field: _object_array([row[field] for row in comlrl_rows]) for field in COMLRL_EXTRA_FIELDS}
+            )
+        tensors = {
+            "prompts": prompts,
+            "responses": responses,
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "response_mask": response_mask,
+            "token_level_rewards": token_level_rewards,
+            "advantages": advantages,
+            "returns": advantages.clone(),
+            "is_from_subagent_tool": torch.tensor(
+                [bool(sample.metadata.get("is_from_subagent_tool", False)) for sample in samples],
+                dtype=torch.bool,
+            ),
+            "turn_count": torch.tensor(
+                [int(sample.metadata.get("turn_count", sample.turn_id)) for sample in samples],
+                dtype=torch.long,
+            ),
+        }
+        # matpo_tool_format_valid/matpo_tool_call_count are MATPO-specific fields; only
+        # attach them to the DataProto when at least one sample actually carries them,
+        # so non-MATPO recipes don't pick up MATPO-only tensors.
+        if any("matpo_tool_format_valid" in sample.metadata for sample in samples):
+            tensors["matpo_tool_format_valid"] = torch.tensor(
+                [bool(sample.metadata.get("matpo_tool_format_valid", True)) for sample in samples],
+                dtype=torch.bool,
+            )
+        if any("matpo_tool_call_count" in sample.metadata for sample in samples):
+            tensors["matpo_tool_call_count"] = torch.tensor(
+                [int(sample.metadata.get("matpo_tool_call_count", 0)) for sample in samples],
+                dtype=torch.long,
+            )
+        return DataProto.from_dict(tensors=tensors, non_tensors=non_tensors, meta_info={"source": "trajweave"})

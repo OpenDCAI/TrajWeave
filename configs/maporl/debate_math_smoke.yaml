@@ -1,0 +1,34 @@
+recipe: maporl_debate_math
+mode: smoke
+
+maporl:
+  agent_count: 2
+  consensus_threshold: 2
+  policy_separation: true
+  collaboration_separation: true
+  task_training: false
+  reward_feedback: true
+  rule_horizon: discounted_sum
+  rule_agent_share: all
+  rule_discount: 0.3
+  alpha: [0.0, 0.0, 0.0, 0.0]
+
+backend:
+  type: rule
+  device: cpu
+
+team:
+  agent_count: 2
+  max_turns: 2
+
+protocol:
+  type: debate
+  communication_graph: fully_connected
+  aggregation: consensus
+  early_stop: true
+  consensus_threshold: 2
+  criteria_for_consensus_percentage: 0.999999
+  criteria_for_consensus_reward_threshold: 0.7
+
+rollout:
+  rollouts_per_task: 1

@@ -1,0 +1,7 @@
+# CPU 验收使用的关键版本；完整训练后端请使用 GPU 约束。
+torch==2.9.1
+transformers==4.57.1
+ray==2.49.2
+tensordict==0.10.0
+numpy==1.26.4
+TransferQueue==0.1.8

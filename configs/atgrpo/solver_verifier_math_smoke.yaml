@@ -1,0 +1,17 @@
+recipe: atgrpo.solver_verifier_math
+mode: smoke
+
+atgrpo:
+  max_turns: 3
+  normalize_by_std: true
+  mixed_reward:
+    enabled: true
+    alpha: 1.0
+    verifier_local_reward: 1.0
+
+backend:
+  type: rule
+  device: cpu
+
+rollout:
+  rollouts_per_task: 4

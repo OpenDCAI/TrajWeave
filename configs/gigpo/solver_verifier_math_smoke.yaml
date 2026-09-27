@@ -1,0 +1,17 @@
+recipe: gigpo.solver_verifier_math
+mode: smoke
+
+gigpo:
+  max_steps: 2
+  gamma: 0.95
+  step_advantage_weight: 1.0
+  mode: mean_std_norm
+  enable_similarity: false
+  similarity_threshold: 0.95
+
+backend:
+  type: rule
+  device: cpu
+
+rollout:
+  rollouts_per_task: 2

@@ -1,0 +1,19 @@
+{
+  "generator": "OpenAI built-in image_gen",
+  "date": "2026-09-27",
+  "purpose": "Conceptual README artwork; no empirical claims",
+  "assets": [
+    {
+      "file": "trajweave-hero.png",
+      "prompt": "Use case: ads-marketing. Asset type: polished wide hero banner for the English GitHub README of the open-source research framework TrajWeave. Create an original landscape illustration, about 3:1 aspect ratio, high quality and crisp. The existing visual identity uses interwoven blue, teal, violet and amber trajectory ribbons; continue those colors without copying a logo. Scene: an elegant white-to-very-light-blue scientific canvas, restrained fine dot grid, multiple smooth colored trajectory ribbons weaving across the right two thirds, branching into small circular agent nodes and converging into a coherent flowing network. Precise yet organic, sophisticated editorial design for a serious machine-learning research framework, subtle dimensionality, generous whitespace, no robots, no people, no stock-photo look. On the left, large impeccable dark navy typography exactly 'TrajWeave', and below smaller exactly 'Multi-Agent Reinforcement Learning'. No other text, badges, statistics, claimed results or watermark. All text must be readable at GitHub README width. The output is a brand illustration, not a measured experiment or literal architecture diagram."
+    },
+    {
+      "file": "agent-orchestration.png",
+      "prompt": "Use case: stylized-concept. Asset type: landscape illustration for the English GitHub README of TrajWeave, a multi-agent reinforcement learning research framework. Create a premium editorial scientific illustration in a wide 16:9 composition on a clean white and very pale blue background. Show three gently floating translucent rounded panels representing different cooperating agent roles: one with an abstract branching plan, one with document and tool glyphs, one with a checkmark and reasoning nodes. Smooth blue, teal, violet and small amber trajectory ribbons connect the panels, split and reunite, with small circular nodes along them. Balanced visual hierarchy, generous whitespace, fine blueprint-like dotted guide marks, subtle high-quality 3D glass and satin finish, tasteful rather than busy. It should match the TrajWeave woven-trajectory visual identity. No words, letters, numbers, charts, performance claims, robots, faces, logos or watermark. This is an illustrative metaphor for orchestration and shared trajectories, not a literal software interface or architecture specification."
+    },
+    {
+      "file": "learning-loop.png",
+      "prompt": "Use case: stylized-concept. Asset type: landscape feature illustration for the English GitHub README of TrajWeave, an open-source multi-agent reinforcement learning research framework. Wide 16:9 composition, premium clean scientific editorial style matching blue, teal, violet and amber woven trajectories on a white and very pale blue backdrop. Show an elegant circular learning cycle made of four flowing translucent ribbon arcs. Around the cycle are four abstract objects: branching agent trajectory nodes, a small checkmarked evaluation tile, a layered neural-network lattice, and a neatly stacked set of checkpoint/document cards. Nodes on the ribbons suggest successive iterations. Subtle glass and satin materials, precise soft shadows, generous whitespace, clear silhouette, refined professional composition. No words, letters, numbers, plotted metrics, invented results, trophy symbols, robots, faces, logos or watermark. This is a conceptual illustration of rollout, evaluation, update and recorded artifacts, not a literal benchmark, dashboard or architecture diagram."
+    }
+  ]
+}

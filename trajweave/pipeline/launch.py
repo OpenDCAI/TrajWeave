@@ -1,0 +1,243 @@
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+from typing import Any
+
+from trajweave.backends.verl.launcher import VerlTrainerLaunchConfig, VerlTrainerLauncher
+from trajweave.metrics import parse_verl_console_metrics
+from trajweave.runtime import ExperimentTracker
+
+
+def maybe_run_verl_launch(
+    config: dict[str, Any],
+    output: dict[str, Any],
+    *,
+    overrides: tuple[str, ...] | None = None,
+    default_enabled: bool = False,
+    default_module: str = "verl.trainer.main_ppo",
+    tracker: ExperimentTracker | None = None,
+    mode: str | None = None,
+) -> None:
+    verl_cfg = config.get("verl", {})
+    enabled = bool(verl_cfg.get("enabled", default_enabled))
+    execute = bool(verl_cfg.get("execute", False))
+    if enabled and mode not in {"verl_train", "verl_plan"}:
+        raise ValueError(
+            f"mode={mode!r} cannot enable VERL; use mode='verl_plan' to generate a command "
+            "or mode='verl_train' to execute training."
+        )
+    if mode in {"verl_train", "verl_plan"} and not enabled:
+        raise ValueError(f"mode={mode!r} requires verl.enabled=true.")
+    if mode == "verl_train" and not execute:
+        raise ValueError("mode='verl_train' requires verl.execute=true; use mode='verl_plan' for command-only runs.")
+    if mode == "verl_plan" and execute:
+        raise ValueError("mode='verl_plan' requires verl.execute=false.")
+    if not enabled:
+        if default_enabled:
+            output["verl_launch"] = {"status": "disabled"}
+        return
+
+    launch_overrides = (
+        overrides if overrides is not None else tuple(str(item) for item in verl_cfg.get("overrides", []))
+    )
+    if tracker is not None:
+        launch_overrides = _with_runtime_overrides(
+            launch_overrides,
+            tracker=tracker,
+            capture_native_rollouts=bool(verl_cfg.get("capture_native_rollouts", False)),
+        )
+    stdout_path = verl_cfg.get("stdout_path")
+    stderr_path = verl_cfg.get("stderr_path")
+    if tracker is not None and execute:
+        stdout_path = str(tracker.run_dir / "logs" / "verl_stdout.log")
+        stderr_path = str(tracker.run_dir / "logs" / "verl_stderr.log")
+    launch_config = VerlTrainerLaunchConfig(
+        python=str(verl_cfg.get("python", VerlTrainerLaunchConfig.python)),
+        module=str(verl_cfg.get("module", default_module)),
+        overrides=launch_overrides,
+        env=_with_runtime_env(dict(verl_cfg.get("env", {})), tracker=tracker),
+        cwd=verl_cfg.get("cwd"),
+        execute=execute,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+    launcher = VerlTrainerLauncher(launch_config)
+    command_file = verl_cfg.get("command_file")
+    if tracker is not None:
+        command_file = str(tracker.artifacts.path("run_verl_ppo.sh"))
+    if command_file:
+        command_path = str(launcher.write_command_file(command_file))
+        output["verl_command_file"] = command_path
+        if tracker is not None:
+            tracker.artifacts.copy_file(name="run_verl_ppo.sh", source=command_path, kind="command")
+    launch_result = launcher.run()
+    _validate_training_progress(
+        launch_result,
+        launch_overrides,
+        require_explicit_steps=mode == "verl_train",
+    )
+    output["verl_launch"] = launch_result
+    if tracker is not None:
+        tracker.log_verl_result(output["verl_launch"])
+        _register_verl_training_artifacts(
+            launch_overrides,
+            tracker=tracker,
+            launch_cwd=launch_config.cwd,
+            executed=launch_config.execute,
+        )
+
+
+def _with_runtime_env(env: dict[str, str], *, tracker: ExperimentTracker | None) -> dict[str, str]:
+    if tracker is None:
+        return env
+    return {**env, "TRAJWEAVE_RUN_ID": tracker.run_id, "TRAJWEAVE_RUN_DIR": str(tracker.run_dir)}
+
+
+def _with_runtime_overrides(
+    overrides: tuple[str, ...],
+    *,
+    tracker: ExperimentTracker,
+    capture_native_rollouts: bool = False,
+) -> tuple[str, ...]:
+    forced_values = {
+        "trajweave.run_id": tracker.run_id,
+        "trajweave.run_dir": str(tracker.run_dir),
+        "trainer.default_local_dir": str(tracker.run_dir / "checkpoints"),
+    }
+    if capture_native_rollouts:
+        forced_values.update(
+            {
+                "trainer.rollout_data_dir": str(tracker.run_dir / "trajectories" / "verl_rollouts"),
+                "trainer.validation_data_dir": str(tracker.run_dir / "trajectories" / "verl_validation"),
+            }
+        )
+    filtered = tuple(item for item in overrides if _override_key(item) not in forced_values)
+    existing_keys = {_override_key(item) for item in filtered}
+    additions = []
+    for key, value in forced_values.items():
+        prefix = "+" if key.startswith("trajweave.") else ""
+        additions.append(f"{prefix}{key}={json.dumps(value, ensure_ascii=False)}")
+    if "trajweave.capture_online_turns" not in existing_keys:
+        additions.append("+trajweave.capture_online_turns=true")
+    return (*filtered, *additions)
+
+
+def _override_key(override: str) -> str | None:
+    if "=" not in override:
+        return None
+    return override.split("=", 1)[0].lstrip("+")
+
+
+def _validate_training_progress(
+    result: dict[str, Any],
+    overrides: tuple[str, ...],
+    *,
+    require_explicit_steps: bool = False,
+) -> None:
+    """拒绝“进程返回 0，但实际训练步数不足”的假成功。"""
+
+    if result.get("status") != "ok":
+        return
+    expected = _integer_override(overrides, "trainer.total_training_steps")
+    if expected is None or expected <= 0:
+        if require_explicit_steps:
+            result["status"] = "failed"
+            result["validation_error"] = (
+                "mode='verl_train' requires a positive integer trainer.total_training_steps override."
+            )
+        return
+    result["expected_training_steps"] = expected
+    stdout_path = result.get("stdout_path")
+    if not stdout_path or not Path(str(stdout_path)).is_file():
+        result["status"] = "failed"
+        result["validation_error"] = "VERL completed without a readable stdout log for training validation."
+        return
+    stdout = Path(str(stdout_path)).read_text(encoding="utf-8", errors="replace")
+    events = parse_verl_console_metrics(stdout, run_id="progress-validation")
+    observed_steps = [event.step for event in events if event.step is not None]
+    observed = max(observed_steps, default=0)
+    result["observed_training_steps"] = observed
+    if observed < expected:
+        result["status"] = "failed"
+        result["validation_error"] = (
+            f"VERL exited successfully but completed only {observed}/{expected} requested training steps. "
+            "Check trainer.total_epochs and dataloader length."
+        )
+        return
+    non_finite = sorted(
+        {event.name for event in events if isinstance(event.value, float) and not math.isfinite(event.value)}
+    )
+    if non_finite:
+        result["status"] = "failed"
+        result["validation_error"] = f"VERL emitted non-finite training metrics: {non_finite}."
+
+
+def _integer_override(overrides: tuple[str, ...], key: str) -> int | None:
+    value: str | None = None
+    for override in overrides:
+        if _override_key(override) == key:
+            value = override.split("=", 1)[1]
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _register_verl_training_artifacts(
+    overrides: tuple[str, ...],
+    *,
+    tracker: ExperimentTracker,
+    launch_cwd: str | None,
+    executed: bool,
+) -> None:
+    """记录 VERL checkpoint 及多 Actor 权重同步清单，不复制大文件。"""
+
+    if not executed:
+        return
+    configured = _override_value(overrides, "trainer.default_local_dir")
+    if not configured:
+        return
+    expanded = configured.replace("${oc.env:TRAJWEAVE_RUN_DIR}", str(tracker.run_dir))
+    checkpoint_root = Path(os.path.expandvars(expanded))
+    if not checkpoint_root.is_absolute():
+        checkpoint_root = Path(launch_cwd or Path.cwd()) / checkpoint_root
+    checkpoint_root = checkpoint_root.resolve()
+    if not checkpoint_root.exists():
+        return
+    for checkpoint_dir in sorted(path for path in checkpoint_root.glob("global_step_*") if path.is_dir()):
+        tracker.log_artifact(
+            name=f"checkpoint/{checkpoint_dir.name}",
+            path=checkpoint_dir,
+            kind="checkpoint",
+            metadata={"root": str(checkpoint_root)},
+        )
+        manifest = checkpoint_dir / "multi_actor_weight_sync.json"
+        if manifest.is_file():
+            tracker.log_artifact(
+                name=f"checkpoint/{checkpoint_dir.name}/multi_actor_weight_sync.json",
+                path=manifest,
+                kind="checkpoint_manifest",
+            )
+    latest = checkpoint_root / "latest_checkpointed_iteration.txt"
+    if latest.is_file():
+        tracker.log_artifact(
+            name="checkpoint/latest_checkpointed_iteration.txt",
+            path=latest,
+            kind="checkpoint_pointer",
+        )
+
+
+def _override_value(overrides: tuple[str, ...], key: str) -> str | None:
+    value = None
+    for item in overrides:
+        if "=" not in item:
+            continue
+        item_key, item_value = item.split("=", 1)
+        if item_key.lstrip("+") == key:
+            value = item_value.strip('"')
+    return value
