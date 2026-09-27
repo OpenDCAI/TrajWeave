@@ -608,3 +608,26 @@ def test_trainer_snapshots_all_actors_before_sequential_updates():
     finally:
         tq.kv_clear(keys=keys, partition_id="train")
         tq.close()
+
+
+@pytest.mark.parametrize('active', [None, 'rollout_is', 'rollout_rs', 'bypass_mode'])
+def test_madpo_accepts_disabled_verl_correction_defaults(monkeypatch, active):
+    from omegaconf import OmegaConf
+    from trajweave.backends.verl.trainers.joint_preference_sync import TrajWeaveJointPreferenceSyncTrainer
+    from trajweave.backends.verl.trainers.multi_actor_sync import TrajWeaveMultiActorSyncTrainer
+
+    monkeypatch.setattr(TrajWeaveMultiActorSyncTrainer, '_validate_multi_actor_specs', lambda self: None)
+    correction = {'rollout_is': None, 'rollout_rs': None, 'bypass_mode': False,
+                  'rollout_is_threshold': 2.0, 'loss_type': 'ppo_clip'}
+    if active:
+        correction[active] = True if active == 'bypass_mode' else 'token'
+    trainer = object.__new__(TrajWeaveJointPreferenceSyncTrainer)
+    trainer.multi_actor_trainable_group_ids = ['policy_0', 'policy_1']
+    trainer.use_critic = trainer.use_reference_policy = False
+    trainer.config = OmegaConf.create({'algorithm': {'rollout_correction': correction},
+                                      'actor_rollout_ref': {'actor': {'ppo_epochs': 1}}})
+    if active:
+        with pytest.raises(ValueError, match='PPO rollout correction'):
+            trainer._validate_multi_actor_specs()
+    else:
+        trainer._validate_multi_actor_specs()

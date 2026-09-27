@@ -57,7 +57,12 @@ class TrajWeaveJointPreferenceSyncTrainer(TrajWeaveMultiActorSyncTrainer):
             reward_model_enabled=bool(_select(self.config, "reward.reward_model.enable") or False),
         )
         rollout_correction = self.config.algorithm.get("rollout_correction", None)
-        if rollout_correction:
+        # VERL 默认配置包含该映射，即使 IS、RS 和 bypass 全部关闭。
+        if rollout_correction and (
+            rollout_correction.get("rollout_is") is not None
+            or rollout_correction.get("rollout_rs") is not None
+            or rollout_correction.get("bypass_mode", False)
+        ):
             raise ValueError("MADPO does not support PPO rollout correction or importance ratios")
         if bool(_select(self.config, "reward.reward_model.enable")):
             raise ValueError("MADPO uses task preference rewards and does not support a colocated reward model")
