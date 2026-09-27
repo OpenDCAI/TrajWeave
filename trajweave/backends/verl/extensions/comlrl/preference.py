@@ -367,15 +367,28 @@ def madpo_actor_loss(config: Any, model_output: Mapping[str, Any], data: Any, dp
     del dp_group
     from verl.utils import tensordict_utils as tu
     from verl.workers.utils.padding import no_padding_2_padding
+    from trajweave.backends.verl.extensions.common.nested_compat import _tensordict_to_padded_tensor_compat
 
-    log_probs = no_padding_2_padding(model_output["log_probs"], data)
-    selected = data.select(
+    raw_log_probs = model_output["log_probs"]
+    if (not raw_log_probs.is_nested and raw_log_probs.ndim == 2
+            and raw_log_probs.shape[0] == 1 and data["response_mask"].is_nested):
+        # LZ 的无 remove-padding 兼容层已抽取响应并拼成一行，按原响应长度还原偏好对。
+        lengths = data["response_mask"].offsets().diff().tolist()
+        if sum(lengths) != raw_log_probs.numel():
+            raise ValueError("MADPO flat response log probabilities do not match response lengths")
+        pieces = raw_log_probs.reshape(-1).split(lengths)
+        max_length = max(lengths)
+        log_probs = torch.stack([torch.nn.functional.pad(piece, (0, max_length - len(piece)))
+                                 for piece in pieces])
+    else:
+        log_probs = no_padding_2_padding(raw_log_probs, data)
+    selected = _tensordict_to_padded_tensor_compat(data.select(
         "response_mask",
         "madpo_pair_index",
         "madpo_preference_side",
         "madpo_other_agent_delta",
         "preference_loss_mask",
-    ).to_padded_tensor()
+    ))
     global_pair_count = tu.get_non_tensor_data(data, "madpo_global_pair_count", None)
     if global_pair_count is None:
         raise ValueError("MADPO loss requires madpo_global_pair_count from the trainer batch contract")

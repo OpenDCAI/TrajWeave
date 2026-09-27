@@ -154,3 +154,35 @@ def test_non_finite_other_agent_delta_fails_fast_in_production_microbatch():
             beta=0.1,
             global_pair_count=1,
         )
+
+
+@pytest.mark.parametrize('flat_response', [False, True])
+def test_verl_madpo_callback_preserves_pair_gradients_across_output_layouts(flat_response):
+    from tensordict import TensorDict
+    from verl.utils import tensordict_utils as tu
+
+    def nested(rows):
+        return torch.nested.as_nested_tensor(rows, layout=torch.jagged)
+
+    data = TensorDict({
+        'prompts': nested([torch.tensor([10, 11]), torch.tensor([10])]),
+        'responses': nested([torch.tensor([12, 13]), torch.tensor([14])]),
+        'response_mask': nested([torch.ones(2, dtype=torch.long), torch.ones(1, dtype=torch.long)]),
+        'madpo_pair_index': torch.tensor([0, 0]),
+        'madpo_preference_side': torch.tensor([1., -1.]),
+        'madpo_other_agent_delta': torch.zeros(2),
+        'preference_loss_mask': torch.ones(2),
+    }, batch_size=[2])
+    tu.assign_non_tensor(data, madpo_global_pair_count=1, dp_size=1)
+    values = torch.tensor([-.2, -.3, -.5], requires_grad=True)
+    if flat_response:
+        output = values.unsqueeze(0)
+    else:
+        full = torch.cat([values.new_tensor([-9.]), values[:2], values.new_tensor([-9.]),
+                          values[2:], values.new_tensor([-9.])])
+        output = torch.nested.nested_tensor_from_jagged(full, torch.tensor([0, 4, 6]))
+    loss, metrics = verl_madpo_actor_loss({'beta': .1}, {'log_probs': output}, data)
+    assert loss.item() == pytest.approx(torch.log(torch.tensor(2.)).item())
+    assert metrics['actor/madpo_pair_count'] == 1
+    loss.backward()
+    assert values.grad.tolist() == pytest.approx([-.05, -.05, .05])
